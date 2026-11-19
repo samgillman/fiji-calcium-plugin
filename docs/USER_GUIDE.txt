@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.19.3.
+A plugin for Fiji / ImageJ.  Version 2026.11.19.7.
 
 WHAT IT DOES
 One menu command takes a calcium-imaging recording (a time-lapse movie, for example .zvi, .czi or .tif)
@@ -57,8 +57,17 @@ HOW TO USE IT
          through them afterwards and remove the wrong ones.
        - To draw: press Oval or Freehand, draw around a cell, then press "Add drawn outline" (or t).
          Drawing and clicking can be mixed freely.
-       - To remove a cell: click it on the picture, then "Remove selected cell". "Undo last cell"
-         takes back the most recent one.
+       - Accepted cells have WHITE outlines with a thick BLACK outer border, distinct from all
+         suggestion colours. Edge cells that are left out still use dashed outlines.
+       - To remove a cell: click inside its white outline, then "Remove selected cell". The selected
+         outline becomes thicker. This also works with suggestions hidden, or for hand-drawn cells.
+       - To remove several cells quickly: turn on "Click cells to remove", then click inside each
+         unwanted white outline. Turn it off before accepting more suggestions. Oval/Freehand also
+         turns it off. Empty space and unaccepted suggestions are not removed or accepted in this mode.
+       - "Undo last change" restores deleted cells or reverses additions (including Accept all).
+         Up to 20 plugin edits can be undone, preserving cell order and names. Edits made directly in
+         the ROI Manager, including adding with t, clear this history rather than being overwritten.
+         To remove a group, select several cells in the ROI Manager and press Remove selected cell.
      Each cell's background area appears in blue. Click a cell to see only its own background.
        - "Leave out cells at the picture's edge (within 40 px)" is ticked at the start. While it is
          ticked, suggestions at the edge are not shown, a drawn outline at the edge is not added,

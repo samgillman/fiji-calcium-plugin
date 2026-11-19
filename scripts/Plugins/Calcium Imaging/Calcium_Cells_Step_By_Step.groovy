@@ -1,4 +1,4 @@
-// Calcium imaging: cells step by step                                                    version 2026.11.19.6
+// Calcium imaging: cells step by step                                                    version 2026.11.19.7
 // One plugin for the whole job on one recording:
 //   1. choose the recording (already open in Fiji, or a file) and a folder for the results
 //   2. the plugin makes the cells visible: all-frames picture, response (found automatically, if there is one), and a
@@ -86,7 +86,7 @@ class CalciumSteps {
     /** Steps 1-2: pictures. The movie is only read. */
     void prepare(ImagePlus imp, boolean lookForResponse) {
         movie = imp; n = imp.getStackSize(); w = imp.getWidth(); h = imp.getHeight()
-        say("Calcium imaging plugin, version 2026.11.19.6")
+        say("Calcium imaging plugin, version 2026.11.19.7")
         say("Recording: " + imp.getTitle() + " (" + n + " frames, " + w + " x " + h + ", " + imp.getBitDepth() + "-bit)")
         ImagePlus sum = ZProjector.run(imp, "sum")                                   // Image > Stacks > Z Project, Sum Slices
         FloatProcessor avg = (FloatProcessor) sum.getProcessor().convertToFloat()
@@ -468,7 +468,7 @@ class CalciumSteps {
 
 /** Release lookup sends no recording data. Installation requires an explicit button click. */
 class CalciumRelease {
-    static final String VERSION = "2026.11.19.6"
+    static final String VERSION = "2026.11.19.7"
     static final String REPOSITORY = "https://github.com/samgillman/fiji-calcium-plugin"
     static final String API = "https://api.github.com/repos/samgillman/fiji-calcium-plugin/releases/latest"
     static final String ASSET = "Calcium_Imaging_Fiji_Plugin.zip"
@@ -934,6 +934,86 @@ class CalciumDetectionRunner {
     }
 }
 
+/** Cell edits keep ROI order/names, and can be undone without overwriting outside edits. */
+class CalciumCellEdits {
+    RoiManager manager
+    ImagePlus picture
+    List history = []
+
+    List snapshot() {
+        (0..<manager.getCount()).collect { int i -> [roi: (Roi) manager.getRoi(i).clone(), name: manager.getName(i)] }
+    }
+    List fingerprint(List state) {
+        state.collect { [it.name, Base64.getEncoder().encodeToString(RoiEncoder.saveAsByteArray(it.roi))] }
+    }
+    void change(String label, Closure action) {
+        def before = snapshot()
+        if (!history.isEmpty() && fingerprint(before) != history.last().after) history.clear()
+        action.call()
+        def after = fingerprint(snapshot())
+        if (fingerprint(before) != after) {
+            history << [before: before, after: after, label: label]
+            if (history.size() > 20) history.remove(0)
+        }
+    }
+    int hit(int x, int y) {
+        def hits = (0..<manager.getCount()).findAll { int i ->
+            def r = manager.getRoi(i); r.isArea() && r.contains(x, y)
+        }
+        hits.isEmpty() ? -1 : hits.min { int i ->
+            def b = manager.getRoi(i).getBounds(); b.getWidth() * b.getHeight()
+        } as int
+    }
+    boolean selectAt(int x, int y) {
+        int i = hit(x, y)
+        if (i < 0) { manager.deselect(); picture.deleteRoi(); return false }
+        manager.select(picture, i)
+        // The plugin's overlay supplies the highlight; do not leave ImageJ's yellow editing handles on top.
+        picture.deleteRoi()
+        true
+    }
+    int remove(List indexes) {
+        def chosen = indexes.unique().findAll { int i -> i >= 0 && i < manager.getCount() && manager.getRoi(i).isArea() }.sort()
+        if (chosen.isEmpty()) return 0
+        change('remove ' + chosen.size() + (chosen.size() == 1 ? ' cell' : ' cells')) {
+            chosen.reverseEach { int i -> manager.delete(i) }
+            manager.deselect(); picture.deleteRoi()
+        }
+        chosen.size()
+    }
+    String undo() {
+        if (history.isEmpty()) return 'No cell changes to undo.'
+        def entry = history.last()
+        if (fingerprint(snapshot()) != entry.after) {
+            history.clear()
+            return 'The ROI Manager changed outside this window. Undo was cleared to keep those changes.'
+        }
+        history.remove(history.size() - 1)
+        manager.reset()
+        entry.before.each { saved ->
+            manager.addRoi((Roi) saved.roi.clone())
+            manager.rename(manager.getCount() - 1, saved.name)
+        }
+        manager.deselect(); picture.deleteRoi()
+        'Undid: ' + entry.label + '.'
+    }
+}
+
+/** White outlines with a black border remain visible over bright, dark and coloured image regions. */
+class CalciumCellAppearance {
+    static void add(Overlay overlay, Roi cell, boolean edge, boolean selected) {
+        [Color.black, Color.white].eachWithIndex { Color colour, int layer ->
+            def outline = (Roi) cell.clone()
+            float width = (float) (layer == 0 ? (selected ? 8 : 6) : (selected ? 4 : 2.5))
+            outline.setFillColor(null)
+            outline.setStrokeColor(colour)
+            outline.setStroke(edge ? new java.awt.BasicStroke(width, java.awt.BasicStroke.CAP_BUTT,
+                java.awt.BasicStroke.JOIN_ROUND, 10f, [6f, 5f] as float[], 0f) : new java.awt.BasicStroke(width))
+            overlay.add(outline)
+        }
+    }
+}
+
 /** Keep the full layout inside the viewport instead of compressing or wrapping its rows. */
 class CalciumScrollPanel extends javax.swing.JPanel implements javax.swing.Scrollable {
     CalciumScrollPanel() { setLayout(new javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS)) }
@@ -1016,7 +1096,7 @@ movies.eachWithIndex { im, i -> if (im == front) pre = labels[i] }
 if (pre == fromDisk && movies.size() > 0) pre = labels[0]
 def defaultDir = Prefs.get("calcium.steps.folder", System.getProperty("user.home") + File.separator + "Documents" + File.separator + "Calcium imaging results")
 
-def gd = new GenericDialog("Calcium imaging: cells step by step  (version 2026.11.19.6)")
+def gd = new GenericDialog("Calcium imaging: cells step by step  (version 2026.11.19.7)")
 gd.addMessage("STEP 1 of 3:  choose the recording\n \nPick the ORIGINAL movie, not a processed copy.")
 gd.addChoice("Recording:", labels as String[], pre)
 gd.addCheckbox("Look for a response and show it in magenta", true)
@@ -1047,7 +1127,7 @@ steps.prepare(imp, look)
 steps.colourPic.show()
 IJ.run(steps.colourPic, "Set... ", "zoom=75")
 def rm = testGui ? new RoiManager(false) : RoiManager.getRoiManager()
-if (!testGui) { rm.runCommand(steps.colourPic, "Show All without labels"); IJ.setTool("oval") }
+if (!testGui) { rm.runCommand(steps.colourPic, "Show None"); IJ.setTool("oval") } // The plugin draws its own contrasted overlay.
 def base = imp.getTitle(); int dot = base.lastIndexOf("."); if (dot > 0) base = base.substring(0, dot)
 def outDir = new File(outRoot, base)
 
@@ -1086,7 +1166,9 @@ def s2 = section("Step 2   Choose the cells")
 def suggestBtn = btn("Suggest cells automatically")
 def acceptAllBtn = btn("Accept all likely ones"); acceptAllBtn.setEnabled(false)
 def ovalBtn = btn("Oval"), freeBtn = btn("Freehand"), addBtn = btn("Add drawn outline  (t)")
-def removeBtn = btn("Remove selected cell"), undoBtn = btn("Undo last cell")
+def removeBtn = btn("Remove selected cell"), undoBtn = btn("Undo last change"); undoBtn.setEnabled(false)
+def removeMode = box("Click cells to remove", false)
+def editHint = note("Click a white outline to select it, then Remove. Or turn on <b>Click cells to remove</b>.")
 def showSug = box("Show suggestions", true), showBg = box("Show background (blue)", true)
 def edgeBox = box("Leave out cells at the picture's edge (within " + CalciumSteps.EDGE_MARGIN + " px)", true)
 edgeBox.setToolTipText("<html>At the edge a cell's background can only be taken from the inner, better-lit side,<br>so the cell comes out too dim. Untick to suggest, accept and measure edge cells like the others.</html>")
@@ -1101,7 +1183,12 @@ s2.add(row(suggestBtn)); s2.add(detectionProgress); s2.add(cpLabel); s2.add(setu
 s2.add(note("<b>Or draw:</b> pick a tool, draw around a cell, then add it."))
 s2.add(row(ovalBtn, freeBtn, addBtn))
 def legend = new javax.swing.JPanel(new java.awt.GridLayout(0, 2, 6, 1)); legend.setAlignmentX(0f)
-legend.add(legendRow(lineIcon(Color.yellow, 2, false, false), "your cells"))
+def acceptedIcon = new java.awt.image.BufferedImage(30, 14, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+def acceptedGraphics = acceptedIcon.createGraphics()
+acceptedGraphics.setColor(new Color(40, 40, 40)); acceptedGraphics.fillRect(0, 0, 30, 14)
+acceptedGraphics.setColor(Color.black); acceptedGraphics.setStroke(new java.awt.BasicStroke(6f)); acceptedGraphics.drawOval(5, 3, 20, 8)
+acceptedGraphics.setColor(Color.white); acceptedGraphics.setStroke(new java.awt.BasicStroke(2.5f)); acceptedGraphics.drawOval(5, 3, 20, 8); acceptedGraphics.dispose()
+legend.add(legendRow(new javax.swing.ImageIcon(acceptedIcon), "your cells: white + black border"))
 legend.add(legendRow(lineIcon(BLUE, 1, false, true), "background used"))
 legend.add(legendRow(lineIcon(CYAN, 2, false, false), "suggested: responds"))
 legend.add(legendRow(lineIcon(CYAN, 1, false, false), "suggested: likely a cell"))
@@ -1109,7 +1196,7 @@ legend.add(legendRow(lineIcon(GREY, 1, true, false), "suggested: unsure"))
 legend.add(legendRow(lineIcon(ORANGE, 1, false, false), "probably precipitate"))
 s2.add(legend)
 s2.add(row(showSug, showBg)); s2.add(row(edgeBox))
-s2.add(status); s2.add(row(removeBtn, undoBtn))
+s2.add(status); s2.add(row(removeBtn, undoBtn)); s2.add(row(removeMode)); s2.add(editHint)
 s2.add(info); s2.add(trace)
 
 def s3 = section("Step 3   Measure and save")
@@ -1236,6 +1323,7 @@ if (!testGui) { def scr = java.awt.Toolkit.getDefaultToolkit().getScreenSize(); 
 // ---- what the window does ----
 def lastKey = ""; int[][] lastBg = new int[0][]
 def proposals = []        // automatic outlines: [roi, grade (0 responds, 1 likely, 2 unsure, 3 bright), ev (the measured evidence), cx, cy]
+def cellEdits = new CalciumCellEdits(manager: rm, picture: steps.colourPic)
 def cellRois = { ->
     def all = rm.getRoisAsArray() as List
     all.findAll { it != null && it.isArea() }.collect { def r = (Roi) it.clone(); r.setPosition(0); r } as Roi[]
@@ -1262,7 +1350,7 @@ def evidenceText = { p ->
 def refresh = { boolean force ->
     try {
         def sp = splitCells(); Roi[] all = (Roi[]) sp.all; Roi[] cells = (Roi[]) sp.cells; Roi[] edgeCells = (Roi[]) sp.edge
-        def key = all.collect { it.getBounds().toString() + it.getContainedPoints().length }.join("|") + "#" + rm.getSelectedIndex() + "#" + showBg.isSelected() + "#" + proposals.size() + "#" + showSug.isSelected() + "#" + edgeBox.isSelected()
+        def key = all.collect { it.getBounds().toString() + it.getContainedPoints().length }.join("|") + "#" + Arrays.toString(rm.getSelectedIndexes()) + "#" + showBg.isSelected() + "#" + proposals.size() + "#" + showSug.isSelected() + "#" + edgeBox.isSelected()
         if (!force && key == lastKey) return
         lastKey = key
         steps.alsoAvoid = edgeCells
@@ -1283,23 +1371,26 @@ def refresh = { boolean force ->
             else { r.setStrokeColor(ORANGE); r.setStrokeWidth(1) }
             ov.add(r)
         }
-        cells.each { c -> c.setStrokeColor(Color.yellow); c.setStrokeWidth(2); ov.add(c) }
-        edgeCells.each { c -> c.setStrokeColor(Color.yellow); c.setStroke(DASH); ov.add(c) }       // dashed: in the ROI Manager but left out
+        def selectedAreas = []; int areaIndex = 0
+        rm.getRoisAsArray().eachWithIndex { r, i -> if (r.isArea()) { if (rm.isSelected(i)) selectedAreas << areaIndex; areaIndex++ } }
+        all.eachWithIndex { c, i -> CalciumCellAppearance.add(ov, c, !sp.keptIdx.contains(i), selectedAreas.contains(i)) }
         steps.colourPic.setOverlay(ov)
         int nLikely = left.count { it.grade <= 1 } as int
         int edgeSug = edgeBox.isSelected() ? (proposals.count { it.edge } as int) : 0
         status.setText("Cells chosen: " + cells.length + (edgeCells.length > 0 ? "   (+" + edgeCells.length + " at the edge, left out)" : "") + (none > 0 ? "   (" + none + " without background)" : "") + (proposals.size() > 0 ? "      suggestions left: " + nLikely + " likely, " + left.count { it.grade == 2 } + " unsure, " + left.count { it.grade == 3 } + " bright" + (edgeSug > 0 ? "; " + edgeSug + " at the edge not shown" : "") : ""))
         acceptAllBtn.setText("Accept all likely ones (" + nLikely + ")"); acceptAllBtn.setEnabled(nLikely > 0)
+        undoBtn.setEnabled(!cellEdits.history.isEmpty())
     } catch (Throwable t) { status.setText("" + t) }
 }
 def addCell = { Roi r0 -> def r = (Roi) r0.clone(); r.setPosition(0); r.setStrokeColor(null); rm.addRoi(r) }
 def acceptAt = { int x, int y ->
     def hit = unusedProposals(cellRois()).findAll { it.roi.contains(x, y) }
     if (hit.isEmpty()) return false
-    addCell(hit.min { it.roi.getBounds().width * it.roi.getBounds().height }.roi)
+    cellEdits.change('add cell') { addCell(hit.min { it.roi.getBounds().width * it.roi.getBounds().height }.roi) }
+    rm.deselect(); steps.colourPic.deleteRoi()
     refresh(true); return true
 }
-def acceptAll = { -> def todo = unusedProposals(cellRois()).findAll { it.grade <= 1 }; todo.each { addCell(it.roi) }; refresh(true); todo.size() }
+def acceptAll = { -> def todo = unusedProposals(cellRois()).findAll { it.grade <= 1 }; cellEdits.change('accept all likely cells') { todo.each { addCell(it.roi) } }; rm.deselect(); steps.colourPic.deleteRoi(); refresh(true); todo.size() }
 def lastHover = null
 def hoverAt = { int x, int y ->
     Roi[] cells = cellRois()
@@ -1568,37 +1659,61 @@ acceptAllBtn.addActionListener({ e ->
     int ans = javax.swing.JOptionPane.showConfirmDialog(frame, "Accept all " + nL + " outlines graded \"responds\" or \"likely a cell\"?\n\nIn tests about 8 in 10 of these were real cells, so about 2 in 10 are not.\nLook through them afterwards and remove the wrong ones.", "Accept all likely ones", javax.swing.JOptionPane.OK_CANCEL_OPTION)
     if (ans == javax.swing.JOptionPane.OK_OPTION) acceptAll()
 } as java.awt.event.ActionListener)
-ovalBtn.addActionListener({ e -> IJ.setTool("oval") } as java.awt.event.ActionListener)
-freeBtn.addActionListener({ e -> IJ.setTool("freehand") } as java.awt.event.ActionListener)
+def updateEditHint = { String message -> editHint.setText("<html><body style='width:300px'>" + message + "</body></html>") }
+def leaveRemoveMode = { -> removeMode.setSelected(false); updateEditHint('Click a white outline to select it, then Remove. Or turn on <b>Click cells to remove</b>.') }
+ovalBtn.addActionListener({ e -> leaveRemoveMode(); IJ.setTool("oval") } as java.awt.event.ActionListener)
+freeBtn.addActionListener({ e -> leaveRemoveMode(); IJ.setTool("freehand") } as java.awt.event.ActionListener)
 addBtn.addActionListener({ e -> def r = steps.colourPic.getRoi()
     if (r != null && r.isArea() && edgeBox.isSelected() && steps.nearEdge(r)) { info.setText("<html><body style='width:300px'><b>Not added:</b> this outline is within " + CalciumSteps.EDGE_MARGIN + " pixels of the picture's edge, where a cell's background can only come from one side. Untick \"Leave out cells at the picture's edge\" to add it anyway.</body></html>"); return }
-    if (r != null && r.isArea()) { addCell(r); steps.colourPic.deleteRoi(); refresh(true) } else info.setText("<html><body style='width:300px'>Draw around a cell on the colour picture first.</body></html>") } as java.awt.event.ActionListener)
-def removeSelected = { -> int i = rm.getSelectedIndex(); if (i < 0) return false; rm.select(i); rm.runCommand("Delete"); rm.deselect(); refresh(true); true }
-def undoLast = { -> int c = rm.getCount(); if (c == 0) return false; rm.deselect(); rm.select(c - 1); rm.runCommand("Delete"); rm.deselect(); refresh(true); true }
-removeBtn.addActionListener({ e -> if (!removeSelected()) info.setText("<html><body style='width:300px'>Click a cell on the picture (or in the ROI Manager list) first, then press Remove.</body></html>") } as java.awt.event.ActionListener)
+    if (r != null && r.isArea()) { cellEdits.change('add drawn cell') { addCell(r) }; rm.deselect(); steps.colourPic.deleteRoi(); refresh(true) } else info.setText("<html><body style='width:300px'>Draw around a cell on the colour picture first.</body></html>") } as java.awt.event.ActionListener)
+def removedMessage = { int count -> updateEditHint('Removed ' + count + (count == 1 ? ' cell.' : ' cells.') + ' <b>Undo last change</b> restores them.' + (removeMode.isSelected() ? '<br><b>Removal mode is ON:</b> click another white outline to remove it. Turn it off to accept suggestions.' : '')) }
+def removeSelected = { -> int count = cellEdits.remove(rm.getSelectedIndexes() as List); refresh(true); if (count > 0) removedMessage(count); count > 0 }
+def undoLast = { -> updateEditHint(cellEdits.undo() + (removeMode.isSelected() ? '<br><b>Removal mode is ON.</b> Turn it off to accept suggestions.' : '')); refresh(true) }
+removeBtn.addActionListener({ e -> if (!removeSelected()) updateEditHint('Click inside a white cell outline first, or turn on <b>Click cells to remove</b>. You can also select cells in the ROI Manager list.') } as java.awt.event.ActionListener)
 undoBtn.addActionListener({ e -> undoLast() } as java.awt.event.ActionListener)
+removeMode.addActionListener({ e ->
+    if (removeMode.isSelected()) { IJ.setTool('oval'); steps.colourPic.deleteRoi(); updateEditHint('<b>Removal mode is ON:</b> click inside each white cell outline to remove it. Undo restores mistakes. Turn this off to accept suggestions.') }
+    else leaveRemoveMode()
+} as java.awt.event.ActionListener)
+def clickCellAt = { int x, int y ->
+    if (removeMode.isSelected()) {
+        int count = cellEdits.remove([cellEdits.hit(x, y)])
+        steps.colourPic.deleteRoi(); refresh(true)
+        if (count > 0) removedMessage(count)
+        return count > 0
+    }
+    if (cellEdits.selectAt(x, y)) { refresh(true); updateEditHint('<b>Cell selected</b> (thicker white outline). Press <b>Remove selected cell</b> to remove it.'); return true }
+    boolean added = showSug.isSelected() && acceptAt(x, y)
+    refresh(true)
+    if (added) updateEditHint('<b>Cell added:</b> its outline is now white with a black border. Undo last change reverses this.')
+    added
+}
 showSug.addActionListener({ e -> refresh(true) } as java.awt.event.ActionListener)
 edgeBox.addActionListener({ e -> refresh(true) } as java.awt.event.ActionListener)
 showBg.addActionListener({ e -> refresh(true) } as java.awt.event.ActionListener)
-if (!testGui && steps.colourPic.getCanvas() != null) {
+if (steps.colourPic.getCanvas() != null) {
     def canvas = steps.colourPic.getCanvas(); int px0 = 0, py0 = 0; long lastMove = 0
-    canvas.addMouseListener(new java.awt.event.MouseAdapter() {
+    def cellMouse = new java.awt.event.MouseAdapter() {
         void mousePressed(java.awt.event.MouseEvent e) { px0 = e.getX(); py0 = e.getY() }
         void mouseReleased(java.awt.event.MouseEvent e) {
-            if (proposals.isEmpty() || !showSug.isSelected()) return
+            if (!javax.swing.SwingUtilities.isLeftMouseButton(e) || e.isPopupTrigger() || e.getClickCount() > 1) return
             if (Math.abs(e.getX() - px0) > 3 || Math.abs(e.getY() - py0) > 3) return                 // a drag is drawing, not a click
             int tool = ij.gui.Toolbar.getToolId()
             if (tool == ij.gui.Toolbar.POLYGON || tool == ij.gui.Toolbar.POLYLINE || tool == ij.gui.Toolbar.ANGLE || tool == ij.gui.Toolbar.MAGNIFIER || tool == ij.gui.Toolbar.HAND) return
             int x = canvas.offScreenX(e.getX()), y = canvas.offScreenY(e.getY())
-            javax.swing.SwingUtilities.invokeLater { try { acceptAt(x, y) } catch (Throwable t) { status.setText("" + t) } }
+            javax.swing.SwingUtilities.invokeLater { try { clickCellAt(x, y) } catch (Throwable t) { status.setText("" + t) } }
         }
-    })
-    canvas.addMouseMotionListener(new java.awt.event.MouseMotionAdapter() {
+    }
+    def cellMotion = new java.awt.event.MouseMotionAdapter() {
         void mouseMoved(java.awt.event.MouseEvent e) {
             long now = System.currentTimeMillis(); if (now - lastMove < 120) return; lastMove = now
             int x = canvas.offScreenX(e.getX()), y = canvas.offScreenY(e.getY())
             javax.swing.SwingUtilities.invokeLater { try { hoverAt(x, y) } catch (Throwable t) { } }
         }
+    }
+    canvas.addMouseListener(cellMouse); canvas.addMouseMotionListener(cellMotion)
+    frame.addWindowListener(new java.awt.event.WindowAdapter() {
+        void windowClosed(java.awt.event.WindowEvent e) { canvas.removeMouseListener(cellMouse); canvas.removeMouseMotionListener(cellMotion) }
     })
 }
 showCellposeState(null)
