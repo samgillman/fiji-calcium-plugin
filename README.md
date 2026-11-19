@@ -22,6 +22,8 @@ Fiji includes Bio-Formats for microscope recordings. Cellpose is optional: you c
 2. Choose cells on the colour image. Draw outlines or click **Suggest cells automatically**, then review the suggestions. Automatic detection shows percentage stage progress, a persistent explanation of the current work, total and stage time, saved-outline reuse, image size, CPU/GPU and detection settings. **Progress details** shows recent events; **View detection log** and **Cancel detection** remain available.
 3. Click **Measure and save** to export raw fluorescence, each cell's local background, corrected traces, ROI outlines, and an analysis log.
 
+Accepted cells use white outlines with a black outer border. Click one to select it, then **Remove selected cell**, or enable **Click cells to remove** to remove cells directly from the picture. **Undo last change** restores removals and reverses additions. Turn removal mode off to accept suggestions again.
+
 You can resize the plugin window. If its contents do not fit, use the mouse wheel or vertical scrollbar; a horizontal scrollbar appears when needed. Controls keep their full size, and status changes preserve your chosen window size.
 
 This release preserves the latest base version's edge-cell exclusion control, reuse of outlines for matching images, and faster CPU detection settings. **Suggest cells again** forces a fresh detection.

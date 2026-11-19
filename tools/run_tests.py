@@ -41,7 +41,7 @@ def main():
         subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"], cwd=ROOT, env=env, check=True)
         subprocess.run([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", "tests/test_bootstrap.groovy"], cwd=ROOT, env=env, check=True)
     if "--gui" in sys.argv or "--gui-only" in sys.argv:
-        for test in ["tests/test_gui.groovy", "tests/test_layout.groovy"]:
+        for test in ["tests/test_gui.groovy", "tests/test_layout.groovy", "tests/test_cell_editing.groovy"]:
             subprocess.run([java, "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", test], cwd=ROOT, env=env, check=True, timeout=60)
 
 
