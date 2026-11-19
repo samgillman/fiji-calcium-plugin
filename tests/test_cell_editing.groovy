@@ -15,14 +15,20 @@ def construction = source.substring(source.indexOf('def GRADE_TEXT ='), source.i
 def logic = source.substring(source.indexOf('def lastKey ='), source.indexOf('def findCellposePython ='))
 def listeners = source.substring(source.indexOf('def updateEditHint ='), source.indexOf('showCellposeState(null)\nsetupBtn'))
 def onUI = { Closure c -> SwingUtilities.invokeAndWait(c as Runnable) }
-def ui, manager, picture, imagej
+def ui, manager, picture, imagej, pluginMouse
 def cells = [new OvalRoi(60,60,30,30), new OvalRoi(120,60,30,30), new OvalRoi(180,60,30,30)]
 def counts = { -> manager.getCount() }
 def click = { int x, int y, int button = MouseEvent.BUTTON1, int drag = 0, int clicks = 1 ->
     onUI {
         def canvas = picture.getCanvas()
-        canvas.dispatchEvent(new MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, System.currentTimeMillis(), 0, x,y,clicks,false,button))
-        canvas.dispatchEvent(new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, System.currentTimeMillis(), 0, x+drag,y,clicks,false,button))
+        def pressed = new MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, System.currentTimeMillis(), 0, x,y,clicks,false,button)
+        def released = new MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, System.currentTimeMillis(), 0, x+drag,y,clicks,false,button)
+        if (button == MouseEvent.BUTTON1) { canvas.dispatchEvent(pressed); canvas.dispatchEvent(released) }
+        else {
+            // Exercise the actual plugin guard without opening ImageJ's unrelated native popup,
+            // which waits for human dismissal on Windows and blocks a synthetic event dispatch.
+            pluginMouse.mousePressed(pressed); pluginMouse.mouseReleased(released)
+        }
     }
     onUI {} // drain the actual listener's invokeLater
 }
@@ -33,6 +39,7 @@ try {
         def pixels = picture.getProcessor().getPixels()
         for (int y=0;y<180;y++) for(int x=0;x<280;x++) pixels[y*280+x] = x < 100 ? 0x00a000 : (x < 170 ? 0xff00ff : 0xffff00)
         picture.show(); picture.getCanvas().setMagnification(1d)
+        def originalMouseListeners = picture.getCanvas().getMouseListeners() as List
         manager = new RoiManager(false)
         manager.runCommand(picture,'Show None')
         def steps = new Expando(n:300,found:false,onset:0,colourPic:picture,movie:picture,respDiff:null)
@@ -43,6 +50,9 @@ try {
         ui = new GroovyShell(loader,binding).evaluate(imports + construction.replace('frame.setAlwaysOnTop(true)','frame.setAlwaysOnTop(false)') +
             '\nshowBg.setSelected(false)\n' + logic + listeners +
             '\nreturn [frame:frame, progress:detectionProgress, updates:updateCheck, proposals:proposals, refresh:refresh, click:clickCellAt, remove:removeBtn, undo:undoBtn, mode:removeMode, hint:editHint, show:showSug, edge:edgeBox, add:addBtn, oval:ovalBtn, free:freeBtn, acceptAll:acceptAll, edits:cellEdits, status:status]')
+        def installed = picture.getCanvas().getMouseListeners().findAll { !originalMouseListeners.contains(it) }
+        assert installed.size() == 1
+        pluginMouse = installed.first()
         ui.frame.visible = true
         IJ.setTool('oval')
         cells.eachWithIndex { r,i -> manager.addRoi(r); manager.rename(i,'Cell '+(i+1)) }
