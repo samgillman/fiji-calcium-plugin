@@ -44,3 +44,14 @@ write.table(data.frame(names(bad_settings),unname(bad_settings)),file.path(root,
 stopifnot(run_adapter(file.path(root,'input.csv'),file.path(root,'bad-settings.tsv'),'bad-settings-out')!=0)
 stopifnot(!file.exists(file.path(root,'duplicate-out/COMPLETE')),!file.exists(file.path(root,'bad-settings-out/COMPLETE')))
 cat('PASS: all-excluded population, unavailable mean/percentage, duplicate columns and invalid frame rate\n')
+# Separate KCl window: one KCl responder that did not respond to the primary stimulus.
+kcl_input<-x;kcl_input$Cell002[time>=11]<-20
+write.csv(kcl_input,file.path(root,'kcl.csv'),row.names=FALSE,na='')
+kcl_settings<-s;kcl_settings['stimulus_end']<-'7.5';kcl_settings['kcl_enabled']<-'true'
+kcl_settings<-c(kcl_settings,kcl_start='11',kcl_end='14.5')
+write.table(data.frame(names(kcl_settings),unname(kcl_settings)),file.path(root,'kcl-settings.tsv'),sep='\t',row.names=FALSE,col.names=FALSE,quote=FALSE)
+stopifnot(run_adapter(file.path(root,'kcl.csv'),file.path(root,'kcl-settings.tsv'),'kcl-out')==0)
+kcl_counts<-read.csv(file.path(root,'kcl-out/responder_counts.csv'))
+kcl_calls<-read.csv(file.path(root,'kcl-out/responder_calls.csv'))
+stopifnot(nrow(kcl_calls)==12,nrow(kcl_counts)==3,kcl_counts$Responded[2]==1,kcl_counts$Registered[3]==1,kcl_counts$Responded[3]==0,kcl_counts$Percent_responding[3]==0)
+cat('PASS: independent stimulus/KCl calls and explicit KCl-positive denominator\n')

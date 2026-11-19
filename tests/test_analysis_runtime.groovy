@@ -8,6 +8,7 @@ def root=new File('build/runtime with spaces').absoluteFile
 root.mkdirs()
 def runtime=Runtime.newInstance(home:root)
 def job=Job.newInstance(logFile:new File(root,'setup-test.log'),progress:{p,s->println "${p}% ${s}"})
+try {
 def env=runtime.setup(job)
 assert runtime.environment()==env
 runtime.verifyExecutable()
@@ -33,3 +34,7 @@ new File(engine,'runner.R').text='corrupted'
 assert Engine.unpack(root)==engine
 assert new File(engine,'runner.R').getText('UTF-8').startsWith('# Fiji adapter.')
 println 'PASS: clean managed R setup, cached setup, real analysis, paths with spaces, embedded code repair, source snapshot and manifest'
+} catch(Throwable problem) {
+    if(job.logFile.isFile())println(job.logFile.getText('UTF-8'))
+    throw problem
+}
