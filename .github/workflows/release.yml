@@ -3,6 +3,7 @@ name: Publish release
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     tags: ['v*']
 
 permissions:
@@ -27,9 +28,16 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
+      - name: Check whether this version needs a release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/release_status.py
       - name: Build versioned release assets
+        if: steps.release.outputs.needed == 'true'
         run: python tools/build_release.py
       - name: Publish complete release
+        if: steps.release.outputs.needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash

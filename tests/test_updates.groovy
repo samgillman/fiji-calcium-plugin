@@ -10,7 +10,8 @@ def valid = { version ->
     [tag_name:tag, html_url:Release.REPOSITORY+'/releases/tag/'+tag, draft:false, prerelease:false,
      assets:[[name:Release.ASSET,state:'uploaded',size:100,browser_download_url:Release.REPOSITORY+'/releases/download/'+tag+'/'+Release.ASSET]]]
 }
-def next = valid('2026.11.19.4')
+def nextVersion = (Release.versionParts(Release.VERSION)[0..2] + [Release.versionParts(Release.VERSION)[3] + 1]).join('.')
+def next = valid(nextVersion)
 assert Release.describe(next).newer
 assert !Release.describe(valid(Release.VERSION)).newer
 def bad = []
@@ -27,3 +28,59 @@ bad.each { data ->
     assert rejected : data
 }
 println 'PASS: numeric version comparison, stable complete releases, expected repository and download URLs'
+
+def Check = loader.loadClass('CalciumUpdateCheck')
+def callCheck = { checker, automatic ->
+    def latch = new java.util.concurrent.CountDownLatch(1)
+    def result = new java.util.concurrent.atomic.AtomicReference()
+    javax.swing.SwingUtilities.invokeAndWait {
+        assert checker.check(automatic, { answer ->
+            assert javax.swing.SwingUtilities.isEventDispatchThread()
+            result.set(answer); latch.countDown()
+        })
+    }
+    assert latch.await(5, java.util.concurrent.TimeUnit.SECONDS)
+    result.get()
+}
+def checker = Check.newInstance(fetch: { ->
+    assert !javax.swing.SwingUtilities.isEventDispatchThread()
+    Release.describe(next)
+})
+assert callCheck(checker, true).prompt
+assert !callCheck(checker, true).prompt // Later lasts for this plugin window.
+assert callCheck(checker, false).prompt // A manual check may offer it again.
+checker.fetch = { -> Release.describe(valid(Release.VERSION)) }
+assert !callCheck(checker, true).prompt
+checker.fetch = { -> throw new IOException('offline') }
+assert callCheck(checker, true).error == 'offline'
+checker.enabled = false
+assert !checker.check(true, { throw new AssertionError('disabled startup') })
+assert callCheck(checker, false).error == 'offline'
+checker.close()
+assert !checker.check(false, { throw new AssertionError('closed window') })
+println 'PASS: background update checks, event-thread callbacks, newer/current/offline, Later and disabled startup'
+
+// A blocked request must not freeze Swing, duplicate work, or update a closed/disabled window.
+[true, false].each { closeWindow ->
+    def entered = new java.util.concurrent.CountDownLatch(1)
+    def releaseRequest = new java.util.concurrent.CountDownLatch(1)
+    def slow = Check.newInstance(fetch: { ->
+        entered.countDown()
+        assert releaseRequest.await(5, java.util.concurrent.TimeUnit.SECONDS)
+        Release.describe(next)
+    })
+    boolean delivered = false
+    javax.swing.SwingUtilities.invokeAndWait {
+        assert slow.check(true, { delivered = true })
+    }
+    assert entered.await(5, java.util.concurrent.TimeUnit.SECONDS)
+    javax.swing.SwingUtilities.invokeAndWait {
+        assert !slow.check(false, { delivered = true })
+        if (closeWindow) slow.close() else slow.enabled = false
+    }
+    releaseRequest.countDown()
+    long end = System.nanoTime() + 5000000000L
+    while (slow.busy.get() && System.nanoTime() < end) Thread.sleep(10)
+    javax.swing.SwingUtilities.invokeAndWait { assert !delivered && !slow.busy.get() }
+}
+println 'PASS: responsive event thread, concurrent request suppression, close/disable during a request'

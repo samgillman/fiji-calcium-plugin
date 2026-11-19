@@ -1,4 +1,4 @@
-// Calcium imaging: cells step by step                                                    version 2026.11.19.3
+// Calcium imaging: cells step by step                                                    version 2026.11.19.4
 // One plugin for the whole job on one recording:
 //   1. choose the recording (already open in Fiji, or a file) and a folder for the results
 //   2. the plugin makes the cells visible: all-frames picture, response (found automatically, if there is one), and a
@@ -86,7 +86,7 @@ class CalciumSteps {
     /** Steps 1-2: pictures. The movie is only read. */
     void prepare(ImagePlus imp, boolean lookForResponse) {
         movie = imp; n = imp.getStackSize(); w = imp.getWidth(); h = imp.getHeight()
-        say("Calcium imaging plugin, version 2026.11.19.3")
+        say("Calcium imaging plugin, version 2026.11.19.4")
         say("Recording: " + imp.getTitle() + " (" + n + " frames, " + w + " x " + h + ", " + imp.getBitDepth() + "-bit)")
         ImagePlus sum = ZProjector.run(imp, "sum")                                   // Image > Stacks > Z Project, Sum Slices
         FloatProcessor avg = (FloatProcessor) sum.getProcessor().convertToFloat()
@@ -466,9 +466,9 @@ class CalciumSteps {
     }
 }
 
-/** Explicit, read-only update check. It never sends recordings or replaces a running plugin. */
+/** Read-only update check. It never sends recordings or replaces a running plugin. */
 class CalciumRelease {
-    static final String VERSION = "2026.11.19.3"
+    static final String VERSION = "2026.11.19.4"
     static final String REPOSITORY = "https://github.com/samgillman/fiji-calcium-plugin"
     static final String API = "https://api.github.com/repos/samgillman/fiji-calcium-plugin/releases/latest"
     static final String ASSET = "Calcium_Imaging_Fiji_Plugin.zip"
@@ -519,6 +519,36 @@ class CalciumRelease {
     }
 }
 
+/** Background requests with results delivered on Swing's event thread. */
+class CalciumUpdateCheck {
+    Closure fetch = { -> CalciumRelease.latest() }
+    String installed = CalciumRelease.VERSION
+    volatile boolean enabled = true, closed = false
+    java.util.concurrent.atomic.AtomicBoolean busy = new java.util.concurrent.atomic.AtomicBoolean(false)
+    Set<String> offered = new HashSet<String>() // accessed only on the event thread
+
+    boolean check(boolean automatic, Closure receive) {
+        if (closed || (automatic && !enabled) || !busy.compareAndSet(false, true)) return false
+        Thread.startDaemon("Calcium plugin update check") {
+            Map result
+            try {
+                result = new LinkedHashMap(fetch.call())
+                result.newer = CalciumRelease.newer(result.version, installed)
+            } catch (Exception problem) { result = [error: problem.message ?: problem.toString()] }
+            final Map answer = result
+            javax.swing.SwingUtilities.invokeLater {
+                busy.set(false)
+                if (!closed && (!automatic || enabled)) {
+                    answer.prompt = answer.newer && (!automatic || offered.add(answer.version))
+                    receive.call(answer)
+                }
+            }
+        }
+        true
+    }
+    void close() { closed = true }
+}
+
 /** Stage progress comes from actual work/log events, never from elapsed time.
  *  Cellpose's single-image inference does not expose a reliable overall percentage. */
 class CalciumOutlineTask {
@@ -531,13 +561,30 @@ class CalciumOutlineTask {
     int percent = 0
     String stage = "Starting", detail = "", device = ""
     boolean downloading = false
+    String source = "Checking for saved outlines", settings = "", imageSize = ""
+    long began = System.nanoTime(), stageStarted = began, lastEvent = began
+    List<String> history = []
+
+    synchronized void remember(String message) {
+        lastEvent = System.nanoTime()
+        long seconds = (long) ((lastEvent - began) / 1000000000L)
+        history.add(String.format(Locale.US, "%d:%02d  %s", (long) (seconds / 60), seconds % 60, message))
+        if (history.size() > 120) history.remove(0)
+    }
+    synchronized Map snapshot() {
+        [percent: percent, stage: stage, detail: detail, at: lastEvent, stageAt: stageStarted,
+         context: [source, imageSize, device, settings].findAll { it }.join(" | "),
+         history: history.join("\n")]
+    }
 
     void checkCancelled() {
         if (cancelled || Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException("Detection cancelled")
     }
-    void report(int value, String what, String extra = "") {
+    synchronized void report(int value, String what, String extra = "") {
         checkCancelled()
         percent = Math.max(percent, Math.min(99, value))
+        if (stage != what) stageStarted = System.nanoTime()
+        if (stage != what || detail != extra) remember(what + (extra ? ": " + extra : ""))
         stage = what; detail = extra
         progress.call(percent, stage, detail)
     }
@@ -546,12 +593,12 @@ class CalciumOutlineTask {
     void logLine(String raw) {
         String line = raw.replaceAll(/\u001B\[[0-?]*[ -\/]*[@-~]/, "").trim()
         if (line.isEmpty()) return
+        remember("Cellpose: " + line)
         String low = line.toLowerCase(Locale.ROOT)
-        String shortLine = line.length() > 120 ? line.substring(0, 117) + "..." : line
         if (low.contains("using cpu")) {
-            device = "CPU"; report(percent, stage, "Using the CPU; detection can take several minutes.")
+            device = "CPU"
         } else if (low.contains("using gpu")) {
-            device = "GPU"; report(percent, stage, "Using the graphics processor (GPU).")
+            device = "GPU"
         } else if (low.contains("downloading:")) {
             downloading = true; report(15, "Downloading the Cellpose model", "First use needs a large download. See the detection log for details.")
         } else if (low.contains("loading model")) {
@@ -559,7 +606,7 @@ class CalciumOutlineTask {
         } else if (low.contains("network run in")) {
             downloading = false; report(70, "Building cell outlines", "The image analysis has finished; Cellpose is creating the outlines.")
         } else if (low.contains("masks created") || low.contains("saving rois")) {
-            downloading = false; report(80, "Saving Cellpose outlines", shortLine)
+            downloading = false; report(80, "Saving Cellpose outlines", "Writing the detected shapes to an outlines file for Fiji to read.")
         } else if (low.contains(">>>> completed in")) {
             downloading = false; report(84, "Finishing Cellpose", "Waiting for Cellpose to close its output files.")
         } else {
@@ -568,9 +615,11 @@ class CalciumOutlineTask {
                 int p = Math.max(0, Math.min(100, Integer.parseInt(match.group(1))))
                 if (downloading) report(15 + (int) (10 * p / 100), "Downloading the Cellpose model", "Model download: " + p + "% (this is one part of detection).")
                 // The CLI's outer progress bar counts images, not tiles. Its 100% is NOT our 100%.
-                else if (stage == "Loading the Cellpose model" && line.contains("0/1")) report(40, "Finding cells in the image", "Cellpose is analysing the image" + (device ? " on the " + device : "") + "; this part may not send intermediate updates.")
-            } else report(percent, stage, shortLine)
+                else if (stage == "Loading the Cellpose model" && line.contains("0/1")) report(40, "Finding cells in the image", "Cellpose is locating cells. Outlines appear after this stage; intermediate progress is not reported.")
+            }
         }
+        // Raw log messages belong in the history; retain the useful stage explanation.
+        progress.call(percent, stage, detail)
     }
 
     /** A regular file captures stdout AND stderr. Poll it so silent processes remain cancellable. */
@@ -622,10 +671,13 @@ class CalciumOutlineProgress extends javax.swing.JPanel {
     javax.swing.JLabel text = new javax.swing.JLabel()
     javax.swing.JButton cancelButton = new javax.swing.JButton("Cancel detection")
     javax.swing.JButton logButton = new javax.swing.JButton("View detection log")
+    javax.swing.JButton detailsButton = new javax.swing.JButton("Progress details")
+    javax.swing.JTextArea detailsText = new javax.swing.JTextArea(18, 64)
+    javax.swing.JDialog detailsWindow
     javax.swing.Timer clock
     java.util.concurrent.atomic.AtomicReference latest = new java.util.concurrent.atomic.AtomicReference()
     CalciumOutlineTask task
-    long started
+    long started, stopped
     boolean running = false
 
     static String escape(String value) { value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") }
@@ -636,12 +688,23 @@ class CalciumOutlineProgress extends javax.swing.JPanel {
         bar.setToolTipText("Progress through detection stages, not a time estimate. It can pause while Cellpose runs.")
         text.setAlignmentX(0f); text.setFont(new java.awt.Font("SansSerif", java.awt.Font.PLAIN, 12))
         // Reserve space for a quiet/long-running message without growing beyond the screen mid-run.
-        text.setPreferredSize(new java.awt.Dimension(400, 106))
-        text.setMinimumSize(new java.awt.Dimension(400, 106))
-        text.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 106))
+        text.setPreferredSize(new java.awt.Dimension(400, 180))
+        text.setMinimumSize(new java.awt.Dimension(400, 180))
+        text.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 180))
         def buttons = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 4, 2)); buttons.setAlignmentX(0f)
-        [cancelButton, logButton].each { it.setFont(text.getFont()); it.setMargin(new java.awt.Insets(2, 8, 2, 8)); buttons.add(it) }
+        [cancelButton, detailsButton, logButton].each { it.setFont(text.getFont()); it.setMargin(new java.awt.Insets(2, 8, 2, 8)); buttons.add(it) }
         add(bar); add(text); add(buttons)
+        detailsText.setEditable(false); detailsText.setLineWrap(true); detailsText.setWrapStyleWord(true)
+        detailsText.setFont(text.getFont()); detailsText.setMargin(new java.awt.Insets(8, 8, 8, 8))
+        ((javax.swing.text.DefaultCaret) detailsText.getCaret()).setUpdatePolicy(javax.swing.text.DefaultCaret.NEVER_UPDATE)
+        detailsButton.addActionListener({ e ->
+            if (detailsWindow == null) {
+                detailsWindow = new javax.swing.JDialog(javax.swing.SwingUtilities.getWindowAncestor(this), "Detection progress details", java.awt.Dialog.ModalityType.MODELESS)
+                detailsWindow.add(new javax.swing.JScrollPane(detailsText)); detailsWindow.pack()
+                detailsWindow.setLocationRelativeTo(this)
+            }
+            render(); detailsWindow.setVisible(true)
+        } as java.awt.event.ActionListener)
         cancelButton.addActionListener({ e ->
             if (task != null && task.cancellable) task.cancel()
             cancelButton.setEnabled(false); cancelButton.setText("Cancelling...")
@@ -657,38 +720,67 @@ class CalciumOutlineProgress extends javax.swing.JPanel {
         setVisible(false)
     }
     CalciumOutlineTask begin() {
-        started = System.nanoTime(); running = true
+        started = System.nanoTime(); stopped = 0; running = true
         task = new CalciumOutlineTask(progress: { int pct, String stage, String detail ->
-            latest.set([percent: pct, stage: stage, detail: detail, at: System.nanoTime()])
+            latest.set(task.snapshot())
         })
-        latest.set([percent: 0, stage: "Preparing cell detection", detail: "Checking Cellpose.", at: started])
+        task.began = started
+        task.report(0, "Preparing cell detection", "Checking Cellpose and looking for saved outlines.")
         bar.setValue(0); cancelButton.setText("Cancel detection"); cancelButton.setEnabled(true)
         setVisible(true); render(); clock.start()
         return task
     }
     void render() {
         def state = latest.get(); if (state == null) return
-        long seconds = (long) ((System.nanoTime() - started) / 1000000000L)
-        long quiet = (long) ((System.nanoTime() - (long) state.at) / 1000000000L)
+        long now = running ? System.nanoTime() : stopped
+        long seconds = (long) ((now - started) / 1000000000L)
+        long quiet = (long) ((now - (long) state.at) / 1000000000L)
+        long stageSeconds = (long) ((now - (long) (state.stageAt ?: now)) / 1000000000L)
         bar.setValue((int) state.percent)
         bar.setString(state.percent + "% - Stage progress")
-        String elapsed = String.format(Locale.US, "%d:%02d elapsed", (long) (seconds / 60), seconds % 60)
-        if (task.device) elapsed += " - " + task.device
+        String elapsed = String.format(Locale.US, "%d:%02d total | %d:%02d in this stage", (long) (seconds / 60), seconds % 60, (long) (stageSeconds / 60), stageSeconds % 60)
         String message = state.detail
-        if (running && quiet >= 60) message = "No new progress message for " + quiet + " seconds. Cellpose may still be working; open the log to check."
-        if (running && seconds >= 600) message += " Over 10 minutes so far; check the log for details."
-        text.setText("<html><body style='width:300px'><b>" + escape(state.stage) + "</b><br>" + escape(elapsed) + "<br>" + escape(message) + "</body></html>")
+        String quietMessage = ""
+        if (running && quiet >= 60) quietMessage = "No new progress message for " + quiet + " s. " +
+            (task.process?.isAlive() ? "Cellpose is still running; no measurable progress reported." : "Waiting for the current stage to report progress.")
+        if (running && seconds >= 600) quietMessage += " Over 10 minutes so far; check the log."
+        String context = state.context ?: ""
+        text.setText("<html><body style='width:300px'><b>" + escape(state.stage) + "</b><br>" + escape(elapsed) + "<br>" + escape(context) + "<br>" + escape(message) +
+            (quietMessage ? "<br><font color='#865000'>" + escape(quietMessage) + "</font>" : "") + "</body></html>")
+        String details = state.stage + " (" + state.percent + "%)\n" + elapsed + "\n" + context + "\n" + message + "\n" + quietMessage +
+            "\n\nPercentages mark completed stages, not remaining time. Cellpose does not report a reliable percentage while finding cells in one image.\n\nRecent events (up to 120; full output is in View detection log):\n" + (state.history ?: "")
+        if (detailsText.getText() != details) {
+            int position = detailsText.getCaretPosition()
+            detailsText.setText(details); detailsText.setCaretPosition(Math.min(position, details.length()))
+        }
         logButton.setEnabled(task?.logFile?.isFile() ?: false)
         // Before Cellpose starts there may be an installation or a modal file chooser.
         cancelButton.setEnabled(running && task.cancellable && !task.cancelled)
     }
     void finish(boolean ok, String message) {
-        running = false; clock.stop()
-        latest.set([percent: ok ? 100 : task.percent, stage: ok ? "Cell outlines ready" : task.cancelled ? "Detection cancelled" : "Detection did not finish", detail: message, at: System.nanoTime()])
+        stopped = System.nanoTime(); running = false; clock.stop()
+        String finalStage = ok ? "Cell outlines ready" : task.cancelled ? "Detection cancelled" : "Detection did not finish"
+        task.remember(finalStage + ": " + message)
+        latest.set(task.snapshot() + [percent: ok ? 100 : task.percent, stage: finalStage, detail: message, stageAt: stopped])
         render(); cancelButton.setEnabled(false)
         if (!ok) bar.setString(task.percent + "% - " + (task.cancelled ? "Cancelled" : "Stopped"))
     }
-    void close() { clock.stop(); if (running && task != null) task.cancel() }
+    void close() { clock.stop(); if (running && task != null) task.cancel(); detailsWindow?.dispose() }
+}
+
+/** Keep every control reachable on smaller screens as progress and results appear. */
+class CalciumWindow extends javax.swing.JFrame {
+    CalciumWindow(String title) { super(title) }
+    @Override void pack() {
+        super.pack()
+        def configuration = getGraphicsConfiguration()
+        def bounds = configuration.getBounds()
+        def insets = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(configuration)
+        int available = bounds.height - insets.top - insets.bottom - 60
+        setSize(getWidth(), Math.min(getHeight(), available))
+        if (isShowing()) setLocation(getX(), Math.max(bounds.y + insets.top,
+            Math.min(getY(), bounds.y + bounds.height - insets.bottom - getHeight())))
+    }
 }
 
 /** Small plot of one outline's gray value over time (background removed). */
@@ -734,7 +826,7 @@ movies.eachWithIndex { im, i -> if (im == front) pre = labels[i] }
 if (pre == fromDisk && movies.size() > 0) pre = labels[0]
 def defaultDir = Prefs.get("calcium.steps.folder", System.getProperty("user.home") + File.separator + "Documents" + File.separator + "Calcium imaging results")
 
-def gd = new GenericDialog("Calcium imaging: cells step by step  (version 2026.11.19.3)")
+def gd = new GenericDialog("Calcium imaging: cells step by step  (version 2026.11.19.4)")
 gd.addMessage("STEP 1 of 3:  choose the recording\n \nPick the ORIGINAL movie, not a processed copy.")
 gd.addChoice("Recording:", labels as String[], pre)
 gd.addCheckbox("Look for a response and show it in magenta", true)
@@ -793,7 +885,8 @@ def note = { String s -> def l = new javax.swing.JLabel("<html><body style='widt
 def btn = { String s -> def b = new javax.swing.JButton(s); b.setFont(small); b.setMargin(new java.awt.Insets(2, 8, 2, 8)); b }
 def box = { String s, boolean on -> def b = new javax.swing.JCheckBox(s, on); b.setFont(small); b.setAlignmentX(0f); b }
 
-def frame = new javax.swing.JFrame("Calcium imaging: cells step by step")
+def frame = new CalciumWindow("Calcium imaging: cells step by step")
+frame.setDefaultCloseOperation(javax.swing.WindowConstants.DISPOSE_ON_CLOSE)
 def root = new javax.swing.JPanel(); root.setLayout(new javax.swing.BoxLayout(root, javax.swing.BoxLayout.Y_AXIS)); root.setBorder(javax.swing.BorderFactory.createEmptyBorder(8, 8, 8, 8))
 
 def s1 = section("Step 1   Recording   ✓")
@@ -840,35 +933,62 @@ s3.add(makeMovie); s3.add(saveMovie); s3.add(row(go, openBtn, closeBtn)); s3.add
 [s1, s2, s3].each { root.add(it); root.add(javax.swing.Box.createVerticalStrut(6)) }
 def updateBtn = btn("Check for updates")
 def releaseBtn = btn("Open download page"); releaseBtn.setVisible(false)
-def updateNote = note("Updates are checked only when you click the button.")
+def autoUpdateBox = box("Check for updates when this plugin opens", Prefs.get("calcium.steps.check_updates", true))
+def updateCheck = new CalciumUpdateCheck(enabled: autoUpdateBox.isSelected())
+def updateNote = note("A newer release will offer Download or Later. Your work stays open.")
 root.add(row(new javax.swing.JLabel("Version " + CalciumRelease.VERSION), updateBtn, releaseBtn))
-root.add(updateNote)
+root.add(autoUpdateBox); root.add(updateNote)
 def releasePage = CalciumRelease.REPOSITORY + "/releases/latest"
-updateBtn.addActionListener({ e ->
-    updateBtn.setEnabled(false); updateBtn.setText("Checking...")
-    updateNote.setText("<html><body style='width:300px'>Checking the latest GitHub release...</body></html>")
-    Thread.start {
-        String message
-        try {
-            def found = CalciumRelease.latest(); releasePage = found.page
-            message = found.newer ? "<b>Update available: " + found.version + ".</b> Open the download page, replace the plugin file, then restart Fiji after your work is saved." : "You are up to date (installed " + CalciumRelease.VERSION + "; latest release " + found.version + ")."
-        } catch (Exception problem) {
-            message = "Could not check for updates: " + CalciumOutlineProgress.escape(problem.message ?: problem.toString()) + ". You can open the download page manually."
-            releasePage = CalciumRelease.REPOSITORY + "/releases/latest"
-        }
-        final String displayMessage = message
-        javax.swing.SwingUtilities.invokeLater {
-            updateBtn.setEnabled(true); updateBtn.setText("Check for updates"); releaseBtn.setVisible(true)
-            updateNote.setText("<html><body style='width:300px'>" + displayMessage + "</body></html>")
-            frame.pack()
-        }
-    }
-} as java.awt.event.ActionListener)
-releaseBtn.addActionListener({ e ->
+def openRelease = { ->
     try { java.awt.Desktop.getDesktop().browse(new java.net.URI(releasePage)) }
     catch (Exception problem) { IJ.showMessage("Plugin updates", "Open this page in your browser:\n" + releasePage) }
+}
+def checkUpdates = { boolean automatic ->
+    boolean accepted = updateCheck.check(automatic, { Map found ->
+        updateBtn.setEnabled(true); updateBtn.setText("Check for updates")
+        if (automatic && found.error) return // Offline startup never interrupts image analysis.
+        String message
+        if (found.error) message = "Could not check for updates: " + CalciumOutlineProgress.escape(found.error) + ". You can open the download page manually."
+        else {
+            releasePage = found.page
+            message = found.newer ? "<b>Update available: " + found.version + ".</b> Download the ZIP, replace the plugin file, then restart Fiji after saving your work." : "You are up to date (installed " + CalciumRelease.VERSION + "; latest release " + found.version + ")."
+        }
+        releaseBtn.setVisible(true)
+        updateNote.setText("<html><body style='width:300px'>" + message + "</body></html>")
+        frame.pack()
+        if (found.prompt) {
+            def prompt = new javax.swing.JDialog(frame, "Calcium plugin update available", false)
+            def content = new javax.swing.JPanel(); content.setBorder(javax.swing.BorderFactory.createEmptyBorder(12, 12, 12, 12))
+            content.setLayout(new javax.swing.BoxLayout(content, javax.swing.BoxLayout.Y_AXIS))
+            content.add(note("<b>Version " + found.version + " is available.</b><br>Download the new ZIP and replace the plugin after saving your work. You can keep working now."))
+            def download = btn("Download"), later = btn("Later")
+            content.add(row(download, later)); prompt.add(content)
+            download.addActionListener({ e -> openRelease(); prompt.dispose() } as java.awt.event.ActionListener)
+            later.addActionListener({ e -> prompt.dispose() } as java.awt.event.ActionListener)
+            prompt.setDefaultCloseOperation(javax.swing.WindowConstants.DISPOSE_ON_CLOSE)
+            prompt.pack(); prompt.setLocationRelativeTo(frame); prompt.setVisible(true)
+        }
+    })
+    if (accepted) {
+        updateBtn.setEnabled(false); updateBtn.setText("Checking...")
+        if (!automatic) updateNote.setText("Checking the latest GitHub release...")
+    }
+}
+autoUpdateBox.addActionListener({ e ->
+    updateCheck.enabled = autoUpdateBox.isSelected()
+    Prefs.set("calcium.steps.check_updates", updateCheck.enabled)
+    updateBtn.setEnabled(true); updateBtn.setText("Check for updates")
 } as java.awt.event.ActionListener)
-frame.getContentPane().add(root)
+updateBtn.addActionListener({ e -> checkUpdates(false) } as java.awt.event.ActionListener)
+releaseBtn.addActionListener({ e -> openRelease() } as java.awt.event.ActionListener)
+frame.addWindowListener(new java.awt.event.WindowAdapter() {
+    void windowClosed(java.awt.event.WindowEvent e) { updateCheck.close() }
+    void windowClosing(java.awt.event.WindowEvent e) { updateCheck.close() }
+})
+def scroll = new javax.swing.JScrollPane(root, javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_ALWAYS, javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER)
+scroll.setBorder(javax.swing.BorderFactory.createEmptyBorder())
+scroll.getVerticalScrollBar().setUnitIncrement(24)
+frame.getContentPane().add(scroll)
 frame.pack(); frame.setAlwaysOnTop(true)
 if (!testGui) { def scr = java.awt.Toolkit.getDefaultToolkit().getScreenSize(); frame.setLocation((int) Math.max(0, scr.width - frame.getWidth() - 12), 40) }
 
@@ -1092,6 +1212,7 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
     def optFile = new File(dir, "cellpose_options_used.txt")
     def pending = new File(dir, "cellpose_run_incomplete.txt")
     def pic = steps.outlinePicture()
+    task.imageSize = pic.getWidth() + " x " + pic.getHeight() + " pixels"
     def opts = []; def cmd = []
     boolean reuse = false
     if (!forceFresh && !pending.exists() && tif.isFile() && zip.isFile() && zip.length() > 0) {
@@ -1102,12 +1223,14 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
     }
     String how
     if (reuse) {
+        task.source = "Saved outlines reused (no new Cellpose run)"
         how = "the outlines made earlier for this recording were used again" + (optFile.exists() ? "" : " (made by an earlier version of the plugin)")
         cmd = ["(no new run; earlier settings: " + (optFile.exists() ? optFile.text.trim() : "full size") + ")"]
         def previousLog = new File(dir, "cellpose_output.txt")
         if (previousLog.isFile()) task.logFile = previousLog
         task.report(84, "Reusing saved cell outlines", "The detection image matches this recording; a new Cellpose run is not needed.")
     } else {
+        task.source = "New detection"
         task.checkCancelled()
         // A failed/cancelled attempt may leave a partial ZIP. Never treat it as a reusable result.
         pending.text = "Detection has not completed successfully. Do not reuse its outlines.\n"
@@ -1136,6 +1259,7 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
         task.checkCancelled()
         task.device = known
         boolean gpu = known != "CPU"
+        task.settings = "Attempt 1 of 2; " + (gpu ? "full-size detection" : "faster CPU setting (diameter 60)")
         opts = ["--pretrained_model", "cpsam_v2", "--use_gpu"] + (gpu ? [] : ["--diameter", "60"]) + ["--save_rois", "--no_npy", "--cellprob_threshold", "-2", "--flow_threshold", "0.8", "--verbose"]
         cmd = [py, "-u", "-m", "cellpose", "--image_path", tif.getPath()] + opts
         task.report(10, "Starting Cellpose (attempt 1 of 2)", gpu ? "Using full-size detection. First use may download the model." : "CPU detection uses the faster diameter-60 setting from this version; it may still take several minutes.")
@@ -1143,6 +1267,7 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
         if (code != 0 || !zip.isFile() || zip.length() == 0) {
             task.checkCancelled(); removeOldZip()
             task.downloading = false; task.device = "CPU"
+            task.settings = "Attempt 2 of 2; default model, full-size detection"
             task.report(task.percent, "Retrying Cellpose on the CPU (attempt 2 of 2)", "The first attempt did not produce outlines. Trying this version's default model and full-size image.")
             opts = ["--save_rois", "--no_npy", "--cellprob_threshold", "-2", "--flow_threshold", "0.8", "--verbose"]
             cmd = [py, "-u", "-m", "cellpose", "--image_path", tif.getPath()] + opts
@@ -1282,3 +1407,4 @@ if (testGui) { binding.setVariable("hooks", [detectionProgress: detectionProgres
 frame.setVisible(true)
 timer.start()
 refresh(true)
+javax.swing.SwingUtilities.invokeLater { checkUpdates(true) }
