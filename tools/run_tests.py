@@ -4,7 +4,9 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
+import urllib.error
 
 from build_release import ROOT, validate
 
@@ -24,8 +26,16 @@ def main():
             path = dependencies / name
             if not path.is_file():
                 temporary = path.with_suffix(".tmp")
-                with urllib.request.urlopen("https://repo.maven.apache.org/maven2/" + remote, timeout=60) as response:
-                    temporary.write_bytes(response.read())
+                for attempt in range(3):
+                    try:
+                        print("Downloading " + name, flush=True)
+                        with urllib.request.urlopen("https://repo.maven.apache.org/maven2/" + remote, timeout=60) as response:
+                            temporary.write_bytes(response.read())
+                        break
+                    except (urllib.error.URLError, TimeoutError):
+                        if attempt == 2:
+                            raise
+                        time.sleep(2)
                 temporary.replace(path)
     jars = [dependencies / name for name in DEPENDENCIES]
     for jar in jars:
