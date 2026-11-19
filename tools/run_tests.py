@@ -4,7 +4,9 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
+import urllib.error
 
 from build_release import ROOT, validate
 
@@ -24,8 +26,17 @@ def main():
             path = dependencies / name
             if not path.is_file():
                 temporary = path.with_suffix(".tmp")
-                with urllib.request.urlopen("https://repo.maven.apache.org/maven2/" + remote, timeout=60) as response:
-                    temporary.write_bytes(response.read())
+                mirrors = ["https://repo.maven.apache.org/maven2/", "https://repo1.maven.org/maven2/", "https://repo.maven.apache.org/maven2/"]
+                for attempt in range(3):
+                    try:
+                        print("Downloading " + mirrors[attempt] + remote, flush=True)
+                        with urllib.request.urlopen(mirrors[attempt] + remote, timeout=60) as response:
+                            temporary.write_bytes(response.read())
+                        break
+                    except (urllib.error.URLError, TimeoutError):
+                        if attempt == 2:
+                            raise
+                        time.sleep(2)
                 temporary.replace(path)
     jars = [dependencies / name for name in DEPENDENCIES]
     for jar in jars:
@@ -35,13 +46,16 @@ def main():
     if not java:
         raise RuntimeError("Java 17 or newer is required")
     env = dict(os.environ, CALCIUM_TEST_PYTHON=sys.executable)
+    if "--analysis-only" in sys.argv:
+        subprocess.run([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", "tests/test_analysis_runtime.groovy"], cwd=ROOT, env=env, check=True, timeout=1200)
+        return
     if "--gui-only" not in sys.argv:
-        for test in ["tests/test_progress.groovy", "tests/test_detection_start.groovy", "tests/test_updates.groovy", "tests/test_install.groovy", "tests/test_latest_base.groovy"]:
+        for test in ["tests/test_progress.groovy", "tests/test_detection_start.groovy", "tests/test_updates.groovy", "tests/test_install.groovy", "tests/test_latest_base.groovy", "tests/test_analysis_bridge.groovy"]:
             subprocess.run([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", test], cwd=ROOT, env=env, check=True)
         subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"], cwd=ROOT, env=env, check=True)
         subprocess.run([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", "tests/test_bootstrap.groovy"], cwd=ROOT, env=env, check=True)
     if "--gui" in sys.argv or "--gui-only" in sys.argv:
-        for test in ["tests/test_gui.groovy", "tests/test_layout.groovy", "tests/test_cell_editing.groovy"]:
+        for test in ["tests/test_gui.groovy", "tests/test_layout.groovy", "tests/test_cell_editing.groovy", "tests/test_analysis_gui.groovy"]:
             subprocess.run([java, "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", test], cwd=ROOT, env=env, check=True, timeout=60)
 
 

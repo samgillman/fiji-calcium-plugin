@@ -1,0 +1,7 @@
+"Cell","F0","Baseline_SD_raw","Status","Reason","Peak_dFF0","Time_to_Peak","Time_to_25_Peak","Time_to_50_Peak","Time_to_75_Peak","Rise_Time","Rise_Rate_10_90_dFF0_per_s","AUC","Response_Amplitude","FWHM","FWHM_Censored","FWHM_Lower_Bound","Half_Width","Baseline_SD","SNR"
+"Cell001",10,0,"Included","",1,6,4.5,5,5.5,1.6,0.5,2.5,1,2.5,FALSE,,1.25,0,
+"Cell002",10,0,"Included","",0,2.5,,,,,,0,0,,,,,0,
+"Cell003",0,0,"Excluded","Invalid raw fluorescence baseline (F0)",,,,,,,,,,,,,,,
+"Cell004",,,"Excluded","Invalid raw fluorescence baseline (F0)",,,,,,,,,,,,,,,
+"Cell005",10,0,"Included","",1,4,3.625,3.75,3.875,0.4,2,10.75,1,,TRUE,10.75,,0,
+"Cell006",10,0,"Included","",1,6,4.5,5,5.5,1.6,0.5,1.5625,1,,,,,0,

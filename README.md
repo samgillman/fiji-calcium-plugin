@@ -1,6 +1,6 @@
 # Fiji Calcium Plugin
 
-Choose cells in a calcium-imaging recording, review automatic Cellpose outlines, and export each cell's fluorescence and local background from the original movie.
+Choose cells in a calcium-imaging recording, review automatic Cellpose outlines, measure fluorescence and local background, and analyze responses with SimpleCa²⁺ inside Fiji.
 
 **[Download the latest plugin ZIP](https://github.com/samgillman/fiji-calcium-plugin/releases/latest/download/Calcium_Imaging_Fiji_Plugin.zip)** · [Release notes and older versions](https://github.com/samgillman/fiji-calcium-plugin/releases) · [Full user guide](docs/USER_GUIDE.txt)
 
@@ -21,6 +21,7 @@ Fiji includes Bio-Formats for microscope recordings. Cellpose is optional: you c
 1. Choose the original recording and an output folder.
 2. Choose cells on the colour image. Draw outlines or click **Suggest cells automatically**, then review the suggestions. Automatic detection shows percentage stage progress, a persistent explanation of the current work, total and stage time, saved-outline reuse, image size, CPU/GPU and detection settings. **Progress details** shows recent events; **View detection log** and **Cancel detection** remain available.
 3. Click **Measure and save** to export raw fluorescence, each cell's local background, corrected traces, ROI outlines, and an analysis log.
+4. Open **Analyze responses** in Step 4. On first use, click **Set up analysis engine** to install a private R runtime. Confirm the frame rate, baseline and stimulus/KCl windows, then analyze. Review native traces, heatmap, metrics and responder counts; selecting a cell also highlights it on a separate review image. See [the integrated analysis guide](docs/SIMPLECA.md).
 
 Accepted cells use white outlines with a black outer border. Click one to select it, then **Remove selected cell**, or enable **Click cells to remove** to remove cells directly from the picture. **Undo last change** restores removals and reverses additions. Turn removal mode off to accept suggestions again.
 
@@ -45,6 +46,8 @@ Installation happens only after you click Install update or run the standalone i
 The defaults were developed for 1388 × 1040 recordings at 0.645 µm/pixel. Review the user guide and settings for other imaging conditions. Automatic outlines and grades require review. The sizes of ΔF/F₀ responses from intensity-lifted, dim cells are not interpretable; see the guide's discussion of the “every cell kept” table.
 
 The original workflow was tested on macOS with Fiji/ImageJ 1.54p. A Windows user reported successful detection, but the newest UI/update features have not been validated in a complete Windows imaging session. Automated tests exercise progress, cancellation, retries, ROI import, and update metadata on simulated detector runs; they do not establish segmentation accuracy.
+
+The integrated analysis supports 64-bit Windows, Intel/Apple Silicon Mac and x64 Linux. Automated checks install R and compare results with the pinned SimpleCa source on Windows, macOS and Linux. Step 4 uses unlifted background-corrected fluorescence, retains excluded/unscorable records and reports the evaluable denominator. This first integration analyzes one recording at a time; it does not include all of the web application's multi-recording plot controls.
 
 ## Report a problem
 
