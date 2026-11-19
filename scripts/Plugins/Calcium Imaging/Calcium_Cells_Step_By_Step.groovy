@@ -1029,6 +1029,14 @@ class CalciumRRuntime {
     void verifyExecutable() {
         if (!executable().isFile() || CalciumInstaller.digest(executable().bytes) != HASHES[platform()]) throw new IOException('The R launcher failed verification. Run setup again.')
     }
+    void probe(File env,CalciumLocalJob job) {
+        // Windows launchers can strip quotes inside inline -e expressions. Use the same file path as analysis.
+        File script=File.createTempFile('verify-r-', '.R', home)
+        try {
+            script.setText('stopifnot(as.character(getRversion()) == "'+R_VERSION+'")\ncat("R ready\\n")\n','UTF-8')
+            job.run(scriptCommand(env,script),home,60)
+        } finally {script.delete()}
+    }
     File setup(CalciumLocalJob job) {
         home.mkdirs(); job.check()
         def channel = java.nio.channels.FileChannel.open(new File(home,'setup.lock').toPath(), java.nio.file.StandardOpenOption.CREATE,java.nio.file.StandardOpenOption.WRITE)
@@ -1038,7 +1046,7 @@ class CalciumRRuntime {
             if (lock == null) throw new IOException('R setup is already running in another window.')
             File ready = environment()
             if (ready != null) {
-                try { verifyExecutable(); job.run(command(ready)+['-e','stopifnot(getRversion() >= "4.5")'],home,60); job.progress(100,'R is ready'); return ready }
+                try { verifyExecutable(); probe(ready,job); job.progress(100,'R is ready'); return ready }
                 catch (java.util.concurrent.CancellationException cancelled) { throw cancelled }
                 catch (Exception broken) { new File(home,'ready-'+platform()+'.txt').delete() }
             }
@@ -1057,7 +1065,7 @@ class CalciumRRuntime {
             job.progress(30,'Installing R (first run only). Download details are in the setup log.')
             job.run([executable().path,'--no-rc','-r',new File(home,'packages').path,'create','--yes','--override-channels','--strict-channel-priority','-c','https://conda.anaconda.org/conda-forge','-p',env.path,'r-base='+R_VERSION],home,1800)
             job.progress(90,'Checking the installed analysis engine')
-            job.run(command(env)+['-e','stopifnot(getRversion() >= "4.5"); cat("R ready\\n")'],home,60)
+            probe(env,job)
             job.check()
             File markerTemp=File.createTempFile('ready-', '.tmp', home); markerTemp.setText(env.name,'UTF-8')
             java.nio.file.Files.move(markerTemp.toPath(),new File(home,'ready-'+platform+'.txt').toPath(),java.nio.file.StandardCopyOption.ATOMIC_MOVE,java.nio.file.StandardCopyOption.REPLACE_EXISTING)
