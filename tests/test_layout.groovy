@@ -1,0 +1,110 @@
+// Exercise the real plugin controls in resized native windows, including Windows' look and feel.
+import javax.swing.*
+import java.awt.*
+import java.awt.event.MouseWheelEvent
+
+def loader = new GroovyClassLoader(getClass().classLoader)
+def source = new File('scripts/Plugins/Calcium Imaging/Calcium_Cells_Step_By_Step.groovy').getText('UTF-8')
+loader.parseClass(source)
+def fragment = source.substring(source.indexOf('def GRADE_SHARE ='), source.indexOf('if (!testGui) { def scr'))
+def makeUI = {
+    def binding = new Binding([
+        imp:new ij.ImagePlus('Resize regression recording', new ij.process.ByteProcessor(50,50)),
+        steps:new Expando(n:300,found:true,onset:120), look:true,
+        outDir:new File('build/results/recording').absoluteFile,
+    ])
+    new GroovyShell(loader,binding).evaluate('import ij.IJ\nimport ij.Prefs\nimport java.awt.Color\n' +
+        fragment.replace('frame.setAlwaysOnTop(true)', 'frame.setAlwaysOnTop(false)') +
+        '\nreturn [frame:frame,root:root,scroll:scroll,progress:detectionProgress,close:closeBtn,go:go,add:addBtn,updates:updateCheck,release:releaseBtn,trace:trace,info:info]')
+}
+def onUI = { Closure action -> SwingUtilities.invokeAndWait(action as Runnable) }
+def settle = { ui ->
+    // Native resize events arrive asynchronously; wait for the viewport to catch up.
+    boolean ready = false
+    long end = System.nanoTime() + 5000000000L
+    while (!ready && System.nanoTime() < end) {
+        onUI {
+            ui.frame.validate()
+            ready = ui.scroll.width == ui.frame.contentPane.width && ui.scroll.height == ui.frame.contentPane.height
+        }
+        if (!ready) Thread.sleep(20)
+    }
+    assert ready : 'Viewport did not follow the resized window'
+    onUI { ui.frame.validate() }
+}
+def controlsFit = { ui ->
+    assert ui.root.height >= ui.root.preferredSize.height
+    assert ui.root.width >= ui.root.preferredSize.width
+    assert ui.trace.height >= ui.trace.preferredSize.height
+    def walk; walk = { c ->
+        if (!c.visible) return
+        c.components.each { child ->
+            if (child.visible) {
+                assert child.x >= 0 && child.y >= 0 && child.x + child.width <= c.width && child.y + child.height <= c.height :
+                    "Clipped ${child.class.simpleName}: ${child.bounds} in ${c.size}"
+                if (child instanceof AbstractButton) {
+                    assert child.width >= child.preferredSize.width && child.height >= child.preferredSize.height : "Squashed button: ${child.text}"
+                }
+                if (child instanceof Container) walk(child)
+            }
+        }
+    }
+    walk(ui.root)
+}
+def reveal = { ui, button ->
+    def rectangle = SwingUtilities.convertRectangle(button.parent, button.bounds, ui.root)
+    ui.root.scrollRectToVisible(rectangle)
+    assert ui.scroll.viewport.viewRect.contains(rectangle) : "Cannot scroll to ${button.text}"
+}
+
+try {
+    [UIManager.systemLookAndFeelClassName, UIManager.crossPlatformLookAndFeelClassName].unique().each { look ->
+        def ui
+        try {
+            onUI { UIManager.setLookAndFeel(look); ui = makeUI(); ui.frame.setLocation(20,20); ui.frame.setVisible(true) }
+            settle(ui)
+            onUI { ui.frame.setSize(340,360) }
+            settle(ui)
+            onUI {
+                controlsFit(ui)
+                assert ui.scroll.verticalScrollBar.visible && ui.scroll.horizontalScrollBar.visible
+                assert ui.scroll.wheelScrollingEnabled
+                ui.scroll.viewport.setViewPosition(new Point(0,0))
+                ui.scroll.dispatchEvent(new MouseWheelEvent(ui.scroll, MouseWheelEvent.MOUSE_WHEEL, System.currentTimeMillis(), 0,
+                    100,100,0,false,MouseWheelEvent.WHEEL_UNIT_SCROLL,3,4))
+                assert ui.scroll.verticalScrollBar.value > 0 : 'Mouse wheel did not scroll'
+                reveal(ui,ui.go); reveal(ui,ui.close); reveal(ui,ui.add)
+                ui.progress.begin().report(40,'Finding cells','Long-running CPU detection')
+                ui.release.setVisible(true)
+                ui.frame.refreshContents()
+            }
+            settle(ui)
+            onUI {
+                assert ui.frame.size == new Dimension(340,360) : 'Progress or update status changed the chosen window size'
+                controlsFit(ui)
+                reveal(ui,ui.progress.detailsButton); reveal(ui,ui.release); reveal(ui,ui.close)
+                ui.progress.finish(true,'444 suggestions; Cellpose finished')
+                ui.info.setText('<html><body style="width:300px">Suggestions are ready to review.</body></html>')
+                ui.frame.refreshContents()
+                assert ui.frame.size == new Dimension(340,360)
+                ui.frame.setSize(740,620)
+            }
+            settle(ui)
+            onUI {
+                controlsFit(ui)
+                assert !ui.scroll.horizontalScrollBar.visible : 'Horizontal scrollbar should disappear when the layout fits'
+                reveal(ui,ui.close)
+                ui.frame.setSize(320,260)
+            }
+            settle(ui)
+            onUI { controlsFit(ui); reveal(ui,ui.close) }
+            println 'PASS: resize, uncompressed controls, wheel scrolling, both scrollbars, bottom/right controls, stable size (' + look + ')'
+        } finally {
+            onUI { ui?.progress?.close(); ui?.updates?.close(); ui?.frame?.dispose() }
+        }
+    }
+} catch (Throwable failure) {
+    failure.printStackTrace()
+    System.exit(1)
+}
+System.exit(0)

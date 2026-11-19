@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.11.19.5
+
+- Keep controls at their full layout size when the plugin window is made smaller. Scroll vertically with the mouse wheel or scrollbar, and horizontally when the window is too narrow.
+- Preserve the window size chosen by the user when detection progress, results, or update messages change.
+- Fit the initial window within the screen's width and height and keep a usable minimum window size.
+- Add native Windows and Linux GUI checks for resizing, wheel scrolling, unclipped controls, and access to the bottom and right-hand buttons.
+
 ## 2026.11.19.4
 
 - Keep a plain-language explanation visible during detection, with total and current-stage time, image dimensions, CPU/GPU, attempt number, and detection settings.

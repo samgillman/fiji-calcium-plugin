@@ -31,4 +31,7 @@ jobs:
         run: python tools/run_tests.py
       - name: Exercise update and progress windows
         if: runner.os == 'Linux'
-        run: xvfb-run -a java -Dfile.encoding=UTF-8 -cp "build/deps/*" groovy.ui.GroovyMain tests/test_gui.groovy
+        run: xvfb-run -a python tools/run_tests.py --gui-only
+      - name: Exercise native Windows resizing and scrolling
+        if: runner.os == 'Windows'
+        run: python tools/run_tests.py --gui-only
