@@ -246,8 +246,11 @@ cellpose_python.txt  next to the plugin file.
 
 
 STEP 2 PROGRESS AND GITHUB UPDATES
-The progress panel shows percentage stage progress, current stage, elapsed time, CPU/GPU when
-known, download percentage when supplied, and the count of outlines checked. It advances when
+The progress panel shows percentage stage progress, a persistent explanation of the current stage,
+total and stage time, image dimensions, CPU/GPU, attempt number, detection settings, download
+percentage when supplied, and the count of outlines checked. Progress details opens a scrollable
+history of recent events and Cellpose messages. Saved-outline reuse is clearly labelled. Quiet
+periods keep the stage explanation and show whether the Cellpose process is still running. It advances when
 work or reported stages complete, not merely as time passes. Cellpose can be silent during
 inference. Use View detection log or Cancel detection during long runs. The bar reaches 100%
 only after the outlines are read, graded, and saved. Setup is a separate operation and disables
@@ -258,7 +261,7 @@ is present. Suggest cells again starts a fresh run. Failed or cancelled runs nev
 results. Edge-cell controls and the faster CPU settings from this version are preserved.
 
 
-GITHUB RELEASES AND UPDATES (2026.11.19.3)
+GITHUB RELEASES AND UPDATES (2026.11.19.4)
 Project: https://github.com/samgillman/fiji-calcium-plugin
 Download: https://github.com/samgillman/fiji-calcium-plugin/releases/latest
 
@@ -266,9 +269,11 @@ The GitHub ZIP contains scripts/Plugins/Calcium Imaging/Calcium_Cells_Step_By_St
 Merge the ZIP's scripts folder into Fiji's folder; replace the existing plugin file and restart Fiji.
 The top-level README.md gives the current installation instructions.
 
-Click Check for updates at the bottom of the plugin window to check the latest GitHub release.
-This only checks when clicked and sends no recording data. If an update is available, open its
-page, download the ZIP, replace the installed script, and restart Fiji after saving your work.
+The plugin checks for a newer GitHub release in the background when its main window opens.
+A new release offers Download (opens its page) or Later (keep working). Uncheck Check for updates
+when this plugin opens to disable this. The Check for updates button always works manually.
+No recording data is sent. Download the ZIP, replace the script, and restart Fiji after saving
+your work. Earlier versions need 2026.11.19.4 installed once to get future startup prompts.
 A network error does not stop imaging or analysis. There is no automatic in-place installation.
 
 For notifications, sign in to GitHub and choose Watch > Custom > Releases > Apply on the repository.

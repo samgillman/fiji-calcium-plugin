@@ -29,3 +29,6 @@ jobs:
           python-version: '3.12'
       - name: Compile and run regression checks
         run: python tools/run_tests.py
+      - name: Exercise update and progress windows
+        if: runner.os == 'Linux'
+        run: xvfb-run -a java -Dfile.encoding=UTF-8 -cp "build/deps/*" groovy.ui.GroovyMain tests/test_gui.groovy

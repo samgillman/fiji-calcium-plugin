@@ -23,6 +23,11 @@ assert task.percent == 25 && !task.succeeded
 task.logLine('INFO >>>> loading model cpsam')
 task.logLine('  0%|          | 0/1 [00:00<?, ?it/s]')
 assert task.stage == 'Finding cells in the image' && task.percent == 40
+def explanation = task.detail
+long stageAt = task.stageStarted
+task.logLine('INFO routine technical diagnostic')
+assert task.detail == explanation && task.stageStarted == stageAt
+assert task.snapshot().history.contains('routine technical diagnostic')
 task.logLine('INFO network run in 42.0s')
 task.logLine('INFO masks created in 4.1s')
 task.logLine('100%|##########| 1/1 [00:42<00:00]')
@@ -103,11 +108,16 @@ assert new File(runDir,'recording with spaces_suggestions_with_evidence.csv').re
 println 'PASS: actual suggest closure imports/grades ROIs, writes CSV, handles paths with spaces'
 assert proposals.count { it.edge } == 1
 assert new File(runDir,'cellpose_options_used.txt').text.contains('--diameter 60')
+assert success.snapshot().context.contains('New detection')
+assert success.snapshot().context.contains('100 x 100 pixels')
+assert success.snapshot().context.contains('diameter 60')
 assert !new File(runDir,'cellpose_run_incomplete.txt').exists()
 new File(runDir,'fail-all').text = ''
 binding.setVariable('forceFresh',false)
 def reused = Task.newInstance(progress: { p,s,d -> })
 assert suggest(reused).contains('were used again') && reused.succeeded
+assert reused.snapshot().context.contains('Saved outlines reused (no new Cellpose run)')
+assert !reused.snapshot().context.contains('Attempt 1')
 new File(runDir,'cellpose_run_incomplete.txt').text = 'incomplete'
 def unfinished = Task.newInstance(progress: { p,s,d -> })
 assert suggest(unfinished).contains('exit code 7') && !unfinished.succeeded
@@ -120,6 +130,7 @@ println 'PASS: preserved edge flags and CPU settings, matched-image cache, inter
 new File(runDir,'fail-first').text = ''
 def retry = Task.newInstance(progress: { p,s,d -> })
 assert suggest(retry).startsWith('3 suggestions;') && retry.succeeded && retry.logFile.name == 'cellpose_output_second_try.txt'
+assert retry.snapshot().context.contains('Attempt 2 of 2; default model, full-size detection')
 new File(runDir,'fail-all').text = ''
 def failure = Task.newInstance(progress: { p,s,d -> })
 assert suggest(failure).contains('exit code 7') && !failure.succeeded && proposals.size() == 3
@@ -134,12 +145,22 @@ SwingUtilities.invokeAndWait {
     panel.latest.set([percent:40,stage:'Finding cells',detail:'CPU inference',at:System.nanoTime()-61000000000L])
     panel.render()
     assert panel.bar.value == 40 && panel.text.text.contains('10 minutes') && panel.text.text.contains('No new progress')
+    assert panel.text.text.contains('CPU inference') // Quiet feedback must not replace the explanation.
+    assert panel.detailsText.text.contains('Percentages mark completed stages')
     panel.finish(false,'Failed <example>'); assert panel.bar.value < 100 && !panel.clock.running && panel.text.text.contains('&lt;example&gt;')
     def next = panel.begin(); assert panel.bar.value == 0
+    assert !panel.detailsText.text.contains('Failed <example>')
     next.report(98,'Saving',''); panel.finish(true,'3 suggestions')
     assert panel.bar.value == 100 && !panel.clock.running && !panel.cancelButton.enabled
     def again = panel.begin(); panel.close(); assert again.cancelled && !panel.clock.running
 }
 println 'PASS: panel warnings, safe error text, 100% only on success, retry reset and close cleanup'
+def bounded = Task.newInstance(progress: { p,s,d -> })
+bounded.report(40, 'Finding cells', 'Persistent explanation')
+(1..150).each { bounded.logLine('diagnostic ' + it) }
+assert bounded.snapshot().history.readLines().size() == 120
+assert bounded.detail == 'Persistent explanation' && bounded.percent == 40
+assert !bounded.snapshot().history.contains('diagnostic 1\n')
+println 'PASS: persistent explanations, stage timers, detection context, bounded event history'
 System.clearProperty('calcium.steps.pretend_no_gpu')
 println 'All progress checks passed.'

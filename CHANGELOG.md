@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.11.19.4
+
+- Keep a plain-language explanation visible during detection, with total and current-stage time, image dimensions, CPU/GPU, attempt number, and detection settings.
+- Show whether saved outlines are being reused or a new detection is running. Add a scrollable Progress details window with recent events and Cellpose messages.
+- Keep the main window within the screen height and make its contents scrollable so all controls stay reachable.
+- Preserve stage explanations during quiet periods and report whether the Cellpose process is still running. Progress remains tied to reported stages, with no invented time estimate.
+- Check for new releases in the background when the plugin window opens, with a non-blocking Download / Later prompt and an option to disable startup checks. Manual checks remain available; installation is still manual.
+- Publish a tested release automatically when a higher version is merged to main. Existing releases are never overwritten.
+- Install this version once to receive startup prompts for future releases; earlier versions can use Check for updates to obtain it.
+
 ## 2026.11.19.3
 
 - Use the latest user-supplied plugin as the base, preserving edge-cell exclusion, matched-image outline reuse, faster CPU detection, and automatic Torch backend selection during setup.

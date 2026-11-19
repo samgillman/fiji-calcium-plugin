@@ -1,6 +1,6 @@
 # Publish an update
 
-The public download is a GitHub Release, not whatever happens to be on `main`. Everyone can use the same latest-download link. Users who subscribe to Releases receive GitHub notifications; existing installations can also use **Check for updates**.
+The public download is a GitHub Release, not whatever happens to be on `main`. Everyone can use the same latest-download link. Users who subscribe to Releases receive GitHub notifications; installations from version 2026.11.19.4 can show a startup update prompt, and the **Check for updates** button remains available.
 
 ## Normal publishing workflow
 
@@ -8,18 +8,21 @@ The public download is a GitHub Release, not whatever happens to be on `main`. E
 2. Choose a higher calendar version in the form `YYYY.MM.DD.N`, for example `2026.11.20.1`. Update `VERSION`, `CalciumRelease.VERSION` in the plugin, the plugin's displayed/logged version strings, and `CHANGELOG.md`. Version validation catches inconsistent plugin version strings.
 3. Add a changelog section headed `## VERSION` for the new version. Review the user guide if behaviour changed.
 4. Wait for **Checks** to pass, review the changes, and merge to `main`.
-5. Go to **Actions → Publish release → Run workflow**, choose `main`, and run it. This is the publishing action.
-6. Wait for the workflow to succeed. It runs regression checks on Linux and Windows, builds the assets, creates a draft, uploads the complete package, and then publishes it as the latest release.
+5. The merge automatically starts **Publish release**. Wait for the workflow to succeed. It runs regression checks on Linux and Windows, builds the assets, creates a draft, uploads the complete package, and then publishes it as the latest release.
 
-The workflow uses the repository's `GITHUB_TOKEN` with `contents: write`; no personal token or additional secret is needed. Only repository users with write access can run it. Running a release twice with the same version fails instead of overwriting an existing release.
+The workflow uses the repository's `GITHUB_TOKEN` with `contents: write`; no personal token or additional secret is needed. A merge with an already-published VERSION passes checks and skips publishing, so documentation-only merges do not make releases. Published releases are never overwritten. Existing drafts or prereleases block publication for manual review; API errors also stop publication. A new version must be higher than the latest release.
+
+Once publishing succeeds, updated installations offer Download / Later the next time the plugin window opens (unless startup checks are disabled). This is not an instant push to already-open windows. Download opens the release page; installing the ZIP remains a user action. Older installations need the updater-enabled version installed once.
 
 The ZIP keeps the fixed name `Calcium_Imaging_Fiji_Plugin.zip`, so this URL remains valid:
 
 https://github.com/samgillman/fiji-calcium-plugin/releases/latest/download/Calcium_Imaging_Fiji_Plugin.zip
 
-## Command-line alternative
+## Recovery and explicit triggers
 
-After committing and pushing the new version to `main`, push a matching tag:
+The normal merge workflow needs no tag or manual dispatch. If a run fails before publication, fix the cause and rerun it, or use **Actions → Publish release → Run workflow** on `main`. Review an existing draft before retrying; never overwrite a published release.
+
+A matching tag can also trigger the workflow:
 
 ```sh
 git tag v2026.11.20.1
@@ -36,6 +39,8 @@ Requires Java 17 or newer and Python 3.10 or newer. Tests use Groovy 4.0.28, gro
 python3 tools/run_tests.py
 python3 tools/build_release.py
 ```
+
+With a desktop display available, `python3 tools/run_tests.py --gui` also exercises the actual Download/Later prompt, offline startup, and detection details window using simulated release metadata.
 
 The package, standalone plugin file, version file, checksum file, and release notes are written to ignored `dist/`. Tests use a mock Cellpose process and real ROI ZIPs; do a real Fiji/Cellpose smoke test for changes to detection or image measurements.
 

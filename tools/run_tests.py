@@ -38,6 +38,8 @@ def main():
     for test in ["tests/test_progress.groovy", "tests/test_updates.groovy", "tests/test_latest_base.groovy"]:
         subprocess.run([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", test], cwd=ROOT, env=env, check=True)
     subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"], cwd=ROOT, env=env, check=True)
+    if "--gui" in sys.argv:
+        subprocess.run([java, "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", "tests/test_gui.groovy"], cwd=ROOT, env=env, check=True, timeout=60)
 
 
 if __name__ == "__main__":
