@@ -35,13 +35,16 @@ def main():
     if not java:
         raise RuntimeError("Java 17 or newer is required")
     env = dict(os.environ, CALCIUM_TEST_PYTHON=sys.executable)
+    if "--analysis-only" in sys.argv:
+        subprocess.run([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", "tests/test_analysis_runtime.groovy"], cwd=ROOT, env=env, check=True, timeout=1200)
+        return
     if "--gui-only" not in sys.argv:
-        for test in ["tests/test_progress.groovy", "tests/test_detection_start.groovy", "tests/test_updates.groovy", "tests/test_install.groovy", "tests/test_latest_base.groovy"]:
+        for test in ["tests/test_progress.groovy", "tests/test_detection_start.groovy", "tests/test_updates.groovy", "tests/test_install.groovy", "tests/test_latest_base.groovy", "tests/test_analysis_bridge.groovy"]:
             subprocess.run([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", test], cwd=ROOT, env=env, check=True)
         subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"], cwd=ROOT, env=env, check=True)
         subprocess.run([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", "tests/test_bootstrap.groovy"], cwd=ROOT, env=env, check=True)
     if "--gui" in sys.argv or "--gui-only" in sys.argv:
-        for test in ["tests/test_gui.groovy", "tests/test_layout.groovy", "tests/test_cell_editing.groovy"]:
+        for test in ["tests/test_gui.groovy", "tests/test_layout.groovy", "tests/test_cell_editing.groovy", "tests/test_analysis_gui.groovy"]:
             subprocess.run([java, "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", test], cwd=ROOT, env=env, check=True, timeout=60)
 
 

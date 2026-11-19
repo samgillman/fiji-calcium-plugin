@@ -9,6 +9,8 @@ PLUGIN = Path("scripts/Plugins/Calcium Imaging/Calcium_Cells_Step_By_Step.groovy
 
 
 def validate():
+    from embed_analysis import sync
+    sync(check=True)
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     if not re.fullmatch(r"\d{4}\.\d{1,2}\.\d{1,2}\.\d{1,4}", version):
         raise ValueError("VERSION must have the form YYYY.MM.DD.N")
@@ -34,7 +36,7 @@ def build():
     installer = dist / "Install_Calcium_Plugin.groovy"
     installer.write_text("// Fiji Calcium Plugin installer: open in Fiji and press Run.\n" + shared +
                          (ROOT / "tools/installer_entry.groovy").read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
-    contents = [PLUGIN, Path("README.md"), Path("VERSION"), Path("CHANGELOG.md"), Path("docs/USER_GUIDE.txt")]
+    contents = [PLUGIN, Path("README.md"), Path("VERSION"), Path("CHANGELOG.md"), Path("docs/USER_GUIDE.txt"), Path("docs/SIMPLECA.md")]
     archive = dist / "Calcium_Imaging_Fiji_Plugin.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zipped:
         for relative in contents:

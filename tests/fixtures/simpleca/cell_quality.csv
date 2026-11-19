@@ -1,0 +1,7 @@
+"Cell","F0","Baseline_SD_raw","Status","Reason"
+"Cell001",10,0,"Included",""
+"Cell002",10,0,"Included",""
+"Cell003",0,0,"Excluded","Invalid raw fluorescence baseline (F0)"
+"Cell004",,,"Excluded","Invalid raw fluorescence baseline (F0)"
+"Cell005",10,0,"Included",""
+"Cell006",10,0,"Included",""
