@@ -32,20 +32,24 @@ assert task.percent == 84
 assert events.collect{it[0]} == events.collect{it[0]}.sort(false)
 println 'PASS: real log stages, CPU, model download, outer 100% never treated as completion'
 
-def work = new File('build/test-output'); work.mkdirs()
+def work = new File('build/test-output').absoluteFile; work.mkdirs()
 def python = System.getenv('CALCIUM_TEST_PYTHON') ?: 'python3'
 def output = new File(work, 'stream.log')
 events.clear()
 def streaming = Task.newInstance(progress: { p,s,d -> events << [p,s,d] })
-int exit = streaming.run([python, '-u', '-c', 'import sys; print("Downloading: model"); sys.stderr.write("50%|#####| 5M/10M\\r100%|##########| 10M/10M\\r"); print("network run in 1s"); sys.exit(7)'], work, output)
-assert exit == 7 && !streaming.succeeded && events.any{it[0] == 20} && events.any{it[0] == 25}
+def streamFixture = new File(work, 'stream-fixture.py')
+streamFixture.text = 'import sys; print("Downloading: model"); sys.stderr.write("50%|#####| 5M/10M\\r100%|##########| 10M/10M\\r"); print("network run in 1s"); sys.exit(7)'
+int exit = streaming.run([python, '-u', streamFixture.getPath()], work, output)
+assert exit == 7 && !streaming.succeeded && events.any{it[0] == 20} && events.any{it[0] == 25} : output.text
 assert output.text.contains('network run') && streaming.process == null
 println 'PASS: subprocess stdout/stderr, carriage returns, exit failure and log file'
 
 def cancelling = Task.newInstance(progress: { p,s,d -> })
 def caught = new java.util.concurrent.atomic.AtomicReference()
+def cancelFixture = new File(work, 'cancel-fixture.py')
+cancelFixture.text = 'import time; print("started"); time.sleep(30)'
 def worker = Thread.start {
-    try { cancelling.run([python, '-u', '-c', 'import time; print("started"); time.sleep(30)'], work, new File(work,'cancel.log')) }
+    try { cancelling.run([python, '-u', cancelFixture.getPath()], work, new File(work,'cancel.log')) }
     catch (Throwable t) { caught.set(t) }
 }
 long deadline = System.nanoTime() + 5000000000L
