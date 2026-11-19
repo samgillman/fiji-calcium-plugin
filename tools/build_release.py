@@ -9,16 +9,16 @@ PLUGIN = Path("scripts/Plugins/Calcium Imaging/Calcium_Cells_Step_By_Step.groovy
 
 
 def validate():
-    version = (ROOT / "VERSION").read_text().strip()
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     if not re.fullmatch(r"\d{4}\.\d{1,2}\.\d{1,2}\.\d{1,4}", version):
         raise ValueError("VERSION must have the form YYYY.MM.DD.N")
-    source = (ROOT / PLUGIN).read_text()
+    source = (ROOT / PLUGIN).read_text(encoding="utf-8")
     if f'static final String VERSION = "{version}"' not in source:
         raise ValueError("CalciumRelease.VERSION does not match VERSION")
     displayed = re.findall(r"version (\d[\d.-]+)", source)
     if not displayed or any(value != version for value in displayed):
         raise ValueError("A plugin version header, title, or log does not match VERSION")
-    changelog = (ROOT / "CHANGELOG.md").read_text()
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     section = re.search(r"^## " + re.escape(version) + r"\s*\n(.*?)(?=^## |\Z)", changelog, re.M | re.S)
     if not section or not section.group(1).strip():
         raise ValueError("Add release notes for this VERSION to CHANGELOG.md")
@@ -41,10 +41,10 @@ def build():
     plugin_copy = dist / PLUGIN.name
     plugin_copy.write_bytes((ROOT / PLUGIN).read_bytes())
     version_copy = dist / "VERSION.txt"
-    version_copy.write_text(version + "\n")
+    version_copy.write_text(version + "\n", encoding="utf-8", newline="\n")
     checksums = "".join(hashlib.sha256(p.read_bytes()).hexdigest() + "  " + p.name + "\n" for p in [archive, plugin_copy, version_copy])
-    (dist / "SHA256SUMS.txt").write_text(checksums)
-    (dist / "release-notes.md").write_text(notes + "\n\nDownload **Calcium_Imaging_Fiji_Plugin.zip**, extract it, and merge its `scripts` folder into Fiji's folder. Replace the existing plugin when updating, then restart Fiji. See the README for details.\n\nChecks use simulated Cellpose runs; this is not a claim of full Windows imaging validation.\n")
+    (dist / "SHA256SUMS.txt").write_text(checksums, encoding="utf-8", newline="\n")
+    (dist / "release-notes.md").write_text(notes + "\n\nDownload **Calcium_Imaging_Fiji_Plugin.zip**, extract it, and merge its `scripts` folder into Fiji's folder. Replace the existing plugin when updating, then restart Fiji. See the README for details.\n\nChecks use simulated Cellpose runs; this is not a claim of full Windows imaging validation.\n", encoding="utf-8", newline="\n")
     print(f"Built version {version}: {archive}")
 
 

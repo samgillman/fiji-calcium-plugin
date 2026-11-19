@@ -36,7 +36,7 @@ def main():
         raise RuntimeError("Java 17 or newer is required")
     env = dict(os.environ, CALCIUM_TEST_PYTHON=sys.executable)
     for test in ["tests/test_progress.groovy", "tests/test_updates.groovy"]:
-        subprocess.run([java, "-Djava.awt.headless=true", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", test], cwd=ROOT, env=env, check=True)
+        subprocess.run([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", test], cwd=ROOT, env=env, check=True)
     subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"], cwd=ROOT, env=env, check=True)
 
 

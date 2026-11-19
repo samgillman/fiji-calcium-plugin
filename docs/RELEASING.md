@@ -30,7 +30,7 @@ The same publishing workflow runs for `v*` tags and checks that the tag matches 
 
 ## Local checks and packaging
 
-Requires Java 17 or newer and Python 3.9 or newer. Tests use Groovy 4.0.28, groovy-json 4.0.28, and ImageJ 1.54p. The test runner downloads these version-pinned jars from Maven Central into ignored `build/deps`, or uses matching jars from a `FIJI_JARS` directory you supply.
+Requires Java 17 or newer and Python 3.10 or newer. Tests use Groovy 4.0.28, groovy-json 4.0.28, and ImageJ 1.54p. The test runner downloads these version-pinned jars from Maven Central into ignored `build/deps`, or uses matching jars from a `FIJI_JARS` directory you supply.
 
 ```sh
 python3 tools/run_tests.py
