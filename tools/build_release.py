@@ -29,6 +29,11 @@ def build():
     version, notes = validate()
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
+    source = (ROOT / PLUGIN).read_text(encoding="utf-8")
+    shared = source[source.index("class CalciumRelease {"):source.index("/** Background requests")]
+    installer = dist / "Install_Calcium_Plugin.groovy"
+    installer.write_text("// Fiji Calcium Plugin installer: open in Fiji and press Run.\n" + shared +
+                         (ROOT / "tools/installer_entry.groovy").read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
     contents = [PLUGIN, Path("README.md"), Path("VERSION"), Path("CHANGELOG.md"), Path("docs/USER_GUIDE.txt")]
     archive = dist / "Calcium_Imaging_Fiji_Plugin.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zipped:
@@ -42,9 +47,9 @@ def build():
     plugin_copy.write_bytes((ROOT / PLUGIN).read_bytes())
     version_copy = dist / "VERSION.txt"
     version_copy.write_text(version + "\n", encoding="utf-8", newline="\n")
-    checksums = "".join(hashlib.sha256(p.read_bytes()).hexdigest() + "  " + p.name + "\n" for p in [archive, plugin_copy, version_copy])
+    checksums = "".join(hashlib.sha256(p.read_bytes()).hexdigest() + "  " + p.name + "\n" for p in [archive, plugin_copy, version_copy, installer])
     (dist / "SHA256SUMS.txt").write_text(checksums, encoding="utf-8", newline="\n")
-    (dist / "release-notes.md").write_text(notes + "\n\nDownload **Calcium_Imaging_Fiji_Plugin.zip**, extract it, and merge its `scripts` folder into Fiji's folder. Replace the existing plugin when updating, then restart Fiji. See the README for details.\n\nChecks use simulated Cellpose runs; this is not a claim of full Windows imaging validation.\n", encoding="utf-8", newline="\n")
+    (dist / "release-notes.md").write_text(notes + "\n\n**Install without copying files:** download **Install_Calcium_Plugin.groovy**, open it in Fiji's Script Editor, and press **Run**. It downloads, verifies, backs up and installs the latest plugin. Save your work and restart Fiji. Future updates use **Install update** inside the plugin. The ZIP remains available for manual installation.\n\nChecks use simulated Cellpose runs; this is not a claim of full Windows imaging validation.\n", encoding="utf-8", newline="\n")
     print(f"Built version {version}: {archive}")
 
 

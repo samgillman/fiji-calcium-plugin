@@ -6,12 +6,13 @@ Choose cells in a calcium-imaging recording, review automatic Cellpose outlines,
 
 ## Install in Fiji
 
-1. Download and extract **Calcium_Imaging_Fiji_Plugin.zip** from the link above. Use this release asset; GitHub's automatically generated “Source code” archive is for development.
-2. In Fiji, choose **File → Show Folder → ImageJ**.
-3. Copy the ZIP's `scripts` folder into that Fiji folder, merging folders when asked. The plugin belongs at `scripts/Plugins/Calcium Imaging/Calcium_Cells_Step_By_Step.groovy`.
-4. Restart Fiji. Open **Plugins → Calcium Imaging → Calcium Cells Step By Step**.
+1. **[Download the Fiji installer](https://github.com/samgillman/fiji-calcium-plugin/releases/latest/download/Install_Calcium_Plugin.groovy)**.
+2. Open that `.groovy` file in Fiji's Script Editor (or drag it onto Fiji), then press **Run**. It finds this Fiji installation and downloads, verifies and installs the latest plugin. No manual copying is needed.
+3. Save your work and restart Fiji. Open **Plugins → Calcium Imaging → Calcium Cells Step By Step**.
 
-If you installed an earlier ZIP, replace the existing `.groovy` file in that same location. Keep only one copy of the plugin in Fiji's scripts folders.
+The same installer upgrades versions that do not yet have an Install update button. After this one-time setup, use **Install update** inside the plugin for future releases. Installation requires a Fiji folder your account can write to.
+
+Manual installation remains available: extract the plugin ZIP, merge its `scripts` folder into the Fiji folder shown by **File → Show Folder → ImageJ**, and restart Fiji. The plugin belongs at `scripts/Plugins/Calcium Imaging/Calcium_Cells_Step_By_Step.groovy`. Keep only one copy in Fiji's scripts folders.
 
 Fiji includes Bio-Formats for microscope recordings. Cellpose is optional: you can draw cells by hand, or use the plugin's **Set up Cellpose** button for automatic outlines.
 
@@ -29,12 +30,13 @@ The progress percentage represents detection stages, not remaining time. Cellpos
 
 ## Get updates
 
-- **Inside the plugin:** version 2026.11.19.4 and newer check for a release in the background when the plugin window opens. If a newer release is ready, choose **Download** to open its release page or **Later** to keep working. Turn off **Check for updates when this plugin opens** if preferred; **Check for updates** still works manually. Download the ZIP, replace the plugin file, and restart Fiji after saving your work.
-- **One-time upgrade:** earlier versions need this version installed once before they can show startup prompts for future updates.
-- **Release notifications:** sign in to GitHub, click **Watch → Custom → Releases → Apply** on this repository. GitHub will notify you about new releases according to your notification settings.
-- **Permanent download link:** the “Download the latest plugin ZIP” link above always follows the latest published release.
+- **Inside the plugin:** startup checks and **Check for updates** offer **Install update** or **Later** when a newer release is available. Install update downloads the plugin, verifies its SHA-256 checksum and version, backs up the previous file, and replaces it safely. Save your work and restart Fiji to load the new version; your running session remains open.
+- **Earlier versions:** versions before 2026.11.19.6 need the installer above run once to gain one-click installation. The older update button still opens a release page; choose `Install_Calcium_Plugin.groovy` there instead of copying files manually.
+- **Backup and recovery:** previous scripts are saved with `.groovy.bak` filenames in `calcium-plugin-backups` inside Fiji's folder. To roll back, close Fiji and copy the chosen backup over the installed `.groovy` script. Existing recordings, Cellpose environments, settings and results are preserved.
+- **Preferences:** turn off **Check for updates when this plugin opens** if preferred. Manual checks remain available.
+- **GitHub notifications:** sign in and choose **Watch → Custom → Releases → Apply** on this repository.
 
-Updates are not silently installed. The update check makes a request to GitHub and sends no recordings, images, traces, or analysis results. GitHub downloaders are not automatically subscribed to notifications.
+Installation happens only after you click Install update or run the standalone installer. Updates are checked and downloaded from GitHub; no recordings, images, traces or results are sent. Failed downloads or verification leave the installed plugin unchanged. If Fiji cannot write to its folder, installation reports the problem and can be retried after correcting folder permissions.
 
 ## Scientific scope and validation
 

@@ -52,6 +52,7 @@ jobs:
           gh release create "$tag" \
             dist/Calcium_Imaging_Fiji_Plugin.zip \
             dist/Calcium_Cells_Step_By_Step.groovy \
+            dist/Install_Calcium_Plugin.groovy \
             dist/VERSION.txt dist/SHA256SUMS.txt \
             --target "$GITHUB_SHA" --title "Fiji Calcium Plugin $version" \
             --notes-file dist/release-notes.md --draft

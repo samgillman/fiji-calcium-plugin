@@ -12,7 +12,7 @@ The public download is a GitHub Release, not whatever happens to be on `main`. E
 
 The workflow uses the repository's `GITHUB_TOKEN` with `contents: write`; no personal token or additional secret is needed. A merge with an already-published VERSION passes checks and skips publishing, so documentation-only merges do not make releases. Published releases are never overwritten. Existing drafts or prereleases block publication for manual review; API errors also stop publication. A new version must be higher than the latest release.
 
-Once publishing succeeds, updated installations offer Download / Later the next time the plugin window opens (unless startup checks are disabled). This is not an instant push to already-open windows. Download opens the release page; installing the ZIP remains a user action. Older installations need the updater-enabled version installed once.
+Once publishing succeeds, updated installations offer Install update / Later the next time the plugin window opens (unless startup checks are disabled). This is not an instant push to already-open windows. Install update verifies, backs up and replaces the plugin file; restart Fiji after saving work to activate it. Versions before 2026.11.19.6 need the standalone installer run once. The release includes Install_Calcium_Plugin.groovy, generated from the same release/installation code as the plugin, so the bootstrap and in-plugin installer cannot drift.
 
 The ZIP keeps the fixed name `Calcium_Imaging_Fiji_Plugin.zip`, so this URL remains valid:
 
@@ -40,9 +40,9 @@ python3 tools/run_tests.py
 python3 tools/build_release.py
 ```
 
-With a desktop display available, `python3 tools/run_tests.py --gui` also exercises the actual Download/Later prompt, offline startup, detection details window, and resizing/scrolling with the real plugin controls. Release metadata is simulated. CI runs these GUI checks on Windows and on Linux with a virtual display.
+With a desktop display available, `python3 tools/run_tests.py --gui` also exercises the actual Install update/Later prompt, offline startup, detection details window, and resizing/scrolling with the real plugin controls. Release metadata is simulated. CI runs these GUI checks on Windows and on Linux with a virtual display.
 
-The package, standalone plugin file, version file, checksum file, and release notes are written to ignored `dist/`. Tests use a mock Cellpose process and real ROI ZIPs; do a real Fiji/Cellpose smoke test for changes to detection or image measurements.
+The package, standalone plugin file, standalone installer, version file, checksum file, and release notes are written to ignored `dist/`. Tests use a mock Cellpose process and real ROI ZIPs; do a real Fiji/Cellpose smoke test for changes to detection or image measurements.
 
 ## Correct a bad release
 

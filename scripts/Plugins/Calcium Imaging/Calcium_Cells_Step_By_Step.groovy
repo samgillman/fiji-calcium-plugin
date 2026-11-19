@@ -1,4 +1,4 @@
-// Calcium imaging: cells step by step                                                    version 2026.11.19.5
+// Calcium imaging: cells step by step                                                    version 2026.11.19.6
 // One plugin for the whole job on one recording:
 //   1. choose the recording (already open in Fiji, or a file) and a folder for the results
 //   2. the plugin makes the cells visible: all-frames picture, response (found automatically, if there is one), and a
@@ -86,7 +86,7 @@ class CalciumSteps {
     /** Steps 1-2: pictures. The movie is only read. */
     void prepare(ImagePlus imp, boolean lookForResponse) {
         movie = imp; n = imp.getStackSize(); w = imp.getWidth(); h = imp.getHeight()
-        say("Calcium imaging plugin, version 2026.11.19.5")
+        say("Calcium imaging plugin, version 2026.11.19.6")
         say("Recording: " + imp.getTitle() + " (" + n + " frames, " + w + " x " + h + ", " + imp.getBitDepth() + "-bit)")
         ImagePlus sum = ZProjector.run(imp, "sum")                                   // Image > Stacks > Z Project, Sum Slices
         FloatProcessor avg = (FloatProcessor) sum.getProcessor().convertToFloat()
@@ -466,12 +466,14 @@ class CalciumSteps {
     }
 }
 
-/** Read-only update check. It never sends recordings or replaces a running plugin. */
+/** Release lookup sends no recording data. Installation requires an explicit button click. */
 class CalciumRelease {
-    static final String VERSION = "2026.11.19.5"
+    static final String VERSION = "2026.11.19.6"
     static final String REPOSITORY = "https://github.com/samgillman/fiji-calcium-plugin"
     static final String API = "https://api.github.com/repos/samgillman/fiji-calcium-plugin/releases/latest"
     static final String ASSET = "Calcium_Imaging_Fiji_Plugin.zip"
+    static final String SCRIPT = "Calcium_Cells_Step_By_Step.groovy"
+    static final String CHECKSUMS = "SHA256SUMS.txt"
 
     static List<Integer> versionParts(String version) {
         String clean = version.replaceFirst(/^v/, "")
@@ -492,7 +494,12 @@ class CalciumRelease {
         def asset = release.assets?.find { it.name == ASSET && it.state == "uploaded" && it.size > 0 }
         if (asset == null || asset.browser_download_url != REPOSITORY + "/releases/download/" + tag + "/" + ASSET)
             throw new IOException("This release does not have a ready plugin download yet")
-        [version: tag.replaceFirst(/^v/, ""), newer: newer(tag, VERSION), page: page]
+        def ready = { String name -> release.assets?.find { it.name == name && it.state == "uploaded" && it.size > 0 &&
+            it.browser_download_url == REPOSITORY + "/releases/download/" + tag + "/" + name } }
+        def script = ready(SCRIPT), sums = ready(CHECKSUMS)
+        [version: tag.replaceFirst(/^v/, ""), newer: newer(tag, VERSION), page: page,
+         installable: script != null && sums != null, script: script?.browser_download_url,
+         checksums: sums?.browser_download_url, size: script?.size]
     }
     static Map latest() {
         def connection = (java.net.HttpURLConnection) new URL(API).openConnection()
@@ -516,6 +523,125 @@ class CalciumRelease {
             if (!(release instanceof Map)) throw new IOException("Unexpected update response")
             return describe(release)
         } finally { connection.disconnect() }
+    }
+}
+
+/** Verify the complete download before touching the installed file; commit with one atomic rename. */
+class CalciumInstaller {
+    File applicationDirectory
+    Closure download = { String url, int limit, Closure progress -> fetch(url, limit, progress) }
+    Closure replaceFile = { java.nio.file.Path staged, java.nio.file.Path destination ->
+        java.nio.file.Files.move(staged, destination, java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+    }
+    static final int MAX_SCRIPT = 2 * 1024 * 1024
+    static String escape(String value) { value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") }
+    static String digest(byte[] bytes) {
+        java.security.MessageDigest.getInstance("SHA-256").digest(bytes).collect { String.format("%02x", it & 255) }.join("")
+    }
+    static String scriptVersion(byte[] bytes) {
+        def match = new String(bytes, "UTF-8") =~ /static final String VERSION = "(\d{4}\.\d{1,2}\.\d{1,2}\.\d{1,4})"/
+        match.find() ? match.group(1) : null
+    }
+    static byte[] fetch(String address, int limit, Closure progress) {
+        URL url = new URL(address)
+        // GitHub release downloads redirect to GitHub's asset host. Every hop must stay on HTTPS.
+        for (int redirects = 0; redirects < 6; redirects++) {
+            if (url.protocol != "https") throw new IOException("The download must use HTTPS")
+            def connection = (java.net.HttpURLConnection) url.openConnection()
+            connection.setInstanceFollowRedirects(false)
+            connection.setConnectTimeout(10000); connection.setReadTimeout(20000)
+            connection.setRequestProperty("User-Agent", "Fiji-Calcium-Plugin/" + CalciumRelease.VERSION)
+            try {
+                int code = connection.responseCode
+                if (code in [301,302,303,307,308]) {
+                    String location = connection.getHeaderField("Location")
+                    if (!location) throw new IOException("The download redirect is missing its address")
+                    url = new URL(url, location); continue
+                }
+                if (code != 200) throw new IOException("Download returned HTTP " + code)
+                long total = connection.getContentLengthLong()
+                if (total > limit) throw new IOException("The download exceeds the expected size")
+                return connection.inputStream.withCloseable { input ->
+                    def output = new ByteArrayOutputStream(); byte[] buffer = new byte[8192]; int count
+                    while ((count = input.read(buffer)) != -1) {
+                        if (output.size() + count > limit) throw new IOException("The download exceeds the expected size")
+                        output.write(buffer, 0, count); progress.call(output.size(), total)
+                    }
+                    if (total >= 0 && output.size() != total) throw new IOException("The download was incomplete")
+                    output.toByteArray()
+                }
+            } finally { connection.disconnect() }
+        }
+        throw new IOException("Too many download redirects")
+    }
+    Map install(Map release, Closure progress = { int p, String message -> }) {
+        String version = release.version ?: ""
+        CalciumRelease.versionParts(version)
+        String base = CalciumRelease.REPOSITORY + "/releases/download/v" + version + "/"
+        if (!release.installable || release.script != base + CalciumRelease.SCRIPT || release.checksums != base + CalciumRelease.CHECKSUMS)
+            throw new IOException("This release does not have verified installation files")
+        if (applicationDirectory == null || !applicationDirectory.isDirectory()) throw new IOException("Could not locate this Fiji installation")
+        File app = applicationDirectory.canonicalFile
+        File target = new File(app, "scripts/Plugins/Calcium Imaging/" + CalciumRelease.SCRIPT)
+        if (!target.canonicalPath.startsWith(app.path + File.separator) || java.nio.file.Files.isSymbolicLink(target.toPath()))
+            throw new IOException("The plugin installation path points outside this Fiji folder or uses a symbolic link")
+        progress.call(5, "Downloading the release checksum...")
+        byte[] manifest = download.call(release.checksums, 65536, { a,b -> })
+        def checks = new String(manifest, "UTF-8").readLines().findAll { it ==~ /[a-fA-F0-9]{64}  Calcium_Cells_Step_By_Step\.groovy/ }
+        if (checks.size() != 1) throw new IOException("The release checksum is missing or ambiguous")
+        String expected = checks[0].substring(0,64).toLowerCase(Locale.ROOT)
+        progress.call(15, "Downloading plugin " + version + "...")
+        byte[] bytes = download.call(release.script, MAX_SCRIPT, { count,total ->
+            long size = total > 0 ? total : (release.size ?: 0) as long
+            if (size > 0) progress.call(15 + (int) Math.min(65L, (long) (65L * count / size)), "Downloading plugin " + version + "...")
+        })
+        progress.call(85, "Verifying the download...")
+        if (digest(bytes) != expected) throw new IOException("Checksum verification failed; the installed plugin was not changed")
+        if (scriptVersion(bytes) != version || !new String(bytes,"UTF-8").contains('static final String REPOSITORY = "' + CalciumRelease.REPOSITORY + '"'))
+            throw new IOException("The downloaded plugin does not match the selected release")
+        def lockPath = new File(app, ".calcium-plugin-update.lock").toPath()
+        java.nio.channels.FileChannel channel = null
+        java.nio.channels.FileLock lock = null
+        java.nio.file.Path staged = null
+        try {
+            channel = java.nio.channels.FileChannel.open(lockPath, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.WRITE)
+            try { lock = channel.tryLock() } catch (java.nio.channels.OverlappingFileLockException ignored) { }
+            if (lock == null) throw new IOException("Another plugin installation is in progress; wait for it to finish")
+            byte[] previous = target.isFile() ? java.nio.file.Files.readAllBytes(target.toPath()) : null
+            String diskVersion = previous == null ? null : scriptVersion(previous)
+            if (diskVersion && CalciumRelease.newer(diskVersion, version)) throw new IOException("A newer plugin is already installed; check for updates again")
+            if (previous != null && digest(previous) == expected) return [version:version, target:target, backup:null, already:true]
+            java.nio.file.Files.createDirectories(target.parentFile.toPath())
+            staged = java.nio.file.Files.createTempFile(target.parentFile.toPath(), ".calcium-update-", ".tmp")
+            java.nio.channels.FileChannel.open(staged, java.nio.file.StandardOpenOption.WRITE).withCloseable { output ->
+                def buffer = java.nio.ByteBuffer.wrap(bytes)
+                while (buffer.hasRemaining()) output.write(buffer)
+                output.force(true)
+            }
+            File backup = null
+            if (previous != null) {
+                progress.call(92, "Backing up the installed plugin...")
+                File backups = new File(app, "calcium-plugin-backups")
+                java.nio.file.Files.createDirectories(backups.toPath())
+                backup = new File(backups, "Calcium-" + (diskVersion ?: "previous") + "-" + UUID.randomUUID() + ".groovy.bak")
+                java.nio.file.Files.write(backup.toPath(), previous, java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE)
+            }
+            // Do not overwrite an external edit made while this update was being staged.
+            if (previous == null ? target.exists() : (!target.isFile() || digest(java.nio.file.Files.readAllBytes(target.toPath())) != digest(previous)))
+                throw new IOException("The installed file changed during the update; please try again")
+            progress.call(98, "Installing the verified plugin...")
+            replaceFile.call(staged, target.toPath())
+            progress.call(100, "Installed " + version + ". Save your work and restart Fiji.")
+            return [version:version, target:target, backup:backup, already:false]
+        } catch (java.nio.file.AccessDeniedException denied) {
+            throw new IOException("Fiji cannot write to its installation folder. Use a Fiji folder your account can modify, then try again.", denied)
+        } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+            throw new IOException("This folder does not support safe replacement. The existing plugin was kept.", unsupported)
+        } finally {
+            if (staged != null) java.nio.file.Files.deleteIfExists(staged)
+            if (lock != null) lock.release()
+            if (channel != null) channel.close()
+        }
     }
 }
 
@@ -768,6 +894,46 @@ class CalciumOutlineProgress extends javax.swing.JPanel {
     void close() { clock.stop(); if (running && task != null) task.cancel(); detailsWindow?.dispose() }
 }
 
+/** A display failure must not prevent detection or leave a running clock without a worker. */
+class CalciumDetectionRunner {
+    Closure launch = { Closure job -> Thread.start(job) }
+    void safelyRefresh(Closure refreshWindow) {
+        try { refreshWindow.call() } catch (Throwable problem) { IJ.log("Calcium window refresh failed: " + problem) }
+    }
+    void complete(javax.swing.JButton button, CalciumOutlineProgress panel, String original, boolean ok, String message, Closure after, Closure refreshWindow) {
+        try { panel.finish(ok, message) }
+        catch (Throwable problem) { IJ.log("Calcium progress display failed: " + problem) }
+        finally {
+            panel.clock.stop(); panel.running = false
+            button.setEnabled(true); button.setText(original)
+        }
+        try { after.call(message) } catch (Throwable problem) { IJ.log("Calcium result display failed: " + problem) }
+        safelyRefresh(refreshWindow)
+    }
+    void start(javax.swing.JButton button, CalciumOutlineProgress panel, Closure detect, Closure after, Closure refreshWindow) {
+        String original = button.getText()
+        button.setEnabled(false); button.setText("Looking for cell outlines...")
+        try {
+            def task = panel.begin()
+            // Start the worker before doing any cosmetic window refresh.
+            launch.call({ ->
+                String message = "Detection failed"
+                try { message = detect.call(task) }
+                catch (java.util.concurrent.CancellationException ignored) { message = "Cancelled. You can draw cells by hand or try detection again." }
+                catch (Throwable problem) { message = "Failed: " + problem; IJ.log("Calcium imaging plugin: " + problem) }
+                finally {
+                    final String result = message
+                    javax.swing.SwingUtilities.invokeLater { complete(button, panel, original, task.succeeded, result, after, refreshWindow) }
+                }
+            })
+        } catch (Throwable problem) {
+            complete(button, panel, original, false, "Could not start detection: " + problem, after, refreshWindow)
+            return
+        }
+        safelyRefresh(refreshWindow)
+    }
+}
+
 /** Keep the full layout inside the viewport instead of compressing or wrapping its rows. */
 class CalciumScrollPanel extends javax.swing.JPanel implements javax.swing.Scrollable {
     CalciumScrollPanel() { setLayout(new javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS)) }
@@ -783,6 +949,7 @@ class CalciumScrollPanel extends javax.swing.JPanel implements javax.swing.Scrol
 }
 
 /** Fit the initial window on screen; later updates preserve the user's chosen size. */
+@CompileStatic
 class CalciumWindow extends javax.swing.JFrame {
     CalciumWindow(String title) { super(title) }
     @Override void pack() {
@@ -790,12 +957,14 @@ class CalciumWindow extends javax.swing.JFrame {
         def configuration = getGraphicsConfiguration()
         def bounds = configuration.getBounds()
         def insets = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(configuration)
-        int available = bounds.height - insets.top - insets.bottom - 60
-        int availableWidth = bounds.width - insets.left - insets.right - 24
+        int screenTop = (int) bounds.getY(), screenHeight = (int) bounds.getHeight()
+        int screenWidth = (int) bounds.getWidth()
+        int available = screenHeight - insets.top - insets.bottom - 60
+        int availableWidth = screenWidth - insets.left - insets.right - 24
         setMinimumSize(new java.awt.Dimension(Math.min(320, availableWidth), Math.min(240, available)))
         setSize(Math.min(getWidth(), availableWidth), Math.min(getHeight(), available))
-        if (isShowing()) setLocation(getX(), Math.max(bounds.y + insets.top,
-            Math.min(getY(), bounds.y + bounds.height - insets.bottom - getHeight())))
+        if (isShowing()) setLocation(getX(), (int) Math.max(screenTop + insets.top,
+            Math.min(getY(), screenTop + screenHeight - insets.bottom - getHeight())))
     }
     void refreshContents() {
         getContentPane().revalidate()
@@ -847,7 +1016,7 @@ movies.eachWithIndex { im, i -> if (im == front) pre = labels[i] }
 if (pre == fromDisk && movies.size() > 0) pre = labels[0]
 def defaultDir = Prefs.get("calcium.steps.folder", System.getProperty("user.home") + File.separator + "Documents" + File.separator + "Calcium imaging results")
 
-def gd = new GenericDialog("Calcium imaging: cells step by step  (version 2026.11.19.5)")
+def gd = new GenericDialog("Calcium imaging: cells step by step  (version 2026.11.19.6)")
 gd.addMessage("STEP 1 of 3:  choose the recording\n \nPick the ORIGINAL movie, not a processed copy.")
 gd.addChoice("Recording:", labels as String[], pre)
 gd.addCheckbox("Look for a response and show it in magenta", true)
@@ -953,26 +1122,74 @@ def closeBtn = btn("Close")
 s3.add(makeMovie); s3.add(saveMovie); s3.add(row(go, openBtn, closeBtn)); s3.add(result)
 [s1, s2, s3].each { root.add(it); root.add(javax.swing.Box.createVerticalStrut(6)) }
 def updateBtn = btn("Check for updates")
-def releaseBtn = btn("Open download page"); releaseBtn.setVisible(false)
+def installBtn = btn("Install update"); installBtn.setVisible(false)
+def releaseBtn = btn("Release notes"); releaseBtn.setVisible(false)
+def installBar = new javax.swing.JProgressBar(0,100); installBar.setStringPainted(true); installBar.setVisible(false); installBar.setAlignmentX(0f)
+installBar.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE,22))
 def autoUpdateBox = box("Check for updates when this plugin opens", Prefs.get("calcium.steps.check_updates", true))
 def updateCheck = new CalciumUpdateCheck(enabled: autoUpdateBox.isSelected())
-def updateNote = note("A newer release will offer Download or Later. Your work stays open.")
-root.add(row(new javax.swing.JLabel("Version " + CalciumRelease.VERSION), updateBtn, releaseBtn))
-root.add(autoUpdateBox); root.add(updateNote)
+def updateNote = note("New releases offer Install update or Later. Restart Fiji after installation.")
+def installBusy = new java.util.concurrent.atomic.AtomicBoolean(false)
+Map selectedRelease = null
+String installedVersion = null
+def installRelease = { Map found, Closure progress ->
+    String directory = IJ.getDirectory("imagej")
+    new CalciumInstaller(applicationDirectory: directory ? new File(directory) : null).install(found, progress)
+}
+root.add(row(new javax.swing.JLabel("Version " + CalciumRelease.VERSION), updateBtn))
+root.add(row(installBtn, releaseBtn)); root.add(autoUpdateBox); root.add(updateNote); root.add(installBar)
 def releasePage = CalciumRelease.REPOSITORY + "/releases/latest"
 def openRelease = { ->
     try { java.awt.Desktop.getDesktop().browse(new java.net.URI(releasePage)) }
     catch (Exception problem) { IJ.showMessage("Plugin updates", "Open this page in your browser:\n" + releasePage) }
 }
+def startInstall = { Map found ->
+    if (installedVersion != null || found == null || !found.installable || !installBusy.compareAndSet(false,true)) return
+    installBtn.setEnabled(false); updateBtn.setEnabled(false)
+    installBar.setValue(0); installBar.setString("Preparing installation..."); installBar.setVisible(true)
+    updateNote.setText("Downloading and verifying the update. Your current session stays open.")
+    frame.refreshContents()
+    Thread.start("Calcium plugin installation") {
+        Map installed = null; String problem = null
+        try {
+            installed = installRelease.call(found, { int percent, String message ->
+                javax.swing.SwingUtilities.invokeLater {
+                    if (frame.isDisplayable()) { installBar.setValue(percent); installBar.setString(message) }
+                }
+            })
+        } catch (Exception failure) { problem = failure.message ?: failure.toString() }
+        final Map completed = installed; final String error = problem
+        javax.swing.SwingUtilities.invokeLater {
+            installBusy.set(false)
+            if (completed != null) { installedVersion = completed.version; updateCheck.close() }
+            if (!frame.isDisplayable()) return
+            if (error != null) {
+                installBar.setString("Update was not installed")
+                updateNote.setText("<html><body style='width:300px'>Could not install: " + CalciumInstaller.escape(error) + "<br>You can retry Install update or use the release page.</body></html>")
+                installBtn.setEnabled(true); updateBtn.setEnabled(true)
+            } else {
+                installBar.setValue(100); installBar.setString("Installed " + completed.version)
+                installBtn.setText("Installed — restart Fiji"); installBtn.setEnabled(false)
+                updateNote.setText("<html><body style='width:300px'><b>Installed " + completed.version + ".</b> Save your work, then restart Fiji to use it. This session continues with the version already loaded." +
+                    (completed.backup ? "<br>The previous file was backed up in calcium-plugin-backups inside Fiji's folder." : "") + "</body></html>")
+                updateNote.setToolTipText("Installed file: " + completed.target + (completed.backup ? "; backup: " + completed.backup : ""))
+            }
+            frame.refreshContents()
+        }
+    }
+}
 def checkUpdates = { boolean automatic ->
+    if (installBusy.get() || installedVersion != null) return
     boolean accepted = updateCheck.check(automatic, { Map found ->
+        if (installBusy.get() || installedVersion != null) return
         updateBtn.setEnabled(true); updateBtn.setText("Check for updates")
-        if (automatic && found.error) return // Offline startup never interrupts image analysis.
+        if (automatic && found.error) return
         String message
-        if (found.error) message = "Could not check for updates: " + CalciumOutlineProgress.escape(found.error) + ". You can open the download page manually."
+        if (found.error) message = "Could not check for updates: " + CalciumInstaller.escape(found.error) + ". You can open the release page manually."
         else {
-            releasePage = found.page
-            message = found.newer ? "<b>Update available: " + found.version + ".</b> Download the ZIP, replace the plugin file, then restart Fiji after saving your work." : "You are up to date (installed " + CalciumRelease.VERSION + "; latest release " + found.version + ")."
+            releasePage = found.page; selectedRelease = found
+            installBtn.setVisible(found.newer && found.installable)
+            message = found.newer ? "<b>Update available: " + found.version + ".</b> " + (found.installable ? "Click Install update; downloading, backup and replacement are handled for you." : "This release requires installation from its download page.") : "You are up to date (installed " + CalciumRelease.VERSION + "; latest release " + found.version + ")."
         }
         releaseBtn.setVisible(true)
         updateNote.setText("<html><body style='width:300px'>" + message + "</body></html>")
@@ -981,10 +1198,10 @@ def checkUpdates = { boolean automatic ->
             def prompt = new javax.swing.JDialog(frame, "Calcium plugin update available", false)
             def content = new javax.swing.JPanel(); content.setBorder(javax.swing.BorderFactory.createEmptyBorder(12, 12, 12, 12))
             content.setLayout(new javax.swing.BoxLayout(content, javax.swing.BoxLayout.Y_AXIS))
-            content.add(note("<b>Version " + found.version + " is available.</b><br>Download the new ZIP and replace the plugin after saving your work. You can keep working now."))
-            def download = btn("Download"), later = btn("Later")
-            content.add(row(download, later)); prompt.add(content)
-            download.addActionListener({ e -> openRelease(); prompt.dispose() } as java.awt.event.ActionListener)
+            content.add(note("<b>Version " + found.version + " is available.</b><br>" + (found.installable ? "Install update downloads, verifies and replaces the plugin for you. Restart Fiji after saving your work." : "Open the release page to download this version.")))
+            def install = btn(found.installable ? "Install update" : "Open release page"), later = btn("Later")
+            content.add(row(install, later)); prompt.add(content)
+            install.addActionListener({ e -> prompt.dispose(); if (found.installable) startInstall(found) else openRelease() } as java.awt.event.ActionListener)
             later.addActionListener({ e -> prompt.dispose() } as java.awt.event.ActionListener)
             prompt.setDefaultCloseOperation(javax.swing.WindowConstants.DISPOSE_ON_CLOSE)
             prompt.pack(); prompt.setLocationRelativeTo(frame); prompt.setVisible(true)
@@ -998,9 +1215,10 @@ def checkUpdates = { boolean automatic ->
 autoUpdateBox.addActionListener({ e ->
     updateCheck.enabled = autoUpdateBox.isSelected()
     Prefs.set("calcium.steps.check_updates", updateCheck.enabled)
-    updateBtn.setEnabled(true); updateBtn.setText("Check for updates")
+    updateBtn.setEnabled(!installBusy.get() && installedVersion == null); updateBtn.setText("Check for updates")
 } as java.awt.event.ActionListener)
 updateBtn.addActionListener({ e -> checkUpdates(false) } as java.awt.event.ActionListener)
+installBtn.addActionListener({ e -> startInstall(selectedRelease) } as java.awt.event.ActionListener)
 releaseBtn.addActionListener({ e -> openRelease() } as java.awt.event.ActionListener)
 frame.addWindowListener(new java.awt.event.WindowAdapter() {
     void windowClosed(java.awt.event.WindowEvent e) { updateCheck.close() }
@@ -1331,26 +1549,18 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
 }
 
 
+def detectionRunner = new CalciumDetectionRunner()
 suggestBtn.addActionListener({ e ->
     forceFresh = !proposals.isEmpty()
-    suggestBtn.setEnabled(false); suggestBtn.setText("Looking for cell outlines...")
-    def task = detectionProgress.begin(); frame.refreshContents()
-    Thread.start {
-        def msg = "Detection failed"
-        try { msg = suggest(task) }
-        catch (java.util.concurrent.CancellationException ignored) { msg = "Cancelled. You can draw cells by hand or try detection again." }
-        catch (Throwable t) { msg = "Failed: " + t; IJ.log("Calcium imaging plugin: " + t) }
-        finally {
-            javax.swing.SwingUtilities.invokeLater {
-                suggestBtn.setEnabled(true); suggestBtn.setText(proposals.isEmpty() ? "Suggest cells automatically" : "Suggest cells again")
-                refresh(true)
-                detectionProgress.finish(task.succeeded, msg)
-                info.setText("<html><body style='width:300px'>Suggestions: " + CalciumOutlineProgress.escape(msg) + "</body></html>")
-                if (!cellposeBusy) showCellposeState(null)
-                frame.refreshContents()
-            }
-        }
-    }
+    detectionRunner.start(suggestBtn, detectionProgress,
+        { task -> suggest(task) },
+        { String message ->
+            suggestBtn.setText(proposals.isEmpty() ? "Suggest cells automatically" : "Suggest cells again")
+            info.setText("<html><body style='width:300px'>Suggestions: " + CalciumOutlineProgress.escape(message) + "</body></html>")
+            if (!cellposeBusy) showCellposeState(null)
+            refresh(true)
+        },
+        { -> frame.refreshContents() })
 } as java.awt.event.ActionListener)
 acceptAllBtn.addActionListener({ e ->
     int nL = unusedProposals(cellRois()).count { it.grade <= 1 } as int
