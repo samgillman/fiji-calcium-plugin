@@ -26,10 +26,11 @@ def main():
             path = dependencies / name
             if not path.is_file():
                 temporary = path.with_suffix(".tmp")
+                mirrors = ["https://repo.maven.apache.org/maven2/", "https://repo1.maven.org/maven2/", "https://repo.maven.apache.org/maven2/"]
                 for attempt in range(3):
                     try:
-                        print("Downloading " + name, flush=True)
-                        with urllib.request.urlopen("https://repo.maven.apache.org/maven2/" + remote, timeout=60) as response:
+                        print("Downloading " + mirrors[attempt] + remote, flush=True)
+                        with urllib.request.urlopen(mirrors[attempt] + remote, timeout=60) as response:
                             temporary.write_bytes(response.read())
                         break
                     except (urllib.error.URLError, TimeoutError):
