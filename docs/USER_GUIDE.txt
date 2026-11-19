@@ -267,20 +267,25 @@ is present. Suggest cells again starts a fresh run. Failed or cancelled runs nev
 results. Edge-cell controls and the faster CPU settings from this version are preserved.
 
 
-GITHUB RELEASES AND UPDATES (2026.11.19.5)
+GITHUB RELEASES AND UPDATES (2026.11.19.6)
 Project: https://github.com/samgillman/fiji-calcium-plugin
-Download: https://github.com/samgillman/fiji-calcium-plugin/releases/latest
+Installer: https://github.com/samgillman/fiji-calcium-plugin/releases/latest/download/Install_Calcium_Plugin.groovy
 
-The GitHub ZIP contains scripts/Plugins/Calcium Imaging/Calcium_Cells_Step_By_Step.groovy.
-Merge the ZIP's scripts folder into Fiji's folder; replace the existing plugin file and restart Fiji.
-The top-level README.md gives the current installation instructions.
+First installation, or upgrading a version without Install update:
+Download Install_Calcium_Plugin.groovy, open it in Fiji's Script Editor, and press Run. It downloads,
+verifies and installs the plugin in this Fiji installation. No manual copying is needed. Save your
+work and restart Fiji. The ZIP remains available for manual installation.
 
-The plugin checks for a newer GitHub release in the background when its main window opens.
-A new release offers Download (opens its page) or Later (keep working). Uncheck Check for updates
-when this plugin opens to disable this. The Check for updates button always works manually.
-No recording data is sent. Download the ZIP, replace the script, and restart Fiji after saving
-your work. Earlier versions need 2026.11.19.4 installed once to get future startup prompts.
-A network error does not stop imaging or analysis. There is no automatic in-place installation.
+For future updates, use Install update in the startup prompt or at the bottom of the plugin.
+It downloads the release, verifies its checksum and version, backs up the old script and safely
+replaces it. Save your work and restart Fiji to load the new version. Your current session stays
+open. Later dismisses the prompt. Startup checks can be disabled with the checkbox; manual checks
+remain available. No recordings or results are sent.
 
-For notifications, sign in to GitHub and choose Watch > Custom > Releases > Apply on the repository.
-Only people who subscribe get GitHub notifications; downloading alone does not subscribe them.
+Previous files are saved in calcium-plugin-backups inside Fiji's folder, with .groovy.bak names.
+To roll back, close Fiji and copy the selected backup over the installed plugin .groovy file.
+Network, verification and replacement failures preserve the previous plugin. If Fiji cannot write
+to its folder, the installer reports this; use a writable Fiji folder and retry. Two installers
+cannot replace the same installation at once, and an older release cannot overwrite a newer one.
+
+For GitHub notifications, choose Watch > Custom > Releases > Apply on the repository.

@@ -14,6 +14,12 @@ def nextVersion = (Release.versionParts(Release.VERSION)[0..2] + [Release.versio
 def next = valid(nextVersion)
 assert Release.describe(next).newer
 assert !Release.describe(valid(Release.VERSION)).newer
+assert !Release.describe(next).installable
+def installable = valid(nextVersion)
+[Release.SCRIPT,Release.CHECKSUMS].each { name -> installable.assets << [name:name,state:'uploaded',size:100,browser_download_url:Release.REPOSITORY+'/releases/download/v'+nextVersion+'/'+name] }
+assert Release.describe(installable).installable
+installable.assets.find{it.name==Release.SCRIPT}.browser_download_url='https://example.com/plugin.groovy'
+assert !Release.describe(installable).installable
 def bad = []
 bad << (valid('2026.11.19.4') + [draft:true])
 bad << (valid('2026.11.19.4') + [prerelease:true])
@@ -27,7 +33,7 @@ bad.each { data ->
     try { Release.describe(data) } catch (IOException expected) { rejected = true }
     assert rejected : data
 }
-println 'PASS: numeric version comparison, stable complete releases, expected repository and download URLs'
+println 'PASS: numeric version comparison, stable complete releases, expected repository and verified installation assets'
 
 def Check = loader.loadClass('CalciumUpdateCheck')
 def callCheck = { checker, automatic ->

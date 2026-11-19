@@ -63,6 +63,8 @@ try {
         try {
             onUI { UIManager.setLookAndFeel(look); ui = makeUI(); ui.frame.setLocation(20,20); ui.frame.setVisible(true) }
             settle(ui)
+            onUI { assert ui.frame.isShowing(); ui.frame.pack() } // Regression: Groovy Double coordinates must not break a visible pack.
+            settle(ui)
             onUI { ui.frame.setSize(340,360) }
             settle(ui)
             onUI {
