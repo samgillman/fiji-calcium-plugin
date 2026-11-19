@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.11.19.3
+
+- Use the latest user-supplied plugin as the base, preserving edge-cell exclusion, matched-image outline reuse, faster CPU detection, and automatic Torch backend selection during setup.
+- Integrate percentage stage progress, detection logs, cancellation, and GitHub update checking into that version.
+- Prevent failed or interrupted detection from being reused as a completed cached result.
+- Keep detection settings and edge-cell metadata in the saved records.
+
 ## 2026.11.19.2
 
 - First public GitHub release, with a permanent latest-download link.

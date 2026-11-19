@@ -1,4 +1,4 @@
-// Calcium imaging: cells step by step                                                    version 2026.11.19.2
+// Calcium imaging: cells step by step                                                    version 2026.11.19.3
 // One plugin for the whole job on one recording:
 //   1. choose the recording (already open in Fiji, or a file) and a folder for the results
 //   2. the plugin makes the cells visible: all-frames picture, response (found automatically, if there is one), and a
@@ -57,6 +57,7 @@ class CalciumSteps {
     static double BLUR_RESPONSE = 2, RESP_MIN = 1.00, RESP_MAX = 1.10
     static int GAP = 6                   // background band starts this many pixels outside the ROI
     static int REACH = 40                // ... and ends this many pixels outside the ROI (about 26 micrometres)
+    static int EDGE_MARGIN = 40          // cells closer than this to the picture's border can be left out (tick box): their background band is cut off there
     static double KEEP_DARKEST = 0.25    // the darkest quarter of the allowed band pixels is the background
     static double BRIGHT_ABOVE = 8       // pixels brighter than this in the all-frames picture are never background
     static int BRIGHT_GROW = 4           // ... widened by this many pixels
@@ -77,13 +78,15 @@ class CalciumSteps {
     boolean[] bright             // widened bright objects
     boolean found = false; int onset, p0, p1, b0, b1; double share; String why = ""
     List<String> log = []
+    Roi[] alsoAvoid = new Roi[0]         // outlines that are not measured (cells at the edge that are left out) but must never serve as background
+    String edgeNote = ""                 // what was done about cells at the picture's edge, for the record of steps
 
     void say(String s) { log.add(s) }
 
     /** Steps 1-2: pictures. The movie is only read. */
     void prepare(ImagePlus imp, boolean lookForResponse) {
         movie = imp; n = imp.getStackSize(); w = imp.getWidth(); h = imp.getHeight()
-        say("Calcium imaging plugin, version 2026.11.19.2")
+        say("Calcium imaging plugin, version 2026.11.19.3")
         say("Recording: " + imp.getTitle() + " (" + n + " frames, " + w + " x " + h + ", " + imp.getBitDepth() + "-bit)")
         ImagePlus sum = ZProjector.run(imp, "sum")                                   // Image > Stacks > Z Project, Sum Slices
         FloatProcessor avg = (FloatProcessor) sum.getProcessor().convertToFloat()
@@ -196,10 +199,18 @@ class CalciumSteps {
         return Arrays.copyOf(out, k)
     }
 
+    /** True when an outline comes within EDGE_MARGIN pixels of the picture's border. There its background band is cut off on one side
+     *  and the lamp is weaker, so the background comes from better-lit glass than the cell sits on. */
+    boolean nearEdge(Roi roi) {
+        Rectangle b = roi.getBounds()
+        return b.getX() < EDGE_MARGIN || b.getY() < EDGE_MARGIN || b.getX() + b.getWidth() > w - EDGE_MARGIN || b.getY() + b.getHeight() > h - EDGE_MARGIN
+    }
+
     /** Pixels that belong to a ROI (widened): never background. */
     boolean[] takenBy(Roi[] cells) {
         boolean[] taken = new boolean[w * h]
         for (Roi c : cells) { Roi big = RoiEnlarger.enlarge(c, ROI_MARGIN); for (int i : pixelsOf(big)) taken[i] = true }
+        for (Roi c : alsoAvoid) { Roi big = RoiEnlarger.enlarge(c, ROI_MARGIN); for (int i : pixelsOf(big)) taken[i] = true }
         return taken
     }
 
@@ -320,6 +331,17 @@ class CalciumSteps {
     }
 
     /** The picture given to the automatic outliner: green = all-frames picture 0-8, magenta = response (if any). */
+    /** True when two colour pictures are the same, allowing a difference of 2 in a channel (rounding can differ between computers). */
+    static boolean samePicture(ImagePlus a, ImagePlus b) {
+        if (a == null || b == null || a.getWidth() != b.getWidth() || a.getHeight() != b.getHeight() || a.getBitDepth() != 24 || b.getBitDepth() != 24) return false
+        int[] p = (int[]) a.getProcessor().getPixels(), q = (int[]) b.getProcessor().getPixels()
+        for (int i = 0; i < p.length; i++) {
+            int x = p[i], y = q[i]
+            if (x != y && (Math.abs(((x >> 16) & 255) - ((y >> 16) & 255)) > 2 || Math.abs(((x >> 8) & 255) - ((y >> 8) & 255)) > 2 || Math.abs((x & 255) - (y & 255)) > 2)) return false
+        }
+        return true
+    }
+
     ImagePlus outlinePicture() {
         float[] g = (float[]) allPic.getProcessor().getPixels()
         float[] m = found ? (float[]) respPic.getProcessor().getPixels() : null
@@ -401,7 +423,7 @@ class CalciumSteps {
         int none = 0; for (int c = 0; c < nc; c++) if (bg[c].length == 0) none++
         // per-cell summary: level before the response (or frames 1-20), peak, rise
         int s0 = found ? b0 : 1, s1 = found ? b1 : Math.min(20, n)
-        StringBuilder sm = new StringBuilder("cell,x,y,area_pixels,background_pixels,raw_level,background_level,cell_above_background,peak_above_background,rise_gray_levels,peak_frame,dF_over_F0,rise_over_noise,clear_rise,not_brighter_than_background_frames_1_20,lifted_by_gray_levels_in_every_cell_kept_table\n")
+        StringBuilder sm = new StringBuilder("cell,x,y,area_pixels,background_pixels,raw_level,background_level,cell_above_background,peak_above_background,rise_gray_levels,peak_frame,dF_over_F0,rise_over_noise,clear_rise,not_brighter_than_background_frames_1_20,lifted_by_gray_levels_in_every_cell_kept_table,within_" + EDGE_MARGIN + "_px_of_picture_edge\n")
         lastClear = 0; lastMeanRise = 0; lastDim = 0
         for (int c = 0; c < nc; c++) {
             Rectangle r = cells[c].getBounds(); double rl = 0, bl = 0
@@ -419,7 +441,7 @@ class CalciumSteps {
             boolean clear = sd > 0 && (pk - F0) / sd >= 5.0d
             if (clear) lastClear++
             lastMeanRise += (pk - F0) / nc
-            sm.append(String.format(Locale.US, ",%.1f,%s,%s,%.2f", sd > 0 ? (pk - F0) / sd : 0d, clear ? "yes" : "no", dim ? "yes" : "no", lift[c])).append("\n")
+            sm.append(String.format(Locale.US, ",%.1f,%s,%s,%.2f,%s", sd > 0 ? (pk - F0) / sd : 0d, clear ? "yes" : "no", dim ? "yes" : "no", lift[c], nearEdge(cells[c]) ? "yes" : "no")).append("\n")
         }
         new File(prefix + "summary_per_cell.csv").text = sm.toString()
         // check picture: all-frames picture, cells yellow, background blue
@@ -435,6 +457,8 @@ class CalciumSteps {
         say("Table for_SimpleCa_every_cell_kept.csv: identical to the corrected table except that " + lastLifted + " cells whose lowest 20-frame average before the response was below " + KEEP_LEVEL + " gray level were lifted by a constant to reach it (see the last column of the summary table). Use it when counting how many cells respond; do not use the size of dF/F0 of the lifted cells.")
         String summary = nc + " cells measured on " + n + " frames; background found for " + (nc - none) + (none > 0 ? " (" + none + " cells had too little empty space nearby: their corrected column is empty)" : "")
         say("Background for each cell: band from " + GAP + " to " + REACH + " pixels outside the ROI, without other ROIs (+" + ROI_MARGIN + " px) and without pixels brighter than " + BRIGHT_ABOVE + " gray levels in the all-frames picture (+" + BRIGHT_GROW + " px); the darkest " + Math.round(100 * KEEP_DARKEST) + " % of those pixels are used, ranked in the all-frames picture, where the uneven lamp light is already removed (rule changed 19 Nov: ranking on raw brightness picked one side of each cell).")
+        log.removeAll { String s -> s.startsWith("Cells at the picture's edge") }      // only the latest measurement's choice stays in the record
+        if (edgeNote != "") say(edgeNote)
         say("Measured on the original movie: mean gray value of every cell and of its background, every frame. corrected = raw - background.")
         say(summary)
         new File(prefix + "what_was_done.txt").text = log.join("\n") + "\n"
@@ -444,7 +468,7 @@ class CalciumSteps {
 
 /** Explicit, read-only update check. It never sends recordings or replaces a running plugin. */
 class CalciumRelease {
-    static final String VERSION = "2026.11.19.2"
+    static final String VERSION = "2026.11.19.3"
     static final String REPOSITORY = "https://github.com/samgillman/fiji-calcium-plugin"
     static final String API = "https://api.github.com/repos/samgillman/fiji-calcium-plugin/releases/latest"
     static final String ASSET = "Calcium_Imaging_Fiji_Plugin.zip"
@@ -710,7 +734,7 @@ movies.eachWithIndex { im, i -> if (im == front) pre = labels[i] }
 if (pre == fromDisk && movies.size() > 0) pre = labels[0]
 def defaultDir = Prefs.get("calcium.steps.folder", System.getProperty("user.home") + File.separator + "Documents" + File.separator + "Calcium imaging results")
 
-def gd = new GenericDialog("Calcium imaging: cells step by step  (version 2026.11.19.2)")
+def gd = new GenericDialog("Calcium imaging: cells step by step  (version 2026.11.19.3)")
 gd.addMessage("STEP 1 of 3:  choose the recording\n \nPick the ORIGINAL movie, not a processed copy.")
 gd.addChoice("Recording:", labels as String[], pre)
 gd.addCheckbox("Look for a response and show it in magenta", true)
@@ -781,6 +805,8 @@ def acceptAllBtn = btn("Accept all likely ones"); acceptAllBtn.setEnabled(false)
 def ovalBtn = btn("Oval"), freeBtn = btn("Freehand"), addBtn = btn("Add drawn outline  (t)")
 def removeBtn = btn("Remove selected cell"), undoBtn = btn("Undo last cell")
 def showSug = box("Show suggestions", true), showBg = box("Show background (blue)", true)
+def edgeBox = box("Leave out cells at the picture's edge (within " + CalciumSteps.EDGE_MARGIN + " px)", true)
+edgeBox.setToolTipText("<html>At the edge a cell's background can only be taken from the inner, better-lit side,<br>so the cell comes out too dim. Untick to suggest, accept and measure edge cells like the others.</html>")
 def status = new javax.swing.JLabel("Cells chosen: 0"); status.setFont(bold); status.setAlignmentX(0f)
 def info = note("&nbsp;")
 def trace = new CalciumTracePanel(); trace.setAlignmentX(0f); trace.setFont(small)
@@ -799,7 +825,7 @@ legend.add(legendRow(lineIcon(CYAN, 1, false, false), "suggested: likely a cell"
 legend.add(legendRow(lineIcon(GREY, 1, true, false), "suggested: unsure"))
 legend.add(legendRow(lineIcon(ORANGE, 1, false, false), "probably precipitate"))
 s2.add(legend)
-s2.add(row(showSug, showBg))
+s2.add(row(showSug, showBg)); s2.add(row(edgeBox))
 s2.add(status); s2.add(row(removeBtn, undoBtn))
 s2.add(info); s2.add(trace)
 
@@ -853,8 +879,14 @@ def cellRois = { ->
     def all = rm.getRoisAsArray() as List
     all.findAll { it != null && it.isArea() }.collect { def r = (Roi) it.clone(); r.setPosition(0); r } as Roi[]
 }
+// the outlines in the ROI Manager, split into the cells that count and (when the box is ticked) the ones at the picture's edge
+def splitCells = { ->
+    Roi[] all = cellRois(); boolean cut = edgeBox.isSelected()
+    def keptIdx = (0..<all.length).findAll { !(cut && steps.nearEdge(all[it])) }
+    [all: all, keptIdx: keptIdx, cells: keptIdx.collect { all[it] } as Roi[], edge: (0..<all.length).findAll { !keptIdx.contains(it) }.collect { all[it] } as Roi[]]
+}
 def unusedProposals = { Roi[] cells ->
-    proposals.findAll { p -> !cells.any { c -> c.contains(p.cx, p.cy) || p.roi.contains((int) c.getBounds().getCenterX(), (int) c.getBounds().getCenterY()) } }
+    proposals.findAll { p -> !(edgeBox.isSelected() && p.edge) && !cells.any { c -> c.contains(p.cx, p.cy) || p.roi.contains((int) c.getBounds().getCenterX(), (int) c.getBounds().getCenterY()) } }
 }
 def evidenceText = { p ->
     double[] e = p.ev; def parts = []
@@ -868,19 +900,20 @@ def evidenceText = { p ->
 }
 def refresh = { boolean force ->
     try {
-        Roi[] cells = cellRois()
-        def key = cells.collect { it.getBounds().toString() + it.getContainedPoints().length }.join("|") + "#" + rm.getSelectedIndex() + "#" + showBg.isSelected() + "#" + proposals.size() + "#" + showSug.isSelected()
+        def sp = splitCells(); Roi[] all = (Roi[]) sp.all; Roi[] cells = (Roi[]) sp.cells; Roi[] edgeCells = (Roi[]) sp.edge
+        def key = all.collect { it.getBounds().toString() + it.getContainedPoints().length }.join("|") + "#" + rm.getSelectedIndex() + "#" + showBg.isSelected() + "#" + proposals.size() + "#" + showSug.isSelected() + "#" + edgeBox.isSelected()
         if (!force && key == lastKey) return
         lastKey = key
+        steps.alsoAvoid = edgeCells
         lastBg = steps.backgrounds(cells)
         int none = lastBg.count { it.length == 0 } as int
         def ov = new Overlay()
         if (showBg.isSelected() && cells.length > 0) {
             int sel = rm.getSelectedIndex(); int only = -1
-            if (sel >= 0 && rm.getSelectedIndexes().length == 1) { def allR = rm.getRoisAsArray(); int k = -1; for (int i = 0; i <= sel && i < allR.length; i++) if (allR[i].isArea()) k++; only = k }
+            if (sel >= 0 && rm.getSelectedIndexes().length == 1) { def allR = rm.getRoisAsArray(); int k = -1; for (int i = 0; i <= sel && i < allR.length; i++) if (allR[i].isArea()) k++; only = sp.keptIdx.indexOf(k) }
             ov.add(steps.blueLayer(lastBg, only))
         }
-        def left = unusedProposals(cells)
+        def left = unusedProposals(all)
         if (showSug.isSelected()) left.each { p ->
             def r = (Roi) p.roi.clone()
             if (p.grade == 0) { r.setStrokeColor(CYAN); r.setStrokeWidth(2) }
@@ -890,9 +923,11 @@ def refresh = { boolean force ->
             ov.add(r)
         }
         cells.each { c -> c.setStrokeColor(Color.yellow); c.setStrokeWidth(2); ov.add(c) }
+        edgeCells.each { c -> c.setStrokeColor(Color.yellow); c.setStroke(DASH); ov.add(c) }       // dashed: in the ROI Manager but left out
         steps.colourPic.setOverlay(ov)
         int nLikely = left.count { it.grade <= 1 } as int
-        status.setText("Cells chosen: " + cells.length + (none > 0 ? "   (" + none + " without background)" : "") + (proposals.size() > 0 ? "      suggestions left: " + nLikely + " likely, " + left.count { it.grade == 2 } + " unsure, " + left.count { it.grade == 3 } + " bright" : ""))
+        int edgeSug = edgeBox.isSelected() ? (proposals.count { it.edge } as int) : 0
+        status.setText("Cells chosen: " + cells.length + (edgeCells.length > 0 ? "   (+" + edgeCells.length + " at the edge, left out)" : "") + (none > 0 ? "   (" + none + " without background)" : "") + (proposals.size() > 0 ? "      suggestions left: " + nLikely + " likely, " + left.count { it.grade == 2 } + " unsure, " + left.count { it.grade == 3 } + " bright" + (edgeSug > 0 ? "; " + edgeSug + " at the edge not shown" : "") : ""))
         acceptAllBtn.setText("Accept all likely ones (" + nLikely + ")"); acceptAllBtn.setEnabled(nLikely > 0)
     } catch (Throwable t) { status.setText("" + t) }
 }
@@ -975,7 +1010,10 @@ def setupCellpose = { File envDir, File toolsDir, boolean offline, Closure progr
     if (run([uv.getPath(), "venv", "--python", "3.11", envDir.getPath()], "Making a Python environment for Cellpose (downloads Python 3.11 if needed)...") != 0) return "could not make the Python environment; see " + logFile.getPath()
     def py = new File(envDir, win ? "Scripts/python.exe" : "bin/python")
     // "packaging" is used by a part of Cellpose (fastremap) but is not installed with it automatically
-    if (run([uv.getPath(), "pip", "install", "--python", py.getPath(), "cellpose", "packaging"], "Downloading and installing Cellpose (the long part)...") != 0) return "could not install Cellpose; see " + logFile.getPath()
+    // On Windows and Linux "--torch-backend auto" picks the version that can use an NVIDIA graphics card when there is one
+    // (a much bigger download in that case); if that fails, the plain install is tried.
+    int inst = mac ? 1 : run([uv.getPath(), "pip", "install", "--python", py.getPath(), "--torch-backend", "auto", "cellpose", "packaging"], "Downloading and installing Cellpose (the long part)...")
+    if (inst != 0 && run([uv.getPath(), "pip", "install", "--python", py.getPath(), "cellpose", "packaging"], "Downloading and installing Cellpose (the long part)...") != 0) return "could not install Cellpose; see " + logFile.getPath()
     if (run([py.getPath(), "-m", "cellpose", "--version"], "Checking that Cellpose starts...") != 0) return "Cellpose was installed but does not start; see " + logFile.getPath()
     if (!offline) run([uv.getPath(), "cache", "clean"], "Tidying up...")   // the installed copy does not need the download cache
     return ""
@@ -1019,6 +1057,7 @@ def runSetup = { boolean ask, Closure detectionUpdate = null ->
     return problem
 }
 
+def forceFresh = false     // set when "Suggest cells again" is pressed: do not reuse saved outlines
 def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, s, d -> }) ->
     task.report(0, "Checking Cellpose", "Finding the installed Python environment.")
     def py = findCellposePython()
@@ -1046,28 +1085,76 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
         } else return "cancelled"
     }
     if (py == null) return "Cellpose was not found"
-    task.report(5, "Preparing the detection image", "Making the image that Cellpose will analyse.")
+    task.report(5, "Preparing the detection image", "Checking whether saved outlines can be reused.")
     def dir = new File(outDir, "automatic_outlines"); dir.mkdirs()
     def tif = new File(dir, base + "_for_automatic_outlines.tif")
-    if (!IJ.saveAsTiff(steps.outlinePicture(), tif.getPath())) throw new IOException("Could not save the detection image")
     def zip = new File(dir, base + "_for_automatic_outlines_rois.zip")
-    // An earlier run's ZIP must never be mistaken for this run's result.
-    def removeOldZip = { -> if (zip.exists() && !zip.delete()) throw new IOException("Cannot replace " + zip.getPath()) }
-    removeOldZip()
-    def cmd = [py, "-u", "-m", "cellpose", "--verbose", "--image_path", tif.getPath(), "--pretrained_model", "cpsam_v2", "--use_gpu", "--save_rois", "--no_npy", "--cellprob_threshold", "-2", "--flow_threshold", "0.8"]
-    task.report(10, "Starting Cellpose (attempt 1 of 2)", "Loading Python and Cellpose. First use may download the model.")
-    int code = task.run(cmd, dir, new File(dir, "cellpose_output.txt"))
-    if (code != 0 || !zip.isFile() || zip.length() == 0) {
-        task.checkCancelled()
-        removeOldZip()
-        task.downloading = false; task.device = "CPU"
-        task.report(task.percent, "Retrying Cellpose on the CPU (attempt 2 of 2)", "The first attempt did not produce outlines. Trying this Cellpose version's default model; this may be slower.")
-        cmd = [py, "-u", "-m", "cellpose", "--verbose", "--image_path", tif.getPath(), "--save_rois", "--no_npy", "--cellprob_threshold", "-2", "--flow_threshold", "0.8"]
-        code = task.run(cmd, dir, new File(dir, "cellpose_output_second_try.txt"))
+    def optFile = new File(dir, "cellpose_options_used.txt")
+    def pending = new File(dir, "cellpose_run_incomplete.txt")
+    def pic = steps.outlinePicture()
+    def opts = []; def cmd = []
+    boolean reuse = false
+    if (!forceFresh && !pending.exists() && tif.isFile() && zip.isFile() && zip.length() > 0) {
+        ImagePlus saved = null
+        try { saved = IJ.openImage(tif.getPath()); reuse = CalciumSteps.samePicture(saved, pic) }
+        catch (Throwable ignore) { }
+        finally { if (saved != null) saved.close() }
     }
-    task.checkCancelled()
-    if (code != 0 || !zip.isFile() || zip.length() == 0) return "Cellpose made no outlines (exit code " + code + "). Open the detection log: " + task.logFile.getPath()
-    task.report(85, "Reading the cell outlines", "Cellpose has finished; opening the outlines for review.")
+    String how
+    if (reuse) {
+        how = "the outlines made earlier for this recording were used again" + (optFile.exists() ? "" : " (made by an earlier version of the plugin)")
+        cmd = ["(no new run; earlier settings: " + (optFile.exists() ? optFile.text.trim() : "full size") + ")"]
+        def previousLog = new File(dir, "cellpose_output.txt")
+        if (previousLog.isFile()) task.logFile = previousLog
+        task.report(84, "Reusing saved cell outlines", "The detection image matches this recording; a new Cellpose run is not needed.")
+    } else {
+        task.checkCancelled()
+        // A failed/cancelled attempt may leave a partial ZIP. Never treat it as a reusable result.
+        pending.text = "Detection has not completed successfully. Do not reuse its outlines.\n"
+        def removeOldZip = { -> if (zip.exists() && !zip.delete()) throw new IOException("Cannot replace " + zip.getPath()) }
+        removeOldZip()
+        if (optFile.exists() && !optFile.delete()) throw new IOException("Cannot replace " + optFile.getPath())
+        if (!IJ.saveAsTiff(pic, tif.getPath())) throw new IOException("Could not save the detection image")
+        long started = System.nanoTime()
+        def key = "calcium.steps.cellpose_gpu." + Integer.toHexString(py.hashCode())
+        String known = Prefs.get(key, "")
+        if (System.getProperty("calcium.steps.pretend_no_gpu") != null) known = "CPU"
+        if (known == "") {
+            task.report(8, "Checking CPU / graphics support", "Checking whether this Cellpose installation can use a graphics processor.")
+            // A script file avoids Windows command-line quoting differences for Python -c.
+            def probe = new File(dir, "cellpose_device_check.py")
+            probe.text = "import torch\nprint('CHIP=GPU' if (torch.cuda.is_available() or (hasattr(torch.backends, 'mps') and torch.backends.mps.is_available())) else 'CHIP=CPU')\n"
+            try {
+                def probeLog = new File(dir, "cellpose_device_check.txt")
+                int probeCode = task.run([py, "-u", probe.getAbsolutePath()], dir, probeLog)
+                String answer = probeLog.getText("UTF-8")
+                if (probeCode == 0) known = answer.contains("CHIP=GPU") ? "GPU" : answer.contains("CHIP=CPU") ? "CPU" : ""
+                if (known != "") Prefs.set(key, known)
+            } catch (java.util.concurrent.CancellationException cancelled) { throw cancelled }
+            catch (Exception ignored) { } // Keep the uploaded version's GPU-first behaviour if the check is inconclusive.
+        }
+        task.checkCancelled()
+        task.device = known
+        boolean gpu = known != "CPU"
+        opts = ["--pretrained_model", "cpsam_v2", "--use_gpu"] + (gpu ? [] : ["--diameter", "60"]) + ["--save_rois", "--no_npy", "--cellprob_threshold", "-2", "--flow_threshold", "0.8", "--verbose"]
+        cmd = [py, "-u", "-m", "cellpose", "--image_path", tif.getPath()] + opts
+        task.report(10, "Starting Cellpose (attempt 1 of 2)", gpu ? "Using full-size detection. First use may download the model." : "CPU detection uses the faster diameter-60 setting from this version; it may still take several minutes.")
+        int code = task.run(cmd, dir, new File(dir, "cellpose_output.txt"))
+        if (code != 0 || !zip.isFile() || zip.length() == 0) {
+            task.checkCancelled(); removeOldZip()
+            task.downloading = false; task.device = "CPU"
+            task.report(task.percent, "Retrying Cellpose on the CPU (attempt 2 of 2)", "The first attempt did not produce outlines. Trying this version's default model and full-size image.")
+            opts = ["--save_rois", "--no_npy", "--cellprob_threshold", "-2", "--flow_threshold", "0.8", "--verbose"]
+            cmd = [py, "-u", "-m", "cellpose", "--image_path", tif.getPath()] + opts
+            code = task.run(cmd, dir, new File(dir, "cellpose_output_second_try.txt"))
+        }
+        task.checkCancelled()
+        if (code != 0 || !zip.isFile() || zip.length() == 0) return "Cellpose made no outlines (exit code " + code + "). Open the detection log: " + task.logFile.getPath()
+        optFile.text = opts.join(" ")
+        how = "Cellpose took " + (long) ((System.nanoTime() - started) / 1000000000L) + " s" + (task.device ? " (" + task.device + ")" : "") +
+            (opts.contains("--diameter") ? "; used the faster CPU diameter-60 setting" : "; used full-size detection")
+    }
+    task.report(85, "Reading the cell outlines", "Opening the outlines and checking their measurements.")
     def got = []; int hidden = 0
     def zf = new java.util.zip.ZipFile(zip)
     try {
@@ -1078,7 +1165,7 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
             if (r != null && r.isArea()) {
                 double[] ev = steps.grade(r)
                 if (ev[0] >= 4) hidden++
-                else { def cen = r.getContourCentroid(); got << [roi: r, grade: (int) ev[0], ev: ev, cx: (int) cen[0], cy: (int) cen[1]] }
+                else { def cen = r.getContourCentroid(); got << [roi:r, grade:(int) ev[0], ev:ev, cx:(int) cen[0], cy:(int) cen[1], edge:steps.nearEdge(r)] }
             }
             task.report(85 + (int) (12 * (i + 1) / entries.size()), "Checking the suggested cells", "Checked " + (i + 1) + " of " + entries.size() + " outlines.")
         }
@@ -1087,14 +1174,17 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
     def csv = new StringBuilder("suggestion,grade,area_pixels,mean_brightness,share_very_bright,brighter_than_surroundings,rise_inside,rise_around,touches_edge,x,y\n")
     got.eachWithIndex { p, i -> csv.append(String.format(Locale.US, "%d,%s,%.0f,%.2f,%.3f,%.2f,%.2f,%.2f,%s,%d,%d\n", i + 1, GRADE_TEXT[p.grade], p.ev[1], p.ev[2], p.ev[3], p.ev[4], p.ev[5], p.ev[6], p.ev[7] > 0 ? "yes" : "no", p.cx, p.cy)) }
     new File(dir, base + "_suggestions_with_evidence.csv").text = csv.toString()
-    steps.say("Automatic outlines (suggestions only): Cellpose, command: " + cmd.join(" ") + " . " + got.size() + " outlines shown: " + got.count { it.grade == 0 } + " respond on their own, " + got.count { it.grade == 1 } + " likely cells, " + got.count { it.grade == 2 } + " unsure, " + got.count { it.grade == 3 } + " very bright; " + hidden + " left out for their size. Grades are measured (brightness, share of very bright pixels, contrast, rise after the stimulus inside against around). Only the outlines the user accepted became cells.")
+    steps.say("Automatic outlines (suggestions only): Cellpose, command: " + cmd.join(" ") + " (" + how + "). " + got.size() + " outlines shown: " + got.count { it.grade == 0 } + " respond on their own, " + got.count { it.grade == 1 } + " likely cells, " + got.count { it.grade == 2 } + " unsure, " + got.count { it.grade == 3 } + " very bright; " + hidden + " left out for their size; " + got.count { it.edge } + " lie within " + CalciumSteps.EDGE_MARGIN + " pixels of the picture's edge" + (edgeBox.isSelected() ? " and are not shown (box ticked)" : "") + ". Grades are measured (brightness, share of very bright pixels, contrast, rise after the stimulus inside against around). Only the outlines the user accepted became cells.")
     task.checkCancelled()
     javax.swing.SwingUtilities.invokeAndWait { proposals.clear(); proposals.addAll(got) }
+    if (pending.exists() && !pending.delete()) throw new IOException("Could not finish the detection record: " + pending.getPath())
     task.succeeded = true
-    return got.size() + " suggestions"
+    return got.size() + " suggestions; " + how
 }
 
+
 suggestBtn.addActionListener({ e ->
+    forceFresh = !proposals.isEmpty()
     suggestBtn.setEnabled(false); suggestBtn.setText("Looking for cell outlines...")
     def task = detectionProgress.begin(); frame.pack()
     Thread.start {
@@ -1107,7 +1197,7 @@ suggestBtn.addActionListener({ e ->
                 suggestBtn.setEnabled(true); suggestBtn.setText(proposals.isEmpty() ? "Suggest cells automatically" : "Suggest cells again")
                 refresh(true)
                 detectionProgress.finish(task.succeeded, msg)
-                if (!task.succeeded || proposals.isEmpty()) info.setText("<html><body style='width:300px'>Suggestions: " + CalciumOutlineProgress.escape(msg) + "</body></html>")
+                info.setText("<html><body style='width:300px'>Suggestions: " + CalciumOutlineProgress.escape(msg) + "</body></html>")
                 if (!cellposeBusy) showCellposeState(null)
                 frame.pack()
             }
@@ -1122,12 +1212,15 @@ acceptAllBtn.addActionListener({ e ->
 } as java.awt.event.ActionListener)
 ovalBtn.addActionListener({ e -> IJ.setTool("oval") } as java.awt.event.ActionListener)
 freeBtn.addActionListener({ e -> IJ.setTool("freehand") } as java.awt.event.ActionListener)
-addBtn.addActionListener({ e -> def r = steps.colourPic.getRoi(); if (r != null && r.isArea()) { addCell(r); steps.colourPic.deleteRoi(); refresh(true) } else info.setText("<html><body style='width:300px'>Draw around a cell on the colour picture first.</body></html>") } as java.awt.event.ActionListener)
+addBtn.addActionListener({ e -> def r = steps.colourPic.getRoi()
+    if (r != null && r.isArea() && edgeBox.isSelected() && steps.nearEdge(r)) { info.setText("<html><body style='width:300px'><b>Not added:</b> this outline is within " + CalciumSteps.EDGE_MARGIN + " pixels of the picture's edge, where a cell's background can only come from one side. Untick \"Leave out cells at the picture's edge\" to add it anyway.</body></html>"); return }
+    if (r != null && r.isArea()) { addCell(r); steps.colourPic.deleteRoi(); refresh(true) } else info.setText("<html><body style='width:300px'>Draw around a cell on the colour picture first.</body></html>") } as java.awt.event.ActionListener)
 def removeSelected = { -> int i = rm.getSelectedIndex(); if (i < 0) return false; rm.select(i); rm.runCommand("Delete"); rm.deselect(); refresh(true); true }
 def undoLast = { -> int c = rm.getCount(); if (c == 0) return false; rm.deselect(); rm.select(c - 1); rm.runCommand("Delete"); rm.deselect(); refresh(true); true }
 removeBtn.addActionListener({ e -> if (!removeSelected()) info.setText("<html><body style='width:300px'>Click a cell on the picture (or in the ROI Manager list) first, then press Remove.</body></html>") } as java.awt.event.ActionListener)
 undoBtn.addActionListener({ e -> undoLast() } as java.awt.event.ActionListener)
 showSug.addActionListener({ e -> refresh(true) } as java.awt.event.ActionListener)
+edgeBox.addActionListener({ e -> refresh(true) } as java.awt.event.ActionListener)
 showBg.addActionListener({ e -> refresh(true) } as java.awt.event.ActionListener)
 if (!testGui && steps.colourPic.getCanvas() != null) {
     def canvas = steps.colourPic.getCanvas(); int px0 = 0, py0 = 0; long lastMove = 0
@@ -1157,7 +1250,9 @@ closeBtn.addActionListener({ e -> timer.stop(); detectionProgress.close(); frame
 openBtn.addActionListener({ e -> try { java.awt.Desktop.getDesktop().open(outDir) } catch (Throwable t) { IJ.log("Results folder: " + outDir.getPath()) } } as java.awt.event.ActionListener)
 frame.addWindowListener(new java.awt.event.WindowAdapter() { void windowClosing(java.awt.event.WindowEvent e) { timer.stop(); detectionProgress.close() } })
 go.addActionListener({ e ->
-    Roi[] cells = cellRois()
+    def sp = splitCells(); Roi[] cells = (Roi[]) sp.cells; Roi[] edgeCells = (Roi[]) sp.edge
+    steps.alsoAvoid = edgeCells
+    steps.edgeNote = edgeBox.isSelected() ? "Cells at the picture's edge: outlines within " + CalciumSteps.EDGE_MARGIN + " pixels of the border are left out, because their background can only be taken from the inner, better-lit side (" + edgeCells.length + " outlines in the ROI Manager left out; they are not in the tables or the saved outlines)." : "Cells at the picture's edge were NOT left out (box unticked); the summary table marks them."
     if (cells.length == 0) { result.setText("<html><body style='width:300px'>There are no cells yet. Choose cells in step 2 first.</body></html>"); return }
     go.setEnabled(false); go.setText("Working...")
     Thread.start {
@@ -1176,13 +1271,14 @@ go.addActionListener({ e ->
             IJ.log(summary); IJ.log("Saved in: " + outDir.getPath()); IJ.log("For SimpleCa2+: " + base + "_for_SimpleCa_every_cell_kept.csv")
             def html = "<b>Done.</b> " + cells.length + " cells measured on " + steps.n + " frames.<br>" +
                 "<b>" + steps.lastClear + " of " + cells.length + "</b> show a clear rise; mean rise " + String.format(Locale.US, "%.1f", steps.lastMeanRise) + " gray levels.<br>" +
+                (edgeCells.length > 0 ? edgeCells.length + " outlines at the picture's edge were left out (dashed).<br>" : "") +
                 (steps.lastDim > 0 ? "<font color='#b05000'><b>" + steps.lastDim + " cells are not brighter than their background at rest.</b> SimpleCa2+ would leave them out of the plain corrected table, which skews percent responding.</font><br>" : "") +
                 "<b>For SimpleCa2+ use the file ending in <i>for_SimpleCa_every_cell_kept.csv</i></b>: no cell is dropped" + (steps.lastLifted > 0 ? " (" + steps.lastLifted + " dim cells were lifted; the size of their dF/F0 means nothing)" : "") + ".<br>Saved in: ..." + File.separator + outDir.getParentFile().getName() + File.separator + outDir.getName()
             javax.swing.SwingUtilities.invokeLater { result.setText("<html><body style='width:300px'>" + html + "</body></html>"); go.setText("Measure and save again"); go.setEnabled(true); openBtn.setVisible(true); frame.pack() }
         } catch (Throwable t) { go.setEnabled(true); go.setText("Measure and save"); result.setText("<html><body style='width:300px'>Could not measure: " + t + "</body></html>"); IJ.log("Calcium imaging plugin: " + t) }
     }
 } as java.awt.event.ActionListener)
-if (testGui) { binding.setVariable("hooks", [detectionProgress: detectionProgress, suggestBtn: suggestBtn, setupCellpose: setupCellpose, findCellposePython: findCellposePython, setupBtn: setupBtn, setupRow: setupRow, cpLabel: cpLabel, showCellposeState: showCellposeState, setupText: SETUP_TEXT, saveMovie: saveMovie, makeMovie: makeMovie, rm: rm, refresh: refresh, go: go, status: status, steps: steps, outDir: outDir, showBg: showBg, frame: frame, suggest: suggest, acceptAt: acceptAt, acceptAll: acceptAll, hoverAt: hoverAt, proposals: proposals, result: result, info: info, removeSelected: removeSelected, undoLast: undoLast, root: root]); refresh(true); return }
+if (testGui) { binding.setVariable("hooks", [detectionProgress: detectionProgress, suggestBtn: suggestBtn, edgeBox: edgeBox, addBtn: addBtn, setForceFresh: { boolean v -> forceFresh = v }, setupCellpose: setupCellpose, findCellposePython: findCellposePython, setupBtn: setupBtn, setupRow: setupRow, cpLabel: cpLabel, showCellposeState: showCellposeState, setupText: SETUP_TEXT, saveMovie: saveMovie, makeMovie: makeMovie, rm: rm, refresh: refresh, go: go, status: status, steps: steps, outDir: outDir, showBg: showBg, frame: frame, suggest: suggest, acceptAt: acceptAt, acceptAll: acceptAll, hoverAt: hoverAt, proposals: proposals, result: result, info: info, removeSelected: removeSelected, undoLast: undoLast, root: root]); refresh(true); return }
 frame.setVisible(true)
 timer.start()
 refresh(true)

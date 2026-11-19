@@ -81,28 +81,45 @@ new ZipOutputStream(new FileOutputStream(fixture)).withCloseable { zip ->
     }
 }
 def proposals = [[roi:'previous']]
+System.setProperty('calcium.steps.pretend_no_gpu', 'true')
 def stepStub = new Expando()
-stepStub.outlinePicture = { -> new ImagePlus('mock', new ByteProcessor(100,100)) }
+stepStub.outlinePicture = { -> new ImagePlus('mock', new ij.process.ColorProcessor(100,100)) }
 stepStub.grade = { roi -> [1,225,1,0,1,0,0,0] as double[] }
 stepStub.say = { s -> }
+stepStub.nearEdge = { roi -> roi.bounds.x < 20 }
 def source = plugin.text
 def closureText = source.substring(source.indexOf('def suggest = {'), source.indexOf('suggestBtn.addActionListener'))
 def binding = new Binding([findCellposePython: { -> python }, cellposeBusy:false, testGui:true,
-    outDir:runDir.parentFile, base:'recording with spaces', steps:stepStub, proposals:proposals,
+    outDir:runDir.parentFile, base:'recording with spaces', steps:stepStub, proposals:proposals, forceFresh:true, edgeBox:new javax.swing.JCheckBox('',true),
     GRADE_TEXT:['responds','likely','unsure','bright']])
 def shell = new GroovyShell(loader,binding)
-def suggest = shell.evaluate('import ij.IJ\nimport ij.Prefs\nimport ij.gui.GenericDialog\n'+closureText+'\nreturn suggest')
+def suggest = shell.evaluate('import ij.IJ\nimport ij.Prefs\nimport ij.ImagePlus\nimport ij.gui.GenericDialog\n'+closureText+'\nreturn suggest')
 events.clear()
 def success = Task.newInstance(progress: { p,s,d -> events << [p,s,d] })
 def message = suggest(success)
-assert message == '3 suggestions' && success.succeeded && success.percent == 98 && proposals.size() == 3
+assert message.startsWith('3 suggestions;') && success.succeeded && success.percent == 98 && proposals.size() == 3
 assert events.findAll{it[1]=='Checking the suggested cells'}.collect{it[2]} == ['Checked 1 of 3 outlines.','Checked 2 of 3 outlines.','Checked 3 of 3 outlines.']
 assert new File(runDir,'recording with spaces_suggestions_with_evidence.csv').readLines().size() == 4
 println 'PASS: actual suggest closure imports/grades ROIs, writes CSV, handles paths with spaces'
+assert proposals.count { it.edge } == 1
+assert new File(runDir,'cellpose_options_used.txt').text.contains('--diameter 60')
+assert !new File(runDir,'cellpose_run_incomplete.txt').exists()
+new File(runDir,'fail-all').text = ''
+binding.setVariable('forceFresh',false)
+def reused = Task.newInstance(progress: { p,s,d -> })
+assert suggest(reused).contains('were used again') && reused.succeeded
+new File(runDir,'cellpose_run_incomplete.txt').text = 'incomplete'
+def unfinished = Task.newInstance(progress: { p,s,d -> })
+assert suggest(unfinished).contains('exit code 7') && !unfinished.succeeded
+assert new File(runDir,'cellpose_run_incomplete.txt').exists()
+new File(runDir,'fail-all').delete()
+binding.setVariable('forceFresh',true)
+println 'PASS: preserved edge flags and CPU settings, matched-image cache, interrupted-run invalidation'
+
 
 new File(runDir,'fail-first').text = ''
 def retry = Task.newInstance(progress: { p,s,d -> })
-assert suggest(retry) == '3 suggestions' && retry.succeeded && retry.logFile.name == 'cellpose_output_second_try.txt'
+assert suggest(retry).startsWith('3 suggestions;') && retry.succeeded && retry.logFile.name == 'cellpose_output_second_try.txt'
 new File(runDir,'fail-all').text = ''
 def failure = Task.newInstance(progress: { p,s,d -> })
 assert suggest(failure).contains('exit code 7') && !failure.succeeded && proposals.size() == 3
@@ -124,4 +141,5 @@ SwingUtilities.invokeAndWait {
     def again = panel.begin(); panel.close(); assert again.cancelled && !panel.clock.running
 }
 println 'PASS: panel warnings, safe error text, 100% only on success, retry reset and close cleanup'
+System.clearProperty('calcium.steps.pretend_no_gpu')
 println 'All progress checks passed.'

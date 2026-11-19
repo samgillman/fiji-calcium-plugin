@@ -10,17 +10,17 @@ def valid = { version ->
     [tag_name:tag, html_url:Release.REPOSITORY+'/releases/tag/'+tag, draft:false, prerelease:false,
      assets:[[name:Release.ASSET,state:'uploaded',size:100,browser_download_url:Release.REPOSITORY+'/releases/download/'+tag+'/'+Release.ASSET]]]
 }
-def next = valid('2026.11.19.3')
+def next = valid('2026.11.19.4')
 assert Release.describe(next).newer
 assert !Release.describe(valid(Release.VERSION)).newer
 def bad = []
-bad << (valid('2026.11.19.3') + [draft:true])
-bad << (valid('2026.11.19.3') + [prerelease:true])
-bad << (valid('2026.11.19.3') + [assets:[]])
-bad << (valid('2026.11.19.3') + [html_url:'https://example.com/fake'])
-bad << (valid('2026.11.19.3') + [tag_name:'v2026.11.19.3-rc1'])
-def wrongDownload = valid('2026.11.19.3'); wrongDownload.assets[0].browser_download_url='https://example.com/plugin.zip'; bad << wrongDownload
-def incomplete = valid('2026.11.19.3'); incomplete.assets[0].state='new'; bad << incomplete
+bad << (valid('2026.11.19.4') + [draft:true])
+bad << (valid('2026.11.19.4') + [prerelease:true])
+bad << (valid('2026.11.19.4') + [assets:[]])
+bad << (valid('2026.11.19.4') + [html_url:'https://example.com/fake'])
+bad << (valid('2026.11.19.4') + [tag_name:'v2026.11.19.4-rc1'])
+def wrongDownload = valid('2026.11.19.4'); wrongDownload.assets[0].browser_download_url='https://example.com/plugin.zip'; bad << wrongDownload
+def incomplete = valid('2026.11.19.4'); incomplete.assets[0].state='new'; bad << incomplete
 bad.each { data ->
     boolean rejected = false
     try { Release.describe(data) } catch (IOException expected) { rejected = true }
