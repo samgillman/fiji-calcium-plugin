@@ -1,0 +1,260 @@
+CALCIUM IMAGING: CELLS STEP BY STEP
+A plugin for Fiji / ImageJ.  Version 2026.11.19.2.
+
+WHAT IT DOES
+One menu command takes a calcium-imaging recording (a time-lapse movie, for example .zvi, .czi or .tif)
+from the raw file to a table of gray values per cell:
+
+  1. You choose the recording and a folder for the results.
+  2. It makes the cells visible: a colour picture in which cells are green, very bright objects
+     (precipitate, debris) are yellow, and cells that brightened after a stimulus are magenta.
+  3. You choose the cells: draw around each one, or let it suggest outlines and click the real cells.
+     For every cell it finds a background area right next to that cell and shows it in blue.
+  4. It measures every cell and its background in every frame of the ORIGINAL recording and saves
+     the tables.
+
+The recording file is never changed.
+
+
+WHAT YOU NEED
+  - Fiji (https://fiji.sc). Fiji already contains Bio-Formats, which opens microscope files.
+  - Nothing else for drawing cells by hand.
+  - Optional: Cellpose, only for the "Suggest cells automatically" button. The plugin can set it up
+    for you with one button (needs internet once and about 2.5 GB of disk space; see the end of
+    this file).
+
+
+INSTALL (once)
+  1. Open Fiji.
+  2. Choose  File > Show Folder > ImageJ.  A folder opens: this is Fiji's own folder.
+  3. Inside it, go into  scripts  and then  Plugins.
+  4. Make a new folder there called  Calcium Imaging.
+  5. Copy  Calcium_Cells_Step_By_Step.groovy  into that folder.
+  6. Quit Fiji and start it again.
+
+The command is now at  Plugins > Calcium Imaging > Calcium Cells Step By Step.
+
+To try it without installing: drag Calcium_Cells_Step_By_Step.groovy onto the Fiji bar and press Run
+in the editor window that opens.
+
+
+HOW TO USE IT
+  1. Empty the ROI Manager if it holds outlines from other work (the plugin uses whatever is in it).
+  2. Choose  Plugins > Calcium Imaging > Calcium Cells Step By Step.
+  3. In the first window pick the recording: one that is open in Fiji, or "Choose a file from disk...".
+     Pick the original recording, not a processed copy. Choose a folder for the results. Press OK.
+  4. The colour picture opens, and a window with the three steps stays on top.
+       - To click: press "Suggest cells automatically", follow the progress panel, then click once
+         inside each outline that is a real cell. (If the window says Cellpose is not installed,
+         press "Set up Cellpose (one time)" first; you can draw cells by hand while it installs.) The outlines are graded by what was measured:
+             thick cyan    responds on its own after the stimulus
+             thin cyan     likely a cell (dim, smooth, brighter than its surroundings)
+             grey dashes   unsure
+             orange        very bright: probably precipitate
+         During detection the Step 2 panel shows:
+             - a percentage bar for progress through the detection stages;
+             - the current stage, elapsed time, and CPU/GPU when Cellpose reports it;
+             - model-download percentage when Cellpose supplies it;
+             - the number of outlines checked once Cellpose has finished;
+             - View detection log and Cancel detection buttons.
+         The percentage is STAGE PROGRESS, not a time estimate or the fraction of cells found.
+         It advances on real work/log events and can pause during model loading or inference:
+         Cellpose does not report a precise completion percentage for every part of a single image.
+         Elapsed time alone never advances the bar. 100% appears only after the suggestions have
+         been read, graded, and saved. A failed or cancelled run does not show 100%.
+         Without a new message for 60 seconds the panel says so; after 10 minutes it reminds you
+         to check the log. This is not proof that the process is stuck. A Windows run reported by
+         the user took about 700 seconds (11 minutes 40 seconds). First use may include downloading
+         the model; later runs can also take several minutes on the CPU.
+         Cancellation stops automatic detection; you can still draw cells by hand. During the
+         separate one-time Cellpose installation, the detection Cancel button is disabled until
+         installation returns. Closing the plugin also requests detection cancellation.
+         Move the mouse over an outline to read the measurements behind its grade and to see its
+         gray value over time. "Accept all likely ones" takes every cyan outline at once; go
+         through them afterwards and remove the wrong ones.
+       - To draw: press Oval or Freehand, draw around a cell, then press "Add drawn outline" (or t).
+         Drawing and clicking can be mixed freely.
+       - To remove a cell: click it on the picture, then "Remove selected cell". "Undo last cell"
+         takes back the most recent one.
+     Each cell's background area appears in blue. Click a cell to see only its own background.
+  5. Press "Measure and save". The window then shows how many cells were measured, how many show a
+     clear rise, and which file to use.
+
+
+WHAT IT SAVES
+In the results folder, in a subfolder named after the recording:
+
+  ..._gray_values_raw.csv                         mean gray value of each cell, every frame
+  ..._background_next_to_each_cell.csv            the background of each cell, every frame
+  ..._gray_values_background_corrected_for_SimpleCa.csv
+                                                  raw minus background. First column "Frame", then one
+                                                  column per cell. This is the table to analyse.
+  ..._for_SimpleCa_every_cell_kept.csv            the same table, but no cell is lost: see "Dim cells" below.
+                                                  Use this one when counting how many cells respond.
+  ..._summary_per_cell.csv                        position, size, resting level, peak, rise per cell,
+                                                  whether it shows a clear rise, whether it was lifted
+  ..._cells_RoiSet.zip                            your cell outlines (open with ROI Manager > More > Open)
+  ..._cells_and_background_areas.png              check picture: cells yellow, background blue
+  ..._picture_all_frames.tif, ..._picture_colour.tif
+  ..._what_was_done.txt                           every step and setting that was used
+  automatic_outlines/                             only if suggestions were used: the picture given to
+                                                  Cellpose, its outlines, its messages, and a table of
+                                                  every suggestion with its grade and measurements
+
+If the box is ticked, a background-corrected copy of the movie also opens in Fiji (32-bit). It is
+saved only if the second box is ticked; the file is large (about 1.7 GB for 300 frames of 1388 x 1040).
+
+
+HOW THE PICTURES AND NUMBERS ARE MADE
+All of it uses Fiji's ordinary commands; the same steps can be done by hand from the menus.
+
+  All-frames picture   Image > Stacks > Z Project (Sum Slices, all frames); Process > Math > Divide by
+                       the number of frames; Process > Subtract Background (rolling ball 150);
+                       Process > Filters > Gaussian Blur (sigma 1.5); shown 0 to 8.
+  Response             The movie is cut into 24 x 24 pixel squares. If at least 5 % of the squares
+                       step up in brightness within the same 15 frames, that moment is taken as the
+                       response. Response picture = 20 frames around the peak divided by 20 frames
+                       before it, Gaussian Blur sigma 2, shown 1.00 to 1.10. If no response is found,
+                       the colour picture simply has no magenta.
+  Colour picture       green = all-frames picture (0 to 8); red = the same picture shown 10 to 30, so
+                       only very bright objects get red and turn yellow; magenta = response picture.
+  Background of a cell A band from 6 to 40 pixels outside the cell's outline, without other cells
+                       (widened by 4 pixels) and without bright objects. Of the pixels left, the
+                       darkest quarter (ranked in the all-frames picture) is that cell's background.
+  Measuring            Mean gray value of the cell and of its background in every frame of the
+                       original recording. corrected = raw - background.
+
+
+HOW THE SUGGESTIONS ARE GRADED
+Every suggested outline is measured: its size, its mean brightness, the share of very bright pixels
+in it, how much brighter it is than a ring around it, and how much it rises after the stimulus
+compared with that ring. Very bright outlines are graded "probably precipitate". Dim outlines that
+rise more than their surroundings are graded "responds". Dim, smooth outlines that stand out from
+their surroundings are graded "likely a cell". The rest are "unsure".
+On four recordings whose outlines had been reviewed one by one (1396 outlines), the share that
+reviewers accepted as cells was: responds 83 %, likely 80 %, unsure 41 %, probably precipitate 12 %.
+So the grades help, but about one in five cyan outlines is still not a cell. You decide.
+
+DIM CELLS AND PERCENT RESPONDING
+Some cells are no brighter than their own background at rest. After background correction their
+resting value is zero or negative, so dF/F0 cannot be worked out, and analysis programs that need
+dF/F0 leave them out. That shrinks the number of cells and skews the percentage that respond.
+The table "for_SimpleCa_every_cell_kept.csv" avoids this: any cell whose lowest 20-frame average
+before the response is below 1 gray level is lifted by a constant so that it equals 1. Its rises
+and falls in gray levels are unchanged, so it can still be scored as responding or not. The SIZE of
+dF/F0 of a lifted cell means nothing. The summary table says which cells were lifted and by how much.
+The plugin's own count ("N of M show a clear rise") is made in gray levels and uses every cell.
+
+
+LIMITS: PLEASE READ
+  - The settings are in pixels and were chosen on recordings of 1388 x 1040 pixels at 0.645
+    micrometres per pixel (cultured cells loaded with Fluo-4, one frame per second). For a different
+    magnification or camera, change the numbers in the "settings" block at the top of the .groovy
+    file (it is a plain text file).
+  - How the background is chosen changes the resting level of a cell. When cells are only a few
+    gray levels above the background, the size of dF/F0 is therefore not reliable. The rise in gray
+    levels and the question "did this cell respond" are much more robust. Check
+    ..._summary_per_cell.csv: cells with "cell_above_background" below about 1 have no usable dF/F0.
+  - The automatic response finder misses a response when only a handful of cells respond.
+  - The suggested outlines are suggestions only. They include precipitate and sometimes join two
+    cells. Nothing becomes a cell unless you click it.
+  - Tested on one Mac with Fiji (ImageJ 1.54p). Not yet tested on Windows or Linux.
+
+
+IF SOMETHING GOES WRONG
+  - The menu entry is missing: check the file is in  scripts > Plugins > Calcium Imaging  inside
+    Fiji's folder, and restart Fiji.
+  - Cells you did not draw are counted: old outlines were in the ROI Manager. Empty it and start again.
+  - Clicking does not accept a suggested outline: switch to the oval or rectangle tool. With the
+    polygon tool a click starts a polygon instead.
+  - Fiji's menu bar shows only "Fiji": quit Fiji and start it again (this is a Fiji quirk when many
+    large pictures are open).
+  - "Cellpose made no outlines": click View detection log. The first attempt is in
+    automatic_outlines/cellpose_output.txt; a CPU/default-model retry has its own file,
+    automatic_outlines/cellpose_output_second_try.txt. The button opens the current attempt.
+  - Detection takes a long time: check the stage and log. A model download and CPU inference can
+    both take minutes. Cancel detection stops the running detector; the original movie and cells
+    you already chose are kept. The plugin no longer promises completion in about 30 seconds.
+  - Anything else: look at Window > Console and Window > Log in Fiji for the message.
+
+
+CELLPOSE FOR THE "SUGGEST CELLS" BUTTON
+Cellpose is a free program, separate from Fiji (https://github.com/MouseLand/cellpose). It is not
+part of Fiji and cannot be added from Fiji's update sites; it is a Python program that the plugin
+starts in the background.
+
+The easy way: the button
+If the plugin window says "Cellpose is not installed on this computer yet", press
+"Set up Cellpose (one time)". It first shows what it will do and asks for your OK. Then it:
+  1. gets "uv", a small free installer (about 17 MB, from github.com/astral-sh/uv), unless uv is
+     already on the computer, and compares the file with its published checksum;
+  2. makes a private Python 3.11 with Cellpose in it (about 250 MB to download and 1 GB on disk
+     on a Mac, more on Linux; from github.com/astral-sh/python-build-standalone and pypi.org);
+  3. checks that Cellpose starts.
+The first press of "Suggest cells automatically" then downloads Cellpose's model (about 1.2 GB).
+The setup itself took under a minute on a fast connection; the model download takes longer.
+You can go on drawing cells by hand while it runs.
+
+Where it goes: two folders in your home folder,  cellpose-env  and  cellpose-env-tools , and the
+model in a third one called  .cellpose . Nothing else on the computer is changed. To remove
+Cellpose again, delete those folders. If the setup fails, the reason is in
+cellpose-env-tools/setup_log.txt (a common cause is a network that blocks downloads).
+
+How far this was tested: on one Mac with an Apple chip (19 Nov 2026), the setup was run for real
+into an empty folder, with every download: the installer (checksum matched), Python 3.11.18 and
+Cellpose 4.2.1.1 with 24 other packages. It finished in 46 seconds, and the Cellpose it made gave
+the same 284 outlines on a test recording as an existing installation. Not yet tried: clicking
+the button on screen rather than from a test program, the model download on a computer that has
+never run Cellpose, an Intel Mac, Windows and Linux.
+
+By hand instead, in a terminal:
+
+    uv venv --python 3.11 ~/cellpose-env
+    uv pip install --python ~/cellpose-env/bin/python cellpose packaging
+
+(uv is a free Python installer: https://docs.astral.sh/uv . The word "packaging" matters: without
+it Cellpose 4.2 installs but stops with "No module named 'packaging'". Installing with conda into
+an environment called "cellpose" also works.)
+
+If Cellpose is already installed somewhere else: the plugin looks in ~/cellpose-env and in conda
+environments named "cellpose". Otherwise press "Suggest cells automatically" and choose "I already
+have it: show where", then pick the "python" file of the environment in which Cellpose is
+installed; the plugin remembers it. You can also write that path as one line in a text file called
+cellpose_python.txt  next to the plugin file.
+
+Without a graphics chip Cellpose can take a few minutes per recording.
+
+
+UPDATE 2026-11-19.1: STEP 2 PROGRESS
+Replace the existing Calcium_Cells_Step_By_Step.groovy in Fiji's
+scripts/Plugins/Calcium Imaging folder with the file in this ZIP, then restart Fiji.
+It does not modify an already-running copy of the plugin.
+
+Besides the progress display, Cellpose now runs with unbuffered, verbose messages so its log is
+useful while it is running. The existing GPU-first / CPU-fallback commands and detection thresholds
+are retained. An old ROI ZIP is removed before a new attempt, and nonzero exits are treated as
+failures, so a failed rerun cannot silently reuse earlier outlines.
+
+Validation of this update: compiled with Fiji's Groovy 4.0.28 / ImageJ 1.54p on macOS. Automated
+checks exercised streamed stdout/stderr, carriage-return download messages, silent-process
+cancellation, successful ROI import/grading/CSV output, fallback retry, stale-output rejection,
+UI progress reset, failure/cancel states, and the 10-minute message. Detector integration used a
+mock Cellpose process with real ROI ZIP files. This update has not been run on the Windows PC,
+and it is not a Cellpose performance fix.
+
+
+GITHUB RELEASES AND UPDATES (2026.11.19.2)
+Project: https://github.com/samgillman/fiji-calcium-plugin
+Download: https://github.com/samgillman/fiji-calcium-plugin/releases/latest
+
+The GitHub ZIP contains scripts/Plugins/Calcium Imaging/Calcium_Cells_Step_By_Step.groovy.
+Merge the ZIP's scripts folder into Fiji's folder; replace the existing plugin file and restart Fiji.
+The top-level README.md gives the current installation instructions.
+
+Click Check for updates at the bottom of the plugin window to check the latest GitHub release.
+This only checks when clicked and sends no recording data. If an update is available, open its
+page, download the ZIP, replace the installed script, and restart Fiji after saving your work.
+A network error does not stop imaging or analysis. There is no automatic in-place installation.
+
+For notifications, sign in to GitHub and choose Watch > Custom > Releases > Apply on the repository.
+Only people who subscribe get GitHub notifications; downloading alone does not subscribe them.
