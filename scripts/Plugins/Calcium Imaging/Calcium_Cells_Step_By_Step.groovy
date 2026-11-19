@@ -1,4 +1,4 @@
-// Calcium imaging: cells step by step                                                    version 2026.11.19.4
+// Calcium imaging: cells step by step                                                    version 2026.11.19.5
 // One plugin for the whole job on one recording:
 //   1. choose the recording (already open in Fiji, or a file) and a folder for the results
 //   2. the plugin makes the cells visible: all-frames picture, response (found automatically, if there is one), and a
@@ -86,7 +86,7 @@ class CalciumSteps {
     /** Steps 1-2: pictures. The movie is only read. */
     void prepare(ImagePlus imp, boolean lookForResponse) {
         movie = imp; n = imp.getStackSize(); w = imp.getWidth(); h = imp.getHeight()
-        say("Calcium imaging plugin, version 2026.11.19.4")
+        say("Calcium imaging plugin, version 2026.11.19.5")
         say("Recording: " + imp.getTitle() + " (" + n + " frames, " + w + " x " + h + ", " + imp.getBitDepth() + "-bit)")
         ImagePlus sum = ZProjector.run(imp, "sum")                                   // Image > Stacks > Z Project, Sum Slices
         FloatProcessor avg = (FloatProcessor) sum.getProcessor().convertToFloat()
@@ -468,7 +468,7 @@ class CalciumSteps {
 
 /** Read-only update check. It never sends recordings or replaces a running plugin. */
 class CalciumRelease {
-    static final String VERSION = "2026.11.19.4"
+    static final String VERSION = "2026.11.19.5"
     static final String REPOSITORY = "https://github.com/samgillman/fiji-calcium-plugin"
     static final String API = "https://api.github.com/repos/samgillman/fiji-calcium-plugin/releases/latest"
     static final String ASSET = "Calcium_Imaging_Fiji_Plugin.zip"
@@ -768,7 +768,21 @@ class CalciumOutlineProgress extends javax.swing.JPanel {
     void close() { clock.stop(); if (running && task != null) task.cancel(); detailsWindow?.dispose() }
 }
 
-/** Keep every control reachable on smaller screens as progress and results appear. */
+/** Keep the full layout inside the viewport instead of compressing or wrapping its rows. */
+class CalciumScrollPanel extends javax.swing.JPanel implements javax.swing.Scrollable {
+    CalciumScrollPanel() { setLayout(new javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS)) }
+    java.awt.Dimension getPreferredScrollableViewportSize() { getPreferredSize() }
+    boolean getScrollableTracksViewportWidth() {
+        getParent() instanceof javax.swing.JViewport && getParent().getWidth() >= getPreferredSize().width
+    }
+    boolean getScrollableTracksViewportHeight() { false }
+    int getScrollableUnitIncrement(java.awt.Rectangle visible, int orientation, int direction) { 24 }
+    int getScrollableBlockIncrement(java.awt.Rectangle visible, int orientation, int direction) {
+        Math.max(24, (int) (orientation == javax.swing.SwingConstants.VERTICAL ? visible.height : visible.width) - 24)
+    }
+}
+
+/** Fit the initial window on screen; later updates preserve the user's chosen size. */
 class CalciumWindow extends javax.swing.JFrame {
     CalciumWindow(String title) { super(title) }
     @Override void pack() {
@@ -777,9 +791,16 @@ class CalciumWindow extends javax.swing.JFrame {
         def bounds = configuration.getBounds()
         def insets = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(configuration)
         int available = bounds.height - insets.top - insets.bottom - 60
-        setSize(getWidth(), Math.min(getHeight(), available))
+        int availableWidth = bounds.width - insets.left - insets.right - 24
+        setMinimumSize(new java.awt.Dimension(Math.min(320, availableWidth), Math.min(240, available)))
+        setSize(Math.min(getWidth(), availableWidth), Math.min(getHeight(), available))
         if (isShowing()) setLocation(getX(), Math.max(bounds.y + insets.top,
             Math.min(getY(), bounds.y + bounds.height - insets.bottom - getHeight())))
+    }
+    void refreshContents() {
+        getContentPane().revalidate()
+        validate()
+        repaint()
     }
 }
 
@@ -826,7 +847,7 @@ movies.eachWithIndex { im, i -> if (im == front) pre = labels[i] }
 if (pre == fromDisk && movies.size() > 0) pre = labels[0]
 def defaultDir = Prefs.get("calcium.steps.folder", System.getProperty("user.home") + File.separator + "Documents" + File.separator + "Calcium imaging results")
 
-def gd = new GenericDialog("Calcium imaging: cells step by step  (version 2026.11.19.4)")
+def gd = new GenericDialog("Calcium imaging: cells step by step  (version 2026.11.19.5)")
 gd.addMessage("STEP 1 of 3:  choose the recording\n \nPick the ORIGINAL movie, not a processed copy.")
 gd.addChoice("Recording:", labels as String[], pre)
 gd.addCheckbox("Look for a response and show it in magenta", true)
@@ -887,7 +908,7 @@ def box = { String s, boolean on -> def b = new javax.swing.JCheckBox(s, on); b.
 
 def frame = new CalciumWindow("Calcium imaging: cells step by step")
 frame.setDefaultCloseOperation(javax.swing.WindowConstants.DISPOSE_ON_CLOSE)
-def root = new javax.swing.JPanel(); root.setLayout(new javax.swing.BoxLayout(root, javax.swing.BoxLayout.Y_AXIS)); root.setBorder(javax.swing.BorderFactory.createEmptyBorder(8, 8, 8, 8))
+def root = new CalciumScrollPanel(); root.setBorder(javax.swing.BorderFactory.createEmptyBorder(8, 8, 8, 8))
 
 def s1 = section("Step 1   Recording   ✓")
 s1.add(note("<b>" + imp.getTitle() + "</b><br>" + steps.n + " frames. " + (steps.found ? "Response found: brightness rises near frame " + steps.onset + " (shown in magenta)." : (look ? "No response found: the picture has no magenta. Every cell is still shown in green." : "Response not looked for."))))
@@ -955,7 +976,7 @@ def checkUpdates = { boolean automatic ->
         }
         releaseBtn.setVisible(true)
         updateNote.setText("<html><body style='width:300px'>" + message + "</body></html>")
-        frame.pack()
+        frame.refreshContents()
         if (found.prompt) {
             def prompt = new javax.swing.JDialog(frame, "Calcium plugin update available", false)
             def content = new javax.swing.JPanel(); content.setBorder(javax.swing.BorderFactory.createEmptyBorder(12, 12, 12, 12))
@@ -985,9 +1006,11 @@ frame.addWindowListener(new java.awt.event.WindowAdapter() {
     void windowClosed(java.awt.event.WindowEvent e) { updateCheck.close() }
     void windowClosing(java.awt.event.WindowEvent e) { updateCheck.close() }
 })
-def scroll = new javax.swing.JScrollPane(root, javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_ALWAYS, javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER)
+def scroll = new javax.swing.JScrollPane(root, javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED)
 scroll.setBorder(javax.swing.BorderFactory.createEmptyBorder())
+scroll.setWheelScrollingEnabled(true)
 scroll.getVerticalScrollBar().setUnitIncrement(24)
+scroll.getHorizontalScrollBar().setUnitIncrement(24)
 frame.getContentPane().add(scroll)
 frame.pack(); frame.setAlwaysOnTop(true)
 if (!testGui) { def scr = java.awt.Toolkit.getDefaultToolkit().getScreenSize(); frame.setLocation((int) Math.max(0, scr.width - frame.getWidth() - 12), 40) }
@@ -1311,7 +1334,7 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
 suggestBtn.addActionListener({ e ->
     forceFresh = !proposals.isEmpty()
     suggestBtn.setEnabled(false); suggestBtn.setText("Looking for cell outlines...")
-    def task = detectionProgress.begin(); frame.pack()
+    def task = detectionProgress.begin(); frame.refreshContents()
     Thread.start {
         def msg = "Detection failed"
         try { msg = suggest(task) }
@@ -1324,7 +1347,7 @@ suggestBtn.addActionListener({ e ->
                 detectionProgress.finish(task.succeeded, msg)
                 info.setText("<html><body style='width:300px'>Suggestions: " + CalciumOutlineProgress.escape(msg) + "</body></html>")
                 if (!cellposeBusy) showCellposeState(null)
-                frame.pack()
+                frame.refreshContents()
             }
         }
     }
@@ -1399,7 +1422,7 @@ go.addActionListener({ e ->
                 (edgeCells.length > 0 ? edgeCells.length + " outlines at the picture's edge were left out (dashed).<br>" : "") +
                 (steps.lastDim > 0 ? "<font color='#b05000'><b>" + steps.lastDim + " cells are not brighter than their background at rest.</b> SimpleCa2+ would leave them out of the plain corrected table, which skews percent responding.</font><br>" : "") +
                 "<b>For SimpleCa2+ use the file ending in <i>for_SimpleCa_every_cell_kept.csv</i></b>: no cell is dropped" + (steps.lastLifted > 0 ? " (" + steps.lastLifted + " dim cells were lifted; the size of their dF/F0 means nothing)" : "") + ".<br>Saved in: ..." + File.separator + outDir.getParentFile().getName() + File.separator + outDir.getName()
-            javax.swing.SwingUtilities.invokeLater { result.setText("<html><body style='width:300px'>" + html + "</body></html>"); go.setText("Measure and save again"); go.setEnabled(true); openBtn.setVisible(true); frame.pack() }
+            javax.swing.SwingUtilities.invokeLater { result.setText("<html><body style='width:300px'>" + html + "</body></html>"); go.setText("Measure and save again"); go.setEnabled(true); openBtn.setVisible(true); frame.refreshContents() }
         } catch (Throwable t) { go.setEnabled(true); go.setText("Measure and save"); result.setText("<html><body style='width:300px'>Could not measure: " + t + "</body></html>"); IJ.log("Calcium imaging plugin: " + t) }
     }
 } as java.awt.event.ActionListener)

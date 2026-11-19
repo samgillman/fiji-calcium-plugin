@@ -40,7 +40,7 @@ python3 tools/run_tests.py
 python3 tools/build_release.py
 ```
 
-With a desktop display available, `python3 tools/run_tests.py --gui` also exercises the actual Download/Later prompt, offline startup, and detection details window using simulated release metadata.
+With a desktop display available, `python3 tools/run_tests.py --gui` also exercises the actual Download/Later prompt, offline startup, detection details window, and resizing/scrolling with the real plugin controls. Release metadata is simulated. CI runs these GUI checks on Windows and on Linux with a virtual display.
 
 The package, standalone plugin file, version file, checksum file, and release notes are written to ignored `dist/`. Tests use a mock Cellpose process and real ROI ZIPs; do a real Fiji/Cellpose smoke test for changes to detection or image measurements.
 

@@ -245,6 +245,12 @@ cellpose_python.txt  next to the plugin file.
 
 
 
+WINDOW SIZE AND SCROLLING
+The plugin window can be resized. Smaller windows show scrollbars instead of compressing the
+controls. Use the mouse wheel or vertical scrollbar to reach lower sections; use the horizontal
+scrollbar when the window is too narrow. Detection, results, and update messages preserve the
+window size you chose. The initial window fits within the screen.
+
 STEP 2 PROGRESS AND GITHUB UPDATES
 The progress panel shows percentage stage progress, a persistent explanation of the current stage,
 total and stage time, image dimensions, CPU/GPU, attempt number, detection settings, download
@@ -261,7 +267,7 @@ is present. Suggest cells again starts a fresh run. Failed or cancelled runs nev
 results. Edge-cell controls and the faster CPU settings from this version are preserved.
 
 
-GITHUB RELEASES AND UPDATES (2026.11.19.4)
+GITHUB RELEASES AND UPDATES (2026.11.19.5)
 Project: https://github.com/samgillman/fiji-calcium-plugin
 Download: https://github.com/samgillman/fiji-calcium-plugin/releases/latest
 

@@ -21,6 +21,8 @@ Fiji includes Bio-Formats for microscope recordings. Cellpose is optional: you c
 2. Choose cells on the colour image. Draw outlines or click **Suggest cells automatically**, then review the suggestions. Automatic detection shows percentage stage progress, a persistent explanation of the current work, total and stage time, saved-outline reuse, image size, CPU/GPU and detection settings. **Progress details** shows recent events; **View detection log** and **Cancel detection** remain available.
 3. Click **Measure and save** to export raw fluorescence, each cell's local background, corrected traces, ROI outlines, and an analysis log.
 
+You can resize the plugin window. If its contents do not fit, use the mouse wheel or vertical scrollbar; a horizontal scrollbar appears when needed. Controls keep their full size, and status changes preserve your chosen window size.
+
 This release preserves the latest base version's edge-cell exclusion control, reuse of outlines for matching images, and faster CPU detection settings. **Suggest cells again** forces a fresh detection.
 
 The progress percentage represents detection stages, not remaining time. Cellpose may provide no intermediate updates during inference. Detection can take several minutes; one user-reported Windows run took about 700 seconds. A first run may also download the model.
