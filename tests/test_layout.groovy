@@ -15,7 +15,7 @@ def makeUI = {
     ])
     new GroovyShell(loader,binding).evaluate('import ij.IJ\nimport ij.Prefs\nimport java.awt.Color\n' +
         fragment.replace('frame.setAlwaysOnTop(true)', 'frame.setAlwaysOnTop(false)') +
-        '\nreturn [frame:frame,root:root,scroll:scroll,progress:detectionProgress,close:closeBtn,go:go,add:addBtn,trace:trace,info:info,\n' +
+        '\nreturn [frame:frame,root:root,scroll:scroll,progress:detectionProgress,close:closeBtn,go:go,add:removeBtn,trace:trace,info:info,\n' +
         '    openStep:openStep,choose:s2,measure:s3,analyze:s4,next:continueBtn,analyzeButton:analyzeBtn]')
 }
 def onUI = { Closure action -> SwingUtilities.invokeAndWait(action as Runnable) }

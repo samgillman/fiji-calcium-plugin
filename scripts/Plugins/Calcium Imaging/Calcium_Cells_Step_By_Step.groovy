@@ -1105,6 +1105,8 @@ class CalciumTheme {
     }
     static javax.swing.JButton button(String text, boolean primary = false) { def b = new javax.swing.JButton(text); style(b, primary); b }
     static void style(javax.swing.AbstractButton b, boolean primary) { b.setUI(new CalciumButtonUI(primary: primary)) }
+    /** Makes a button the filled blue one (the next thing to press), or an ordinary one again. */
+    static void primary(javax.swing.AbstractButton b, boolean on) { if (b.getUI() instanceof CalciumButtonUI && ((CalciumButtonUI) b.getUI()).primary != on) { ((CalciumButtonUI) b.getUI()).primary = on; b.setFont(font(on ? java.awt.Font.BOLD : java.awt.Font.PLAIN)); b.revalidate(); b.repaint() } }
     /** Marks a button as the current option of a group, or not. */
     static void choose(javax.swing.AbstractButton b, boolean on) { if (b.getUI() instanceof CalciumButtonUI) { ((CalciumButtonUI) b.getUI()).chosen = on; b.repaint() } }
     static javax.swing.JLabel label(String text, Color colour = INK, int style = java.awt.Font.PLAIN, float delta = 0f) {
@@ -1850,7 +1852,7 @@ class CalciumFrameView {
             float fall = (float) (lowest + allowed)
             work[blocks + by * bw + bx] = fall < 0f ? fall : 0f
         }
-        for (int y = 0; y < height; y++) { int by = y >> 2, row = y * width; for (int x = 0; x < width; x++) { float fall = work[blocks + by * bw + (x >> 2)]; if (fall < 0f) a[row + x] = (float) (a[row + x] + fall) } }
+        for (int y = 0; y < height; y++) { int by = y >> 2, row = y * width; for (int x = 0; x < width; x++) { float fall = work[blocks + by * bw + (x >> 2)], v = a[row + x]; if (fall < 0f && v > none) { v = (float) (v + fall); a[row + x] = v < none ? none : v } } }
     }
     /** A colour frame: "gray" (a frame as paint() left it) becomes the green channel and "rise" (the smoothed rise above the
      *  resting picture, also from paint()) the magenta one, so a cell that responds turns from green to pink or white. */
@@ -3944,10 +3946,15 @@ def detectionProgress = new CalciumOutlineProgress()
 def continueBtn = btn("Continue to measure  ›")
 showView(steps.blind ? 'baseline' : steps.found ? 'response' : 'all', steps.blind ? blindNote() : steps.found ? 'Magenta: cells that brightened near frame ' + steps.onset + '. Picking cells this way is recorded as response-assisted.' : 'Choosing cells on the average of all frames.')
 s2.body.add(row(suggestBtn, acceptAllBtn)); s2.body.add(row(addRespondersBtn, continueBtn)); s2.body.add(detectionProgress); s2.body.add(cpLabel); s2.body.add(setupRow)
-s2.body.add(row(CalciumTheme.label("Or draw:", CalciumTheme.MUTED), ovalBtn, freeBtn, addBtn))
-s2.body.add(row(showSug, showBg)); s2.body.add(row(edgeBox))
+// Drawing by hand and what is shown are used now and then: one line opens them, so the sequence above stays short.
+def moreRows = new javax.swing.JPanel(); moreRows.setLayout(new javax.swing.BoxLayout(moreRows, javax.swing.BoxLayout.Y_AXIS)); moreRows.setOpaque(false); moreRows.setAlignmentX(0f)
+moreRows.add(row(CalciumTheme.label("Draw:", CalciumTheme.MUTED), ovalBtn, freeBtn, addBtn)); moreRows.add(row(showSug, showBg)); moreRows.add(row(edgeBox))
+def moreBtn = btn("Draw by hand, what is shown  ▸"); moreBtn.setToolTipText("Oval, Freehand and Add outline; show or hide suggestions and background; cells at the edge")
+moreRows.setVisible(false)
+moreBtn.addActionListener { moreRows.setVisible(!moreRows.isVisible()); moreBtn.setText("Draw by hand, what is shown  " + (moreRows.isVisible() ? "▾" : "▸")); frame.revalidate(); frame.repaint() }
 s2.body.add(javax.swing.Box.createVerticalStrut(4)); s2.body.add(status)
 s2.body.add(row(removeBtn, undoBtn, removeMode)); s2.body.add(editHint)
+s2.body.add(row(moreBtn)); s2.body.add(moreRows)
 s2.body.add(info); s2.body.add(trace); s2.body.add(javax.swing.Box.createVerticalStrut(6))
 def legend = new javax.swing.JPanel(new java.awt.GridLayout(0, 3, 6, 2)); legend.setAlignmentX(0f); legend.setOpaque(false)
 def acceptedIcon = new java.awt.image.BufferedImage(30, 14, java.awt.image.BufferedImage.TYPE_INT_ARGB)
@@ -3963,11 +3970,11 @@ legend.add(legendRow(lineIcon(GREY, 1, true, false), "unsure", "g2"))
 legend.add(legendRow(lineIcon(BLUE, 1, false, true), "background", "background"))
 legend.add(legendRow(lineIcon(ORANGE, 1, false, false), "precipitate?", "g3"))
 legend.add(respondsLegend)   // last, so the grid has no hole when it is hidden
-legend.setToolTipText("White: your cells. Blue: the background used. The other four are suggestions, by grade. Click an entry to hide or show it.")
+legend.setToolTipText("White: your cells. Blue: the background used. The others are suggestions, by grade. Click an entry to hide or show it on the picture; double-click to see only that one.")
 def legendHint = CalciumTheme.label("Click an entry to hide or show it on the picture; double-click to see only that one.", CalciumTheme.MUTED)
 legendHint.setFont(CalciumTheme.font(java.awt.Font.PLAIN, -2f)); legendHint.setAlignmentX(0f)
 legend.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, (int) legend.getPreferredSize().height))
-s2.body.add(legend); s2.body.add(legendHint)
+s2.body.add(legend)   // how to use the legend is in its tooltip
 
 def s3 = section("3", "Measure and save")
 def makeMovie = box("Also open a background-corrected movie", true)
@@ -4093,8 +4100,10 @@ def refresh = { boolean force ->
         def key = all.collect { it.getBounds().toString() + it.getContainedPoints().length }.join("|") + "#" + Arrays.toString(rm.getSelectedIndexes()) + "#" + showBg.isSelected() + "#" + proposals.size() + "#" + showSug.isSelected() + "#" + edgeBox.isSelected() + '#'+selectionBasis + '#' + responseSeen + (analysisMeasurement!=null ? '#'+measuredKey(all) : '')
         if (!force && key == lastKey) return
         lastKey = key
+        boolean measuredNow = false   // the cells on the picture are the ones in the saved tables
         if (analysisMeasurement != null) {
             boolean current = measuredKey(all)+'#edge='+edgeBox.isSelected()+'#selection='+basisFor(all) == analysisMeasurement.key
+            measuredNow = current
             analyzeBtn.setEnabled(current && go.isEnabled())
             s3.setDone(current); s4.setSummary(current ? "ready" : "measure again first")
             analysisNote.setText("<html><body style='width:300px'>" + (current ? "Review the recording, check timing, and run analysis in your browser. Keep Fiji open." : "Cell outlines changed. Measure and save again before analysis.") + "</body></html>")
@@ -4127,17 +4136,23 @@ def refresh = { boolean force ->
         status.setText("<html><body style='width:300px'><b>Cells chosen: " + cells.length + "</b>" + (edgeCells.length > 0 ? " &nbsp;(+" + edgeCells.length + " at the edge, left out)" : "") + (none > 0 ? " &nbsp;(" + none + " without background)" : "") + (proposals.size() > 0 ? "<br><font color='" + MUTED + "'>Suggestions left: " + nLikely + " likely, " + left.count { it.grade == 2 } + " unsure, " + left.count { it.grade == 3 } + " very bright (precipitate?)" + (edgeSug > 0 ? "; " + edgeSug + " at the edge not shown" : "") + "</font>" : "") + "</body></html>")
         s2.setSummary(cells.length + (cells.length == 1 ? " cell chosen" : " cells chosen")); s2.setDone(cells.length > 0 && !s2.expanded)
         boolean withResponse = !steps.blind && steps.found && selectionBasis.startsWith('Response')
-        acceptAllBtn.setText((withResponse ? "Accept responding and likely (" : "Accept likely (") + nLikely + ")"); acceptAllBtn.setEnabled(nLikely > 0)
+        acceptAllBtn.setText((withResponse ? "Accept responding and likely (" : "Accept likely (") + nLikely + ")"); acceptAllBtn.setEnabled(nLikely > 0); acceptAllBtn.setVisible(nLikely > 0)
         int nUnsure = left.count { it.grade == 2 && !(edgeBox.isSelected() && it.edge) } as int
         def hiddenNames = legendEntries.findAll { k, v -> hiddenKinds.contains(k) }.collect { k, v -> v.text }
         String hiddenNote = hiddenNames ? " <font color='#9A5B00'>Hidden on the picture now: " + hiddenNames.join(", ") + " (click them in the legend to show them).</font>" : ""
         addRespondersBtn.setVisible(steps.blind == true); addRespondersBtn.setEnabled(steps.blind == true && all.length > 0 && !detecting)
+        // one blue button: the next thing to press (cosmetic, so a window without these buttons carries on)
+        try {
+            String blue = detecting ? '' : measuredNow ? '' : (proposals.isEmpty() && all.length == 0) || (!steps.blind && proposals.any { it.blind }) ? 'suggest' : nLikely > 0 ? 'accept' : all.length > 0 ? 'continue' : 'suggest'
+            CalciumTheme.primary(suggestBtn, blue == 'suggest'); CalciumTheme.primary(acceptAllBtn, blue == 'accept'); CalciumTheme.primary(continueBtn, blue == 'continue')
+        } catch (Throwable ignored) { }
         if (detecting) sayNext("wait while the cell outlines are made (see the bar below).")
+        else if (measuredNow) sayNext("these " + cells.length + " cells are measured. Go on to <b>Analyze responses</b>, or change the cells here and measure again." + hiddenNote)
         else if (proposals.isEmpty() && all.length == 0) sayNext("press <b>Suggest cells automatically</b>, or draw the cells yourself." + hiddenNote)
         else if (!steps.blind && proposals.any { it.blind }) sayNext("press <b>Suggest cells again</b>: the outlines on the picture were made before the stimulus, not with the response." + hiddenNote)
-        else if (nLikely > 0) sayNext("press <b>" + (withResponse ? "Accept responding and likely" : "Accept likely") + " (" + nLikely + ")</b>. They become your cells." + hiddenNote)
-        else if (steps.blind) sayNext((nUnsure > 0 ? "click inside the dashed outlines that are real cells (" + nUnsure + " left). Then press " : "press ") + "<b>Add cells that respond…</b> for the cells that only show when they respond, or <b>Continue to measure</b>." + hiddenNote)
-        else sayNext((nUnsure > 0 ? "click inside the dashed outlines that are real cells (" + nUnsure + " left), then press " : "press ") + "<b>Continue to measure</b>." + hiddenNote)
+        else if (nLikely > 0) sayNext("press <b>" + (withResponse ? "Accept responding and likely" : "Accept likely") + " (" + nLikely + ")</b>." + hiddenNote)
+        else if (steps.blind) sayNext((nUnsure > 0 ? "click the dashed outlines that are real cells (" + nUnsure + " left). Then " : "") + "<b>Add cells that respond…</b> or <b>Continue to measure</b>." + hiddenNote)
+        else sayNext((nUnsure > 0 ? "click the dashed outlines that are real cells (" + nUnsure + " left), then " : "") + "<b>Continue to measure</b>." + hiddenNote)
         undoBtn.setEnabled(!cellEdits.history.isEmpty())
     } catch (Throwable t) { status.setText("" + t) }
 }
