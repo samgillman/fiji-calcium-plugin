@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.15.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.16.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -115,7 +115,7 @@ HOW TO USE IT
              thick cyan    responds on its own after the stimulus
              thin cyan     likely a cell (dim, smooth, brighter than its surroundings)
              grey dashes   unsure
-             orange        very bright: probably precipitate
+             red           very bright: probably precipitate
          Move the mouse over an outline to read the measurements behind its grade and to see its
          gray value over time. "Accept likely" takes every cyan outline at once; go
          through them afterwards and remove the wrong ones.

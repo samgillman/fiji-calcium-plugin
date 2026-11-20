@@ -118,7 +118,9 @@
    *  times, never from a typed round number: the stimulus is the time of the first frame after it; a baseline runs up to, not
    *  including, the frame after its last frame; the response window runs from its first frame to its last, both included.
    *  The hidden boxes named window-<i>-<key> hold those seconds exactly as before, so the protocol file is unchanged. */
-  const frameRule = (N) => [Math.max(1, N - 19), N];   // F₀, and a baseline of its own: the last 20 frames before the stimulus, or all of them when there are fewer
+  // F₀, and a baseline of its own: the last 20 frames before the stimulus, or all of them when there are fewer; frames in which the
+  // field moved are left out when at least 3 frames remain after them
+  const frameRule = (N) => { let a = Math.max(1, N - 19); const moved = movedWithin(a, N); if (moved.count && N - moved.after + 1 >= 3) a = moved.after; return [a, N]; };
   const wholeIn = (box) => { const text = box ? String(box.value).trim() : '', v = Number(text); return text !== '' && Number.isInteger(v) ? v : NaN; };
   const frameBox = (id, index) => $(id + '-' + index);
   function applyFrames(index) {
@@ -139,6 +141,12 @@
     put('Baseline_start_s', at(a)); put('Baseline_end_s', b >= 1 && b < n ? times[b] : null);
     put('Start_s', at(c)); put('End_s', at(d));
   }
+  /** Frames in which the field was displaced (found by the plugin when the recording was opened). */
+  const movedRuns = () => (S.info && S.info.motion && S.info.motion.moved > 0 ? S.info.motion.runs : []);
+  const movedText = () => 'frames ' + movedRuns().map((r) => (r[0] === r[1] ? r[0] : r[0] + '–' + r[1])).join(' and ');
+  const isMoved = (frame) => movedRuns().some((r) => frame >= r[0] && frame <= r[1]);
+  /** How many frames of a..b moved, and the first frame after the last of them inside a..b (0 when none moved). */
+  function movedWithin(a, b) { let count = 0, last = 0; for (let f = a; f <= b; f++) if (isMoved(f)) { count++; last = f; } return { count, after: count ? last + 1 : 0 }; }
   function applyAllFrames() { for (const section of document.querySelectorAll('.window-editor')) applyFrames(section.dataset.index); }
   /** Fills the frame boxes from the seconds of a loaded window, by the engine's own rule, and decides which rows follow the stimulus. */
   function showFrames(index, row) {
@@ -357,6 +365,15 @@
         else if (has('End_s') && v('End_s') > last + 1e-9) {   // a loaded setting that runs past the recording
           if (legacy) warn(label + 'the response window ends after the last frame. Cells may get no call.', { text: 'End at frame ' + n, run: setFrames([['resp-to', n]]) });
           else conflict(ids('resp-to'), 'resp-to-' + index, label + 'the response window ends after the last frame (' + seconds(+last.toFixed(2)) + '). No cell would get a call.', { text: 'End at frame ' + n, run: setFrames([['resp-to', n]]) });
+        }
+        if (!index && movedRuns().length) {
+          // The field moved: in those frames the outlines are not on the same cells. Baselines should leave them out.
+          const f0 = [Number(value.baseline_start), Number(value.baseline_end)], size = 'The field moved (about ' + S.info.motion.largest + ' px) during ' + movedText() + '. ';
+          const inF0 = Number.isInteger(f0[0]) && Number.isInteger(f0[1]) ? movedWithin(f0[0], f0[1]) : { count: 0 }, inBase = movedWithin(a, b), inResp = movedWithin(c, d);
+          const sameAsF0 = a === f0[0] && b === f0[1];
+          if (inF0.count) warn(size + 'F₀ frames ' + f0[0] + '–' + f0[1] + ' include ' + plural(inF0.count, 'moved frame') + '.', inF0.after <= f0[1] ? { text: 'Use ' + inF0.after + '–' + f0[1], run: () => { S.unlinked.add('f0'); $('f0-cell').dataset.linked = ''; exactInput($('baseline_start'), inF0.after); applyFrames(index); draftChanged(); } } : null);
+          if (inBase.count && !(sameAsF0 && inF0.count && fr('base-cell').dataset.linked === '1')) warn(size + 'Baseline frames ' + a + '–' + b + ' include ' + plural(inBase.count, 'moved frame') + '.', inBase.after <= b ? { text: 'Use ' + inBase.after + '–' + b, run: () => { S.unlinked.add('base-cell-' + index); fr('base-cell').dataset.linked = ''; fr('base-from').value = inBase.after; applyFrames(index); draftChanged(); } } : null);
+          if (inResp.count) warn(size + 'The response window includes ' + plural(inResp.count, 'moved frame') + ': values there are not of the same cells.');
         }
         if (!index) {
           // F₀ frames after the stimulus, and cells that were chosen on frames after it
@@ -847,7 +864,7 @@
     if (still() || !S.info.hasMovie || !Pic.shownFrame || Pic.error) return;
     const f = Pic.shownFrame, rest = S.results ? S.results.baselineFrames : (S.state && S.state.rest), ordinal = (n) => n + (n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : n % 10 === 1 && n % 100 !== 11 ? 'st' : 'th');
     const frames = rest ? rest[0] + '–' + rest[1] : '(preview)';
-    $('picture-note').textContent = 'Frame ' + f + (S.timer && Clock.step > 1 ? ' · playing every ' + ordinal(Clock.step) + ' frame' : '') + (S.timer && Clock.waitingSince && performance.now() - Clock.waitingSince > 250 ? ' · buffering' : '');
+    $('picture-note').textContent = 'Frame ' + f + (isMoved(f) ? ' · the field is displaced in this frame (' + movedText() + ' moved)' : '') + (S.timer && Clock.step > 1 ? ' · playing every ' + ordinal(Clock.step) + ' frame' : '') + (S.timer && Clock.waitingSince && performance.now() - Clock.waitingSince > 250 ? ' · buffering' : '');
     viewKey();
   }
   function showFrame(f, mode, bitmap) {

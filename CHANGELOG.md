@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.11.20.16
+
+- **Movement check.** When a recording is opened the plugin measures, frame by frame, how far the field is displaced from where it sits for most of the recording (on a picture reduced four times; shifts of 4 pixels or more count; about 3 s for 300 frames). Nothing is corrected. When frames moved, the Recording card, the log and `what_was_done.txt` say which ("The field moved (about 16 px) during frames 1–10").
+- Step 4 page: when F₀, the baseline or the response window include moved frames, the page says so and offers the frames after the movement in one click ("Use 11–20"). The automatic F₀ rule leaves moved frames out when at least 3 frames remain. The note under the movie says when the frame on screen is a displaced one.
+- The resting picture behind "Response in magenta" and "Change from baseline" is made without the moved frames, so a movement at the start no longer leaves edges on every later frame.
+- **Blind detection: outlines of the first picture that are never shown no longer hide outlines of the second.** The merge compared every outline of picture 2 with every outline of picture 1, including those the size rule drops afterwards. On one recording a single 6445-pixel outline hid six cells and an 11-pixel speck hid a 1731-pixel one. Now only picture-1 outlines that are shown (150 to 6000 pixels, not a strip on another outline) count. Re-run on saved outlines: 7 cell-sized outlines recovered on P2 Run2 capsaicin, 4 on P3 Run2, 4 on C2 Run1; none lost.
+- Very bright suggestions ("precipitate?") are drawn as a red 2-pixel line. The orange 1-pixel line ran along the bright edge it traced and could not be seen.
+- Not in this build: measurements of moved frames are still taken at the outlines' fixed places (no registration), and Fiji's own pictures (all frames, before the stimulus, response) still average moved frames. The message says so.
+
 ## 2026.11.20.15
 
 Step 4 page, stimulus timing:
