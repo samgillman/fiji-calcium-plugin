@@ -22,6 +22,10 @@ def duplicate=inside.clone()
 Roi[] duplicateSet=[inside,duplicate] as Roi[]
 Measurement.ensureIds(duplicateSet)
 assert Measurement.idFor(duplicateSet[1])!=id && Measurement.idFor(inside)==id
+// The ID comes from the outline itself, so the same outline has the same ID in another session, and another outline another ID.
+assert Measurement.idFor(new Roi(70,70,12,12))==id : 'a new outline with the same place and pixels gets the same ID'
+assert Measurement.idFor(new Roi(71,70,12,12))!=id && Measurement.idFor(new Roi(70,70,12,13))!=id
+assert Measurement.idFor(new ij.gui.OvalRoi(30,30,20,14))==Measurement.idFor(new ij.gui.OvalRoi(30,30,20,14)) && Measurement.idFor(new ij.gui.OvalRoi(30,30,20,14))==~/Cell_[a-f0-9]{32}/
 def steps=Steps.newInstance();steps.w=200;steps.h=200
 def registry=Measurement.registry([edge,inside] as Roi[],[inside] as Roi[],[0] as int[],steps,'Baseline frames 1-20')
 assert registry.size()==3 && registry[1][3]==false && registry[1][4]=='Edge exclusion policy'

@@ -35,6 +35,12 @@ The analysis input is the full-precision `gray_values_background_corrected_nativ
 
 Setup needs internet and disk space for R and downloaded packages. It is separate from Cellpose and stored under `.calcium-simpleca` in your home folder. A previous base-only R environment is not reused as protocol-ready: setup verifies the required R and jsonlite versions. Retry uses the package cache, and later analyses can run offline. Cancelled setup may leave partial installation directories, but it never marks them ready.
 
+## Stimulus timing
+
+Each stimulus has one **Stimulus added at** time. **Noise baseline to** and **Score response from** follow it by default and show "= stimulus time"; **Set separately** gives either its own value, and **Link to stimulus time** reverses that. **Use frame N** sets the stimulus time to the movie frame on screen, and linked fields move with it. A typed time that reads the same as a frame's time is stored as that frame's exact time.
+
+Under the fields, one line states the frames each window will use, by the engine's own rule: the noise baseline takes frames from its start up to, but not including, its end; scoring takes frames from its start to its end inclusive. The same windows are drawn under the frame slider. **F₀ frames** set the zero for ΔF/F₀ and are separate from the noise baseline, which sets how large a rise must be. When two time fields disagree, the message sits beside the field to change and offers the repair.
+
 ## Response protocols
 
 Each stimulus has its own response rule: the primary stimulus and, optionally, one named positive control. ATP, capsaicin, KCl, ionomycin or another control name is metadata; the software does not infer stimulation concentration or an optimal threshold from that name. This version supports one primary window and at most one control window. The browser keeps timing and a rule summary visible; expand **Adjust the response rule** for detailed threshold, persistence and noise settings. **Protocol name, files and overrides** and **Experiment details and diagnostics** also expand when needed. In the native fallback, scroll the protocol table horizontally to inspect every setting. Unedited suggested values retain their underlying precision.

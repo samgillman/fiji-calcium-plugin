@@ -1,4 +1,4 @@
-// Calcium imaging: cells step by step                                                    version 2026.11.20.6
+// Calcium imaging: cells step by step                                                    version 2026.11.20.17
 // One plugin for the whole job on one recording:
 //   1. choose the recording (already open in Fiji, or a file) and a folder for the results
 //   2. the plugin makes the cells visible: all-frames picture, response (found automatically, if there is one), and a
@@ -64,7 +64,19 @@ class CalciumSteps {
     static int ROI_MARGIN = 4            // other ROIs, widened by this many pixels, are never background
     static int MIN_PIXELS = 150          // fewer usable pixels: the band is doubled once; still fewer: no background
     static int SUGGEST_MIN_AREA = 150, SUGGEST_MAX_AREA = 6000   // automatic outlines outside this size (pixels) are not shown
-    static double SUGGEST_BRIGHT = 12    // automatic outlines brighter than this on average are shown in orange: probably precipitate
+    static double SUGGEST_BRIGHT = 12    // automatic outlines brighter than this on average are shown in red: probably precipitate
+    // Blind selection: cells are found and accepted on frames before the stimulus only, so whether a cell is chosen cannot depend on its response.
+    // Detection pictures for Cellpose: the pre-stimulus picture shown twice, from 0 to BLIND_CAP and from 0 to BLIND_CAP_HIGH gray
+    // levels, brighter pixels capped. The low cap keeps precipitate and rounded cells from flattening the dim cells; the high cap
+    // keeps the brighter cells whole. All outlines from the first picture are kept; an outline from the second is added when it
+    // shares less than BLIND_MERGE_OVERLAP of the smaller outline's area with every outline from the first.
+    // Tested on four ATP recordings of 18 Nov 2026 (real Cellpose, 20 Nov): of the response-assisted outlines that could be cells,
+    // the two pictures together found 68 / 95 / 55 / 62 % (C2 Run1 / C3 Run2 / P2 Run1 / P3 Run2), against 46 / 94 / 34 / 50 % with
+    // cap 2 alone and 57 / 86 / 45 / 36 % with cap 8 alone; no single cap was best on all four, and a cap taken from each picture's
+    // own 90th percentile was never better than the best fixed cap. Cost: 25-55 % more suggestions to review.
+    static double BLIND_CAP = 2
+    static double BLIND_CAP_HIGH = 8
+    static double BLIND_MERGE_OVERLAP = 0.10
     // -------------------------------------------------------------------
 
     ImagePlus movie
@@ -76,20 +88,39 @@ class CalciumSteps {
     int[] lastBackgroundPixels = new int[0]
     static double KEEP_LEVEL = 1.0       // "every cell kept" table: a cell whose lowest 20-frame average (before the response) is below this is lifted to it
     ImagePlus allPic, respPic, colourPic
+    /** The all-frames picture with the pixels used as the cells' background in blue (no outlines): made at measuring, shown by the Step 4 page. */
+    ImagePlus backgroundPic
     boolean[] bright             // widened bright objects
     boolean found = false; int onset, p0, p1, b0, b1; double share; String why = ""
+    /** Shift of every frame (CalciumMotion.shifts), or null when the movement could not be checked. */
+    double[][] motionShifts
+    /** What the shifts mean now: counted from the frames the cells are chosen on while choosing blind, else from where the field
+     *  sits for most of the recording. Null when the movement could not be checked. */
+    Map getMotion() { motionShifts == null ? null : CalciumMotion.summary(motionShifts, blind ? blindFirst : 0, blind ? blindLast : 0) }
+    /** Says the movement in the log once per reference, so the record matches what the Recording card shows. */
+    String motionSaid = null
+    void sayMotion() {
+        String now = CalciumMotion.sentence(getMotion())
+        if (now && now != motionSaid) say("Movement: " + now + " Outlines stay where they were drawn; nothing was corrected.")
+        motionSaid = now
+    }
     boolean looked = false             // whether the response has been looked for, at the start or later from Step 2
     List<String> log = []
     Roi[] alsoAvoid = new Roi[0]         // outlines that are not measured (cells at the edge that are left out) but must never serve as background
     String edgeNote = ""                 // what was done about cells at the picture's edge, for the record of steps
+    boolean blind = false                // cells are being chosen blind: picture, suggestions and grades come from frames blindFirst..blindLast only
+    int blindFirst = 0, blindLast = 0
+    float[] blindPic                     // frames blindFirst..blindLast, processed like the all-frames picture (shown, and used to grade suggestions)
 
     void say(String s) { log.add(s) }
 
     /** Steps 1-2: pictures. The movie is only read. */
     void prepare(ImagePlus imp, boolean lookForResponse) {
         movie = imp; n = imp.getStackSize(); w = imp.getWidth(); h = imp.getHeight()
-        say("Calcium imaging plugin, version 2026.11.20.6")
+        say("Calcium imaging plugin, version 2026.11.20.17")
         say("Recording: " + imp.getTitle() + " (" + n + " frames, " + w + " x " + h + ", " + imp.getBitDepth() + "-bit)")
+        // Did the field move? Nothing is corrected; moved frames are named so that they can be kept out of baselines.
+        try { motionShifts = CalciumMotion.shifts(imp.getStack(), n) } catch (Throwable ignored) { motionShifts = null }
         ImagePlus sum = ZProjector.run(imp, "sum")                                   // Image > Stacks > Z Project, Sum Slices
         FloatProcessor avg = (FloatProcessor) sum.getProcessor().convertToFloat()
         avg.multiply(1.0d / n)                                                       // Process > Math > Divide by the number of frames
@@ -151,6 +182,51 @@ class CalciumSteps {
         ci.setC(1); ci.setCalibration(movie.getCalibration().copy())
         return ci
     }
+    /** The all-frames colour picture as one ordinary colour photo, so every program shows it in colour (the window's own
+     *  picture is a three-channel stack, which only ImageJ shows coloured). Green = all-frames picture 0..SHOW_MAX; red is
+     *  added where it is BRIGHT_MIN..BRIGHT_MAX, so very bright objects turn yellow; magenta = the response picture
+     *  RESP_MIN..RESP_MAX when a response was found. The same display ranges as the window. */
+    ImagePlus colourPhoto() {
+        float[] g = (float[]) allPic.getProcessor().getPixels()
+        float[] m = found ? (float[]) respPic.getProcessor().getPixels() : null
+        int[] rgb = new int[w * h]
+        for (int i = 0; i < rgb.length; i++) {
+            int gv = (int) Math.max(0, Math.min(255, Math.round(g[i] / SHOW_MAX * 255)))
+            int rv = (int) Math.max(0, Math.min(255, Math.round((g[i] - BRIGHT_MIN) / (BRIGHT_MAX - BRIGHT_MIN) * 255)))
+            int mv = m == null ? 0 : (int) Math.max(0, Math.min(255, Math.round((m[i] - RESP_MIN) / (RESP_MAX - RESP_MIN) * 255)))
+            rgb[i] = (Math.min(255, rv + mv) << 16) | (gv << 8) | mv
+        }
+        ImagePlus photo = new ImagePlus("colour_" + movie.getTitle(), new ColorProcessor(w, h, rgb))
+        photo.setCalibration(movie.getCalibration().copy())
+        return photo
+    }
+    /** The colour photo with the measured cells outlined in white and, below it, a key to the colours and a scale bar. */
+    ImagePlus colourPhotoWithCells(Roi[] cells) {
+        int keyHeight = 96
+        ColorProcessor sheet = new ColorProcessor(w, h + keyHeight); sheet.setColor(Color.black); sheet.fill()
+        sheet.insert(colourPhoto().getProcessor(), 0, 0)
+        ImagePlus outlined = new ImagePlus("outlined", sheet); Overlay ov = new Overlay()
+        for (Roi c : cells) { Roi r = (Roi) c.clone(); r.setPosition(0); r.setStrokeColor(Color.white); r.setStrokeWidth(2); r.setFillColor(null); ov.add(r) }
+        outlined.setOverlay(ov)
+        ImageProcessor ip = outlined.flatten().getProcessor()
+        ip.setAntialiasedText(true); ip.setFont(new java.awt.Font("SansSerif", java.awt.Font.PLAIN, 20))
+        List<Color> colours = [Color.green, Color.yellow]; List<String> texts = ["cells: average of all " + n + " frames", "very bright objects (precipitate)"]
+        if (found) { colours << Color.magenta; texts << ("brightened after the stimulus (near frame " + onset + ")") }
+        int x = 14, y = h + 12
+        for (int i = 0; i < texts.size(); i++) {
+            int width = 26 + ip.getStringWidth(texts[i]) + 26
+            if (x + width > w - 8 && x > 14) { x = 14; y += 28 }
+            ip.setColor(colours[i]); ip.fillRect(x, y + 2, 18, 18); ip.setColor(Color.white); ip.drawString(texts[i], x + 26, y + 22); x += width
+        }
+        x = 14; y += 28
+        ip.setColor(Color.white); ip.setLineWidth(2); ip.drawRect(x, y + 2, 18, 18); ip.drawString("outlines: the " + cells.length + " cells measured", x + 26, y + 22)
+        double pixel = movie.getCalibration().pixelWidth; String unit = movie.getCalibration().getUnit()
+        if (pixel > 0 && unit != null && (unit.startsWith("micro") || unit == "um" || unit == "µm" || unit == "\u00B5m")) {   // a 100 micrometre bar at the right
+            int bar = (int) Math.round(100d / pixel)
+            if (bar < w - 40) { ip.fillRect(w - 14 - bar, y + 8, bar, 6); String label = "100 \u00B5m"; ip.drawString(label, w - 14 - bar + (int) ((bar - ip.getStringWidth(label)) / 2), y + 40) }
+        }
+        return new ImagePlus("colour picture with the cells", ip)
+    }
     /** Shows the response in magenta on the colour picture, looking for it first if needed. False when there is none. */
     boolean showResponse() {
         if (!looked) findResponse()
@@ -161,14 +237,39 @@ class CalciumSteps {
         return true
     }
     void hideResponse() { if (colourPic.getNChannels() >= 3) { ((CompositeImage) colourPic).setActiveChannels("110"); colourPic.updateAndDraw() } }
-    /** A picture for choosing cells from frames first to last only, processed like the all-frames picture. Display only. */
-    float[] baselinePicture(int first, int last) {
-        ImagePlus preview = ZProjector.run(movie, "avg", first, last)
-        ImagePlus picture = new ImagePlus("baseline_" + movie.getTitle(), preview.getProcessor().convertToFloat())
+    /** A picture from frames first to last only, made like the all-frames picture: Z Project Sum Slices, Divide by the number
+     *  of frames, Subtract Background, Gaussian Blur. */
+    float[] framesPicture(int first, int last) {
+        ImagePlus sum = ZProjector.run(movie, "sum", first, last)
+        FloatProcessor avg = (FloatProcessor) sum.getProcessor().convertToFloat()
+        avg.multiply(1.0d / (last - first + 1))
+        ImagePlus picture = new ImagePlus("before_stimulus_" + movie.getTitle(), avg)
         IJ.run(picture, "Subtract Background...", "rolling=" + (int) BALL_RADIUS)
         IJ.run(picture, "Gaussian Blur...", "sigma=" + BLUR_PICTURE)
         return (float[]) picture.getProcessor().getPixels()
     }
+    /** The last frame before the stimulus as the plugin estimates it: the end of the frames before the rise, which stop well
+     *  ahead of it, so early responders are not in them. 0 when no response was found. Only the time is used, not which cells rose. */
+    int estimatedLastBeforeStimulus() { return found ? b1 : 0 }
+    /** Blind selection from here on: the picture shows frames first..last only, the response channel is emptied, and new
+     *  suggestions are found and graded on that picture without the response. Measurements are not affected. */
+    void startBlind(int first, int last) { startBlind(first, last, framesPicture(first, last)) }
+    /** The same with the picture already made (framesPicture can run off the window's thread; this part changes the window). */
+    void startBlind(int first, int last, float[] picture) {
+        blindPic = picture; blindFirst = first; blindLast = last; blind = true
+        if (colourPic != null) {
+            if (colourPic.getNChannels() >= 3) Arrays.fill((float[]) colourPic.getStack().getPixels(3), 0f)   // nothing of the response stays in the window
+            showPicture(blindPic); hideResponse()
+        }
+        log.removeAll { String s -> s.startsWith("Blind selection:") }
+        say("Blind selection: cells are chosen on frames " + first + "-" + last + " only (before the stimulus" + (found ? "; the rise starts near frame " + onset : "") + "). Picture: Z Project Sum Slices " + first + "-" + last + ", Divide " + (last - first + 1) + ", Subtract Background rolling=" + (int) BALL_RADIUS + ", Gaussian Blur sigma=" + BLUR_PICTURE + "; the colour picture shows it in red and green, with nothing in magenta. Cellpose gets this picture only (" + blindRecipe() + "), never the response; suggestions are graded on shape, size and brightness in it; traces are not shown while choosing.")
+    }
+    void stopBlind() { blind = false }
+    String blindBasis() { return "Pre-stimulus, blind (frames " + blindFirst + "-" + blindLast + ")" }
+    String blindRecipe() {
+        return "shown to it twice, from 0 to " + levels(BLIND_CAP) + " and from 0 to " + levels(BLIND_CAP_HIGH) + " gray levels with brighter pixels capped; all outlines from the first picture are kept, and an outline from the second is added when it shares less than " + (int) Math.round(BLIND_MERGE_OVERLAP * 100) + " % of the smaller outline's area with every outline from the first"
+    }
+    static String levels(double v) { return v == Math.rint(v) ? String.valueOf((long) v) : String.valueOf(v) }
     /** Shows a picture (the all-frames picture, or a baseline picture) in the red and green channels of the colour picture. */
     void showPicture(float[] picture) {
         for (int c = 1; c <= 2; c++) { float[] target = (float[]) colourPic.getStack().getPixels(c); System.arraycopy(picture, 0, target, 0, target.length) }
@@ -326,19 +427,23 @@ class CalciumSteps {
     /** Evidence about a suggested outline, all measured, nothing guessed.
      *  Returns [grade, area, mean, brightShare, contrast, riseInside, riseAround, touchesEdge].
      *  grade 0 = responds on its own, 1 = likely a cell, 2 = unsure, 3 = probably precipitate, 4 = wrong size (not shown).
-     *  On four reviewed recordings (1396 outlines) the share accepted as cells was 83 %, 80 %, 41 %, 12 % and 2 %. */
-    double[] grade(Roi roi) {
+     *  On four reviewed recordings (1396 outlines) the share accepted as cells was 83 %, 80 %, 41 %, 12 % and 2 %.
+     *  (Those shares were measured before 2026.11.20.9, when grade 0 did not yet include responding outlines with very bright parts.)
+     *  Blind (cells chosen before the stimulus): brightness comes from the pre-stimulus picture and the response is not used, so grade 0 never occurs. */
+    double[] grade(Roi roi) { return grade(roi, blind) }
+    double[] grade(Roi roi, boolean blindGrade) {
+        float[] pic = blindGrade && blindPic != null ? blindPic : flat
+        float[] rise = blindGrade ? null : respDiff
         int[] px = pixelsOf(roi); int a = px.length
         if (a == 0) return [4d, 0d, 0d, 0d, 0d, 0d, 0d, 0d] as double[]
-        boolean[] in = new boolean[w * h]; for (int i : px) in[i] = true
         boolean[] near = new boolean[w * h]; for (int i : pixelsOf(RoiEnlarger.enlarge(roi, 3))) near[i] = true
-        double s = 0, sb = 0, sr = 0; int nb = 0; boolean edge = false
-        for (int i : px) { s += flat[i]; if (flat[i] > BRIGHT_ABOVE) nb++; if (respDiff != null) sr += respDiff[i]; int x = i % w, y = (int) (i / w); if (x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2) edge = true }
+        double s = 0, sr = 0; int nb = 0; boolean edge = false
+        for (int i : px) { s += pic[i]; if (pic[i] > BRIGHT_ABOVE) nb++; if (rise != null) sr += rise[i]; int x = i % w, y = (int) (i / w); if (x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2) edge = true }
         double mean = s / a, brightShare = nb / (double) a, riseIn = sr / a
         double ringSum = 0, ringRise = 0; int nr = 0
-        for (int i : pixelsOf(RoiEnlarger.enlarge(roi, 12))) if (!near[i]) { ringSum += flat[i]; if (respDiff != null) ringRise += respDiff[i]; nr++ }
+        for (int i : pixelsOf(RoiEnlarger.enlarge(roi, 12))) if (!near[i]) { ringSum += pic[i]; if (rise != null) ringRise += rise[i]; nr++ }
         double contrast = nr > 0 ? mean - ringSum / nr : 0, riseRing = nr > 0 ? ringRise / nr : 0
-        boolean own = respDiff != null && riseIn > 0.5d && riseIn > 1.25d * Math.max(riseRing, 0.05d)
+        boolean own = rise != null && riseIn > 0.5d && riseIn > 1.25d * Math.max(riseRing, 0.05d)
         int g = 2
         boolean precip = mean > SUGGEST_BRIGHT || brightShare >= 0.25d
         if (precip) g = 3
@@ -346,6 +451,11 @@ class CalciumSteps {
             if (brightShare < 0.02d && contrast > 0.2d && !edge && mean <= BRIGHT_ABOVE) g = 1
             if (own && brightShare < 0.10d && mean <= BRIGHT_ABOVE) g = 0
         }
+        // An outline that rises on its own at the stimulus is a cell even when part of it is very bright: precipitate does not
+        // respond. Before 2026.11.20.9 such cells were graded unsure or precipitate and left out by "Accept likely" (on P3 Run2,
+        // 17 of 58 clearly responding areas had no chosen cell; with this rule 6, of which 4 lie at the picture's edge). The rise must also be at least 5 % of the outline's brightness, so
+        // flicker of a very bright lump does not count.
+        if (g != 0 && own && riseIn >= 0.05d * mean) g = 0
         if (a < SUGGEST_MIN_AREA || a > SUGGEST_MAX_AREA) g = 4
         return [(double) g, (double) a, mean, brightShare, contrast, riseIn, riseRing, edge ? 1d : 0d] as double[]
     }
@@ -383,9 +493,92 @@ class CalciumSteps {
         return true
     }
 
-    ImagePlus outlinePicture() {
+    /** Blind: the pre-stimulus picture alone (see blindDetectionPicture). Otherwise the all-frames picture, with the response when one was found. */
+    ImagePlus outlinePicture() { return blind ? blindOutlinePicture() : outlinePicture(found) }
+    /** The response-assisted picture, used once by the sensitivity check after blind selection. */
+    ImagePlus responseOutlinePicture() { return outlinePicture(true) }
+    /** A picture Cellpose gets in blind mode, in 0..1: pre-stimulus frames only, never the response, from 0 to cap gray levels
+     *  with brighter pixels capped (BLIND_CAP and BLIND_CAP_HIGH; see blindOutlinesToAdd). For detection only; measurements are
+     *  made on the raw movie. */
+    float[] blindDetectionPicture() { return blindDetectionPicture(BLIND_CAP) }
+    float[] blindDetectionPicture(double cap) {
+        float[] v = new float[blindPic.length]
+        for (int i = 0; i < v.length; i++) v[i] = (float) Math.max(0d, Math.min(1d, blindPic[i] / cap))
+        return v
+    }
+    ImagePlus blindOutlinePicture() { return blindOutlinePicture(BLIND_CAP) }
+    ImagePlus blindOutlinePicture(double cap) {
+        float[] g = blindDetectionPicture(cap); int[] rgb = new int[w * h]
+        for (int i = 0; i < rgb.length; i++) rgb[i] = ((int) Math.round(g[i] * 255)) << 8
+        return new ImagePlus("for_automatic_outlines_blind", new ColorProcessor(w, h, rgb))
+    }
+    /** An outline too thin to be a cell body. Cellpose sometimes draws a strip along the rim of a cell it has already outlined
+     *  (seen 20 Nov 2026: a 3-pixel-wide crescent under a cell, accepted as a second cell). "Thin" is a mean width under
+     *  THIN_WIDTH pixels (2 x area / perimeter, which is the radius of a round outline) or a roundness under THIN_ROUNDNESS
+     *  (4 pi area / perimeter^2). Measured on the reviewed and audited outlines of four recordings: none is this thin. */
+    static final double THIN_WIDTH = 4d, THIN_ROUNDNESS = 0.2d
+    static boolean tooThin(Roi roi) {
+        ij.process.FloatPolygon p = roi.getFloatPolygon(); int n = p.npoints
+        if (n < 3) return true
+        double area = 0d, length = 0d
+        for (int i = 0; i < n; i++) {
+            int j = (i + 1) % n
+            area += (double) p.xpoints[i] * (double) p.ypoints[j] - (double) p.xpoints[j] * (double) p.ypoints[i]
+            length += Math.hypot((double) p.xpoints[j] - (double) p.xpoints[i], (double) p.ypoints[j] - (double) p.ypoints[i])
+        }
+        area = Math.abs(area) / 2d
+        if (length <= 0d || area <= 0d) return true
+        return 2d * area / length < THIN_WIDTH || 4d * Math.PI * area / (length * length) < THIN_ROUNDNESS
+    }
+    /** A thin outline lying along another outline's edge: at least THIN_ON_RIM of its pixels are within THIN_REACH pixels of
+     *  the other outline. Such a strip is the other cell's rim, not a cell of its own. */
+    static final int THIN_REACH = 5
+    static final double THIN_ON_RIM = 0.6d
+    static boolean alongAnother(Roi thin, List<Roi> others) {
+        Rectangle tb = thin.getBounds(); Rectangle grown = new Rectangle((int) tb.getX() - THIN_REACH, (int) tb.getY() - THIN_REACH, (int) tb.getWidth() + 2 * THIN_REACH, (int) tb.getHeight() + 2 * THIN_REACH)
+        java.awt.Point[] points = thin.getContainedPoints()
+        if (points.length == 0) return false
+        int[][] reach = [[0, 0], [THIN_REACH, 0], [-THIN_REACH, 0], [0, THIN_REACH], [0, -THIN_REACH], [3, 3], [3, -3], [-3, 3], [-3, -3]] as int[][]
+        for (Roi other : others) {
+            if (other.is(thin) || !other.getBounds().intersects(grown)) continue
+            int near = 0
+            for (java.awt.Point q : points) {
+                int x = (int) q.getX(), y = (int) q.getY()
+                for (int[] step : reach) if (other.contains(x + step[0], y + step[1])) { near++; break }
+            }
+            if (near >= THIN_ON_RIM * points.length) return true
+        }
+        return false
+    }
+    /** Blind detection runs Cellpose on two pictures (0 to BLIND_CAP and 0 to BLIND_CAP_HIGH gray levels). Every outline from the
+     *  first is kept. An outline from the second is added when, for every outline from the first, the pixels they share are fewer
+     *  than BLIND_MERGE_OVERLAP of the smaller one's pixels. Returns the positions (in second) of the outlines to add. */
+    static List<Integer> blindOutlinesToAdd(List<Roi> first, List<Roi> second, int width) {
+        List<Set<Integer>> firstPixels = new ArrayList<Set<Integer>>()
+        for (Roi r : first) firstPixels.add(pixelSet(r, width))
+        List<Integer> add = new ArrayList<Integer>()
+        for (int j = 0; j < second.size(); j++) {
+            Roi s = second.get(j); Set<Integer> sp = pixelSet(s, width); Rectangle sb = s.getBounds()
+            boolean same = false
+            for (int i = 0; i < first.size() && !same; i++) {
+                if (!first.get(i).getBounds().intersects(sb)) continue
+                Set<Integer> fp = firstPixels.get(i)
+                int shared = 0
+                for (Integer p : sp) if (fp.contains(p)) shared++
+                same = shared >= BLIND_MERGE_OVERLAP * Math.min(sp.size(), fp.size())
+            }
+            if (!same) add.add(j)
+        }
+        return add
+    }
+    static Set<Integer> pixelSet(Roi r, int width) {
+        Set<Integer> s = new HashSet<Integer>()
+        for (java.awt.Point q : r.getContainedPoints()) s.add(((int) q.getY()) * width + (int) q.getX())
+        return s
+    }
+    ImagePlus outlinePicture(boolean withResponse) {
         float[] g = (float[]) allPic.getProcessor().getPixels()
-        float[] m = found ? (float[]) respPic.getProcessor().getPixels() : null
+        float[] m = withResponse && found ? (float[]) respPic.getProcessor().getPixels() : null
         int[] rgb = new int[w * h]
         for (int i = 0; i < rgb.length; i++) {
             int gv = (int) Math.max(0, Math.min(255, Math.round(g[i] / SHOW_MAX * 255)))
@@ -494,7 +687,11 @@ class CalciumSteps {
         for (Roi c : cells) { Roi r = (Roi) c.clone(); r.setPosition(0); r.setStrokeColor(Color.yellow); r.setFillColor(null); ov.add(r) }
         chk.setOverlay(ov); ImagePlus flat = chk.flatten()
         IJ.saveAs(flat, "PNG", prefix + "cells_and_background_areas.png")
-        IJ.saveAsTiff(allPic, prefix + "picture_all_frames.tif"); IJ.saveAsTiff(colourComposite(false), prefix + "picture_colour.tif")   // the all-frames colour picture, whatever view is on screen
+        ImagePlus areas = new ImagePlus("background areas", base.convertToByte(true).convertToRGB()); Overlay only = new Overlay(); only.add(blueLayer(bg, -1)); areas.setOverlay(only); backgroundPic = areas.flatten()
+        IJ.saveAsTiff(allPic, prefix + "picture_all_frames.tif")
+        // the all-frames colour picture, whatever view is on screen: one colour photo, and the same with the cells outlined and a key
+        IJ.saveAsTiff(colourPhoto(), prefix + "picture_colour.tif")
+        IJ.saveAs(colourPhotoWithCells(cells), "PNG", prefix + "picture_colour_cells_outlined.png")
         say("Legacy screening rise (not a stimulus responder call): highest 5-frame average after frames " + s0 + "-" + s1 + " at least 5 baseline standard deviations above their mean: " + lastClear + " of " + nc + " cells. Use Step 4 for protocol-defined responder counts. Mean rise " + String.format(Locale.US, "%.2f", lastMeanRise) + " gray levels.")
         if (lastDim > 0) say(lastDim + " cells are not brighter than their own background in frames 1-20. Step 4 retains their registered records and reports technical exclusions separately from nonresponders.")
         say("Compatibility export for_SimpleCa_every_cell_kept.csv adds constants to " + lastLifted + " dim traces. These offsets alter fractional response thresholds. Do not use this export for fractional amplitudes or responder percentages. Step 4 uses full-precision, unlifted fluorescence.")
@@ -509,9 +706,66 @@ class CalciumSteps {
     }
 }
 
+/** Sensitivity check after blind selection. Response-assisted detection is run once, for comparison only, and each of its
+ *  outlines is looked up among the blind suggestions. Found = a blind outline contains its centre, or it contains the centre of
+ *  a blind outline (the rule the window uses to match accepted cells to suggestions). The comparison outlines are never added
+ *  to the cells or measured. */
+class CalciumSensitivity {
+    static final List<String> GRADES = ["responds on its own", "likely a cell", "unsure", "very bright: probably precipitate"]
+    static Set<Long> pointsOf(Roi r) { Set<Long> s = new HashSet<Long>(); r.getContainedPoints().each { java.awt.Point p -> s.add((((long) (int) p.getY()) << 32) | (((int) p.getX()) & 0xffffffffL)) }; s }
+    /** Both lists hold suggestions as the window keeps them: maps with roi, grade, cx, cy and edge. */
+    static Map compare(List assisted, List blindSuggestions, Roi[] measured, boolean leaveOutEdge) {
+        def counted = assisted.findAll { !(leaveOutEdge && it.edge) }
+        def rows = []
+        counted.eachWithIndex { a, int i ->
+            Roi r = (Roi) a.roi; Rectangle rb = r.getBounds()
+            boolean found = blindSuggestions.any { b -> ((Roi) b.roi).contains((int) a.cx, (int) a.cy) || r.contains((int) b.cx, (int) b.cy) }
+            double best = 0; Set<Long> mine = null
+            blindSuggestions.each { b ->
+                Roi o = (Roi) b.roi
+                if (!o.getBounds().intersects(rb)) return
+                if (mine == null) mine = pointsOf(r)
+                Set<Long> theirs = pointsOf(o); int both = 0; theirs.each { if (mine.contains(it)) both++ }
+                double iou = both / (double) (mine.size() + theirs.size() - both); if (iou > best) best = iou
+            }
+            boolean inCells = measured.any { Roi c -> c.contains((int) a.cx, (int) a.cy) || r.contains((int) c.getBounds().getCenterX(), (int) c.getBounds().getCenterY()) }
+            rows << [n: i + 1, grade: (int) a.grade, x: (int) a.cx, y: (int) a.cy, area: (int) (a.ev != null ? a.ev[1] : r.getContainedPoints().length), found: found, overlap: best, inCells: inCells, roi: r]
+        }
+        def cellLike = rows.findAll { it.grade <= 2 }
+        return [rows: rows, cellLike: cellLike.size(), found: cellLike.count { it.found }, bright: rows.count { it.grade == 3 }, brightFound: rows.count { it.grade == 3 && it.found },
+                byGrade: (0..3).collect { int g -> [rows.count { it.grade == g }, rows.count { it.grade == g && it.found }] },
+                inCells: cellLike.count { it.inCells }, blindShown: blindSuggestions.count { !(leaveOutEdge && it.edge) }, assistedShown: assisted.size(), edgeLeftOut: assisted.size() - counted.size()]
+    }
+    static String pct(int a, int b) { b > 0 ? Math.round(100d * a / b) + " %" : "-" }
+    /** Plain-language report, for the record of steps and the result line. */
+    static String report(Map m, String how) {
+        int t = (int) m.cellLike, f = (int) m.found
+        def by = (0..2).collect { int g -> def c = m.byGrade[g]; GRADES[g] + " " + c[1] + " of " + c[0] }.join("; ")
+        return "Sensitivity check (response-assisted detection run once for comparison; " + how + "; its outlines were not added to the cells and were not measured): " +
+            t + " response-assisted outlines could be cells (graded responds, likely or unsure" + (((int) m.edgeLeftOut) > 0 ? ", not at the edge" : "") + "). " +
+            "The blind detection also found " + f + " of them (" + pct(f, t) + ") and missed " + (t - f) + ". By grade: " + by + ". " +
+            "Very bright (probably precipitate): " + m.brightFound + " of " + m.bright + " found. " +
+            m.inCells + " of the " + t + " coincide with a measured cell. Blind detection made " + m.blindShown + " suggestions. " +
+            "Found = a blind outline contains its centre or it contains the centre of a blind outline. " +
+            "How to read it: if most are found, the blind picture picks up dim cells well. If many are missed, blind detection misses cells that are dim at rest; " +
+            "% responding is still unbiased if those cells respond at the same rate as the others, but that assumption then carries weight and should be stated with the result."
+    }
+    static void save(Map m, String prefix) {
+        def csv = new StringBuilder("outline,grade_with_response,x,y,area_pixels,found_by_blind_detection,best_overlap_with_a_blind_outline,coincides_with_a_measured_cell\n")
+        m.rows.each { r -> csv.append(String.format(Locale.US, "%d,%s,%d,%d,%d,%s,%.2f,%s\n", r.n, GRADES[(int) r.grade], r.x, r.y, r.area, r.found ? "yes" : "no", r.overlap, r.inCells ? "yes" : "no")) }
+        new File(prefix + "sensitivity_check.csv").setText(csv.toString(), "UTF-8")
+        new ZipOutputStream(new FileOutputStream(prefix + "sensitivity_check_missed_RoiSet.zip")).withCloseable { ZipOutputStream z ->
+            m.rows.findAll { !it.found && (int) it.grade <= 2 }.each { r ->   // the missed ones that could be cells, as counted in the report
+                Roi o = (Roi) ((Roi) r.roi).clone(); String name = String.format(Locale.US, "missed_%03d_%s", r.n, GRADES[(int) r.grade].replaceAll(/[^A-Za-z]+/, "_"))
+                o.setName(name); o.setPosition(0); z.putNextEntry(new ZipEntry(name + ".roi")); z.write(RoiEncoder.saveAsByteArray(o)); z.closeEntry()
+            }
+        }
+    }
+}
+
 /** Release lookup sends no recording data. Installation requires an explicit button click. */
 class CalciumRelease {
-    static final String VERSION = "2026.11.20.6"
+    static final String VERSION = "2026.11.20.17"
     static final String REPOSITORY = "https://github.com/samgillman/fiji-calcium-plugin"
     static final String API = "https://api.github.com/repos/samgillman/fiji-calcium-plugin/releases/latest"
     static final String ASSET = "Calcium_Imaging_Fiji_Plugin.zip"
@@ -749,9 +1003,12 @@ class CalciumOutlineTask {
     void checkCancelled() {
         if (cancelled || Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException("Detection cancelled")
     }
+    // Blind detection runs Cellpose twice; each run's 0-84 % is drawn in its own part of the bar (partFrom + value x partShare).
+    int partFrom = 0; double partShare = 1; int lastAsked = 0
     synchronized void report(int value, String what, String extra = "") {
         checkCancelled()
-        percent = Math.max(percent, Math.min(99, value))
+        lastAsked = value
+        percent = Math.max(percent, Math.min(99, (int) Math.round(partFrom + value * partShare)))
         if (stage != what) stageStarted = System.nanoTime()
         if (stage != what || detail != extra) remember(what + (extra ? ": " + extra : ""))
         stage = what; detail = extra
@@ -862,6 +1119,8 @@ class CalciumTheme {
     }
     static javax.swing.JButton button(String text, boolean primary = false) { def b = new javax.swing.JButton(text); style(b, primary); b }
     static void style(javax.swing.AbstractButton b, boolean primary) { b.setUI(new CalciumButtonUI(primary: primary)) }
+    /** Makes a button the filled blue one (the next thing to press), or an ordinary one again. */
+    static void primary(javax.swing.AbstractButton b, boolean on) { if (b.getUI() instanceof CalciumButtonUI && ((CalciumButtonUI) b.getUI()).primary != on) { ((CalciumButtonUI) b.getUI()).primary = on; b.setFont(font(on ? java.awt.Font.BOLD : java.awt.Font.PLAIN)); b.revalidate(); b.repaint() } }
     /** Marks a button as the current option of a group, or not. */
     static void choose(javax.swing.AbstractButton b, boolean on) { if (b.getUI() instanceof CalciumButtonUI) { ((CalciumButtonUI) b.getUI()).chosen = on; b.repaint() } }
     static javax.swing.JLabel label(String text, Color colour = INK, int style = java.awt.Font.PLAIN, float delta = 0f) {
@@ -1080,6 +1339,7 @@ class CalciumOutlineProgress extends javax.swing.JPanel {
         task.began = started
         task.report(0, "Preparing cell detection", "Checking Cellpose and looking for saved outlines.")
         bar.setValue(0); cancelButton.setText("Cancel"); cancelButton.setEnabled(true)
+        bar.setVisible(true); cancelButton.setVisible(true); roomFor(118)
         setVisible(true); render(); clock.start()
         return task
     }
@@ -1119,6 +1379,15 @@ class CalciumOutlineProgress extends javax.swing.JPanel {
         latest.set(task.snapshot() + [percent: ok ? 100 : task.percent, stage: finalStage, detail: message, stageAt: stopped])
         render(); cancelButton.setEnabled(false)
         if (!ok) bar.setString(task.percent + "% - " + (task.cancelled ? "Cancelled" : "Stopped"))
+        else {
+            // Done: only the result stays (the stages, timings and settings are under Details), so the next step is not pushed away.
+            bar.setVisible(false); cancelButton.setVisible(false); roomFor(40)
+            text.setText("<html><body style='width:300px'>" + escape(message) + "</body></html>")
+        }
+    }
+    void roomFor(int height) {
+        text.setPreferredSize(new java.awt.Dimension(330, height)); text.setMinimumSize(new java.awt.Dimension(330, height)); text.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, height))
+        revalidate()
     }
     void close() { clock.stop(); if (running && task != null) task.cancel(); detailsWindow?.dispose() }
 }
@@ -1451,8 +1720,21 @@ class CalciumMeasurement {
         if(!id || !(id==~/Cell_[a-f0-9]{32}/)) {id=assignId(roi)}
         id
     }
-    static String assignId(Roi roi) {
-        String id='Cell_'+UUID.randomUUID().toString().replace('-','');roi.setProperty('calcium.roi.id',id);id
+    /** A new outline's ID is worked out from the outline itself (where it is and which pixels it covers), so the same outline
+     *  gets the same ID in every session and tables from two sessions can be matched by cell. The ID then stays with the outline,
+     *  also when it is reshaped. A second, identical outline in one set gets a random ID. */
+    static String assignId(Roi roi,boolean random=false) {
+        String id=null
+        if(!random){
+            try{
+                java.security.MessageDigest md=java.security.MessageDigest.getInstance('SHA-256')
+                java.awt.Rectangle b=roi.getBounds();md.update((b.x+','+b.y+','+b.width+','+b.height+';').getBytes('UTF-8'))
+                def mask=roi.getMask();if(mask!=null)md.update((byte[])mask.getPixels())
+                id='Cell_'+md.digest().encodeHex().toString().substring(0,32)
+            }catch(Exception ignored){id=null}
+        }
+        if(id==null)id='Cell_'+UUID.randomUUID().toString().replace('-','')
+        roi.setProperty('calcium.roi.id',id);id
     }
     static void ensureIds(Roi[] rois) {
         Set<String> seen=new HashSet<>()
@@ -1461,19 +1743,19 @@ class CalciumMeasurement {
             if(seen.contains(id)) {
                 // Roi.clone shares mutable properties. A serialization round trip detaches them.
                 Roi copy=new ij.io.RoiDecoder(RoiEncoder.saveAsByteArray(roi),'cell.roi').getRoi()
-                id=assignId(copy);rois[i]=copy
+                id=assignId(copy,true);rois[i]=copy
             }
             seen.add(id)
         }
     }
-    static List registry(Roi[] accepted,Roi[] measured,int[] backgroundPixels,CalciumSteps steps,String selection) {
+    static List registry(Roi[] accepted,Roi[] measured,int[] backgroundPixels,CalciumSteps steps,String selection,Map selectionByCell=null) {
         def measuredIds=measured.collect{idFor(it)}
         def rows=[['Cell','ROI_ID','Accepted','Included_in_measurement','Exclusion_reason','ROI_sha256','Area_pixels','Background_pixels','Near_edge','Selection_basis']]
         accepted.each {roi->
             String id=idFor(roi);int index=measuredIds.indexOf(id);boolean included=index>=0
             Roi canonical=(Roi)roi.clone();canonical.setName(id);canonical.setPosition(0)
             rows<<[id,id,true,included,included?'':'Edge exclusion policy',CalciumInstaller.digest(RoiEncoder.saveAsByteArray(canonical)),roi.getContainedPoints().length,
-                included?backgroundPixels[index]:'',steps.nearEdge(roi),selection]
+                included?backgroundPixels[index]:'',steps.nearEdge(roi),selectionByCell?.get(id)?:selection]
         }
         rows
     }
@@ -1506,13 +1788,145 @@ class CalciumMeasurement {
 }
 
 /** Native Fiji trace view; missing samples remain gaps. */
+/** Did the field move during the recording? Each frame is compared with a reference picture (20 frames spread over the second
+ *  half), on a picture reduced four times from which the smooth lamp light and haze are taken off, so only structures the size
+ *  of cells are matched. The shift at which a frame differs least from the reference is found in whole reduced pixels within
+ *  +-12 (48 pixels) and refined between them from the neighbouring values. Shifts are then counted from where the field sits
+ *  for most of the recording, or from the frames the cells were chosen on. Nothing is corrected: the check says which frames
+ *  are displaced and by how much. Under SLIGHT pixels nothing is reported; from MOVED pixels on the outlines are no longer on
+ *  the same cells (a cell body here is 20 to 40 pixels across). */
+@CompileStatic
+class CalciumMotion {
+    static final int REDUCE = 4, REACH = 12, LOCAL = 7
+    static final double SLIGHT = 2.5d, MOVED = 8d
+    /** A frame reduced REDUCE times (block means) minus its own local mean over 15 x 15 reduced pixels. */
+    static float[] small(ImageProcessor ip, int sw, int sh) {
+        float[] blocks = new float[sw * sh]; int w = ip.getWidth()
+        Object pixels = ip.getPixels(); short[] s16 = pixels instanceof short[] ? (short[]) pixels : null; float[] f32 = pixels instanceof float[] ? (float[]) pixels : null
+        for (int y = 0; y < sh; y++) for (int x = 0; x < sw; x++) {
+            double sum = 0d
+            for (int dy = 0; dy < REDUCE; dy++) { int row = (y * REDUCE + dy) * w + x * REDUCE
+                for (int dx = 0; dx < REDUCE; dx++) sum += s16 != null ? (double) (s16[row + dx] & 0xffff) : f32 != null ? (double) f32[row + dx] : (double) ip.getf(row + dx) }
+            blocks[y * sw + x] = (float) (sum / (REDUCE * REDUCE))
+        }
+        // local mean from a summed-area table; the box is cut at the picture's edges
+        double[] table = new double[(sw + 1) * (sh + 1)]
+        for (int y = 0; y < sh; y++) { double run = 0d; for (int x = 0; x < sw; x++) { run += blocks[y * sw + x]; table[(y + 1) * (sw + 1) + x + 1] = table[y * (sw + 1) + x + 1] + run } }
+        float[] out = new float[sw * sh]
+        for (int y = 0; y < sh; y++) { int y0 = Math.max(0, y - LOCAL), y1 = Math.min(sh, y + LOCAL + 1)
+            for (int x = 0; x < sw; x++) { int x0 = Math.max(0, x - LOCAL), x1 = Math.min(sw, x + LOCAL + 1)
+                double sum = table[y1 * (sw + 1) + x1] - table[y0 * (sw + 1) + x1] - table[y1 * (sw + 1) + x0] + table[y0 * (sw + 1) + x0]
+                out[y * sw + x] = (float) (blocks[y * sw + x] - sum / ((y1 - y0) * (x1 - x0))) } }
+        return out
+    }
+    /** The shift (x, y, in reduced pixels, with a fraction) at which frame "a" differs least from "ref": mean absolute difference
+     *  on every other pixel for every whole shift, then the position of the minimum between whole shifts from its two neighbours. */
+    static double[] shift(float[] a, float[] ref, int sw, int sh) {
+        int side = 2 * REACH + 1; double[] error = new double[side * side]
+        double best = Double.MAX_VALUE; int bx = 0, by = 0
+        for (int dy = -REACH; dy <= REACH; dy++) for (int dx = -REACH; dx <= REACH; dx++) {
+            double sum = 0d; int count = 0
+            for (int y = REACH; y < sh - REACH; y += 2) { int row = y * sw, moved = (y + dy) * sw + dx
+                for (int x = REACH; x < sw - REACH; x += 2) { sum += Math.abs((double) a[moved + x] - (double) ref[row + x]); count++ } }
+            double v = count > 0 ? sum / count : Double.MAX_VALUE; error[(dy + REACH) * side + dx + REACH] = v
+            // ties and near-ties go to the smaller shift, so noise on a featureless field reads as "not moved"
+            if (v < best * 0.999d || (v <= best && Math.abs(dx) + Math.abs(dy) < Math.abs(bx) + Math.abs(by))) { best = v; bx = dx; by = dy }
+        }
+        double fx = bx, fy = by; int at = (by + REACH) * side + bx + REACH
+        if (bx > -REACH && bx < REACH) { double l = error[at - 1], h = error[at + 1], bend = l - 2d * best + h; if (bend > 0d) fx += Math.max(-0.5d, Math.min(0.5d, 0.5d * (l - h) / bend)) }
+        if (by > -REACH && by < REACH) { double l = error[at - side], h = error[at + side], bend = l - 2d * best + h; if (bend > 0d) fy += Math.max(-0.5d, Math.min(0.5d, 0.5d * (l - h) / bend)) }
+        return [fx, fy] as double[]
+    }
+    static double median(double[] values) { if (values.length == 0) return 0d; double[] s = (double[]) values.clone(); Arrays.sort(s); int m = (int) (s.length / 2); return s.length % 2 == 1 ? s[m] : (s[m - 1] + s[m]) / 2d }
+    /** Shift of every frame in pixels, [n][2], counted from where the field sits for most of the recording (the median shift). */
+    static double[][] shifts(ImageStack stack, int frames) {
+        int n = Math.min(frames, stack.getSize()), sw = (int) (stack.getWidth() / REDUCE), sh = (int) (stack.getHeight() / REDUCE)
+        double[][] out = new double[Math.max(0, n)][2]
+        if (n < 3 || sw <= 4 * REACH || sh <= 4 * REACH) return out
+        float[][] reduced = new float[n][]
+        for (int f = 0; f < n; f++) reduced[f] = small(stack.getProcessor(f + 1), sw, sh)
+        float[] ref = new float[sw * sh]; int used = 0
+        for (int k = 0; k < 20; k++) { int f = (int) Math.round((n - 1) * (0.5d + 0.5d * k / 19d)); float[] r = reduced[f]; for (int i = 0; i < ref.length; i++) ref[i] = (float) (ref[i] + r[i]); used++ }
+        for (int i = 0; i < ref.length; i++) ref[i] = (float) (ref[i] / used)
+        double[] xs = new double[n], ys = new double[n]
+        for (int f = 0; f < n; f++) { double[] s = shift(reduced[f], ref, sw, sh); xs[f] = s[0] * REDUCE; ys[f] = s[1] * REDUCE }
+        double mx = median(xs), my = median(ys)
+        for (int f = 0; f < n; f++) { out[f][0] = xs[f] - mx; out[f][1] = ys[f] - my }
+        return out
+    }
+    static Map summary(double[][] shifts) { summary(shifts, 0, 0) }
+    /** What the shifts mean, counted from the frames refFirst..refLast (the frames the cells were chosen on) when given, else
+     *  from where the field sits for most of the recording. "runs": frames displaced by MOVED pixels or more; "slightRuns":
+     *  by SLIGHT up to MOVED. Frames are counted from 1, both ends included. A frame's displacement is the middle value of
+     *  five frames around it, so single noisy frames do not break a run. */
+    static Map summary(double[][] shifts, int refFirst, int refLast) {
+        int n = shifts.length; boolean chosen = refFirst >= 1 && refLast >= refFirst && refFirst <= n
+        double rx = 0d, ry = 0d, within = 0d
+        if (chosen) {
+            int a = refFirst - 1, b = Math.min(n, refLast); double[] xs = new double[b - a], ys = new double[b - a]
+            for (int f = a; f < b; f++) { xs[f - a] = shifts[f][0]; ys[f - a] = shifts[f][1] }
+            double cx = median(xs), cy = median(ys)
+            // how far the field moves inside those frames themselves (the second-largest distance, so one noisy frame does not count)
+            double[] far = new double[b - a]; for (int f = a; f < b; f++) far[f - a] = Math.hypot(shifts[f][0] - cx, shifts[f][1] - cy)
+            Arrays.sort(far); within = far.length >= 2 ? far[far.length - 2] : far[0]
+            // a picture made from frames that moved is smeared and has no one place: then count from most of the recording instead
+            if (within < MOVED) { rx = cx; ry = cy }
+        }
+        boolean steady = !chosen || within < MOVED
+        double[] raw = new double[n], size = new double[n]
+        for (int f = 0; f < n; f++) raw[f] = Math.hypot(shifts[f][0] - rx, shifts[f][1] - ry)
+        for (int f = 0; f < n; f++) { int a = Math.max(0, f - 2), b = Math.min(n, f + 3); double[] part = new double[b - a]; for (int k = a; k < b; k++) part[k - a] = raw[k]; size[f] = Math.max(median(part), n < 5 ? raw[f] : 0d) }
+        // a jolt of one or two frames is kept: the middle value would hide it
+        for (int f = 0; f < n; f++) if (raw[f] >= MOVED && size[f] < MOVED) size[f] = raw[f]
+        List<List<Integer>> runs = new ArrayList<List<Integer>>(), slightRuns = new ArrayList<List<Integer>>()
+        double largest = 0d, slightLargest = 0d; int moved = 0, slight = 0, start = -1, slightStart = -1
+        for (int f = 0; f <= n; f++) {
+            boolean off = f < n && size[f] >= MOVED, little = f < n && size[f] >= SLIGHT && size[f] < MOVED
+            if (off) { moved++; largest = Math.max(largest, size[f]); if (start < 0) start = f } else if (start >= 0) { runs.add([start + 1, f] as List<Integer>); start = -1 }
+            if (little) { slight++; slightLargest = Math.max(slightLargest, size[f]); if (slightStart < 0) slightStart = f } else if (slightStart >= 0) { slightRuns.add([slightStart + 1, f] as List<Integer>); slightStart = -1 }
+        }
+        return [moved: moved, largest: (int) Math.round(largest), runs: runs, slight: slight, slightLargest: (int) Math.round(slightLargest), slightRuns: slightRuns, frames: n,
+            reference: chosen && steady ? [refFirst, Math.min(n, refLast)] : null, smeared: chosen && !steady ? [refFirst, Math.min(n, refLast)] : null]
+    }
+    /** "frames 1-10", "frames 1-10 and 40-42", or for many pieces "34 frames between 2 and 119". */
+    static String framesText(List runs) {
+        if (runs == null || runs.isEmpty()) return ""
+        List<String> parts = new ArrayList<String>(); int count = 0
+        for (Object r : runs) { List run = (List) r; int a = ((Number) run.get(0)).intValue(), b = ((Number) run.get(1)).intValue(); count += b - a + 1; parts.add(a == b ? "" + a : a + "–" + b) }
+        if (parts.size() > 3) { List first = (List) runs.get(0), last = (List) runs.get(runs.size() - 1); return count + " frames between " + first.get(0) + " and " + last.get(1) }
+        return (count == 1 ? "frame " : "frames ") + parts.join(" and ")
+    }
+    /** One or two short sentences for the Recording card and the log; empty when the field stayed put. */
+    static String sentence(Map m) {
+        if (m == null) return ""
+        List<String> parts = new ArrayList<String>()
+        int moved = ((Number) m.get('moved')).intValue(), slight = ((Number) m.get('slight')).intValue(), n = ((Number) m.get('frames')).intValue()
+        List reference = (List) m.get('reference')
+        String where = reference != null ? " from where the cells are chosen (frames " + reference.get(0) + "–" + reference.get(1) + ")" : ""
+        if (moved > 0) parts.add("The field moved (about " + m.get('largest') + " px" + where + ") during " + framesText((List) m.get('runs')) + ".")
+        if (slight > 0) {
+            List runs = (List) m.get('slightRuns'); List only = runs.size() == 1 ? (List) runs.get(0) : null
+            String when = only != null && ((Number) only.get(1)).intValue() == n && ((Number) only.get(0)).intValue() > 1 ? "from frame " + only.get(0) + " on" : "during " + framesText(runs)
+            parts.add(reference != null ? "The field sits about " + m.get('slightLargest') + " px" + where + " " + when + "." : "The field drifted by about " + m.get('slightLargest') + " px " + when + ".")
+        }
+        List smeared = (List) m.get('smeared')
+        if (smeared != null) parts.add("The cells are chosen on frames " + smeared.get(0) + "\u2013" + smeared.get(1) + ", which include that movement, so their picture is smeared.")
+        return parts.join(" ")
+    }
+}
+
 /** Fast pixel work for showing movie frames next to the traces. Display only: nothing here is measured or saved. */
 @CompileStatic
 class CalciumFrameView {
     /** Mean of frames first..last (counted from 1, both included), pixel by pixel: the resting picture. */
-    static float[] mean(ImageStack stack, int first, int last) {
+    static float[] mean(ImageStack stack, int first, int last) { mean(stack, first, last, null) }
+    /** The same without the frames in "skip" (frames in which the field moved), unless that would leave none. */
+    static float[] mean(ImageStack stack, int first, int last, Set<Integer> skip) {
         int n = stack.getWidth() * stack.getHeight(), count = 0; double[] sum = new double[n]
-        for (int f = Math.max(1, first); f <= Math.min(stack.getSize(), last); f++) {
+        int from = Math.max(1, first), to = Math.min(stack.getSize(), last), kept = 0
+        if (skip != null) for (int f = from; f <= to; f++) if (!skip.contains(f)) kept++
+        for (int f = from; f <= to; f++) {
+            if (skip != null && kept > 0 && skip.contains(f)) continue
             ImageProcessor ip = stack.getProcessor(f)
             for (int i = 0; i < n; i++) sum[i] += ip.getf(i)
             count++
@@ -1533,7 +1947,9 @@ class CalciumFrameView {
     /** Writes one frame (minus the resting picture, when given) into rgb, black at lo and white at hi. "a" and "b" are work
      *  buffers of the frame's size. With smooth, each pixel is first averaged with its eight neighbours (edges repeat), which
      *  calms the camera noise of a difference picture. */
-    static void paint(ImageProcessor ip, float[] rest, double lo, double hi, int[] rgb, float[] a, float[] b, boolean smooth) {
+    static void paint(ImageProcessor ip, float[] rest, double lo, double hi, int[] rgb, float[] a, float[] b, boolean smooth) { paint(ip, rest, lo, hi, rgb, a, b, smooth, Float.NaN) }
+    /** With "none" given (the value that means no change in this frame), rims are taken off the difference first: see withoutRims. */
+    static void paint(ImageProcessor ip, float[] rest, double lo, double hi, int[] rgb, float[] a, float[] b, boolean smooth, float none) {
         int n = rgb.length, width = ip.getWidth(), height = ip.getHeight()
         Object pixels = ip.getPixels()
         if (pixels instanceof short[]) { short[] p = (short[]) pixels; for (int i = 0; i < n; i++) a[i] = (float) (p[i] & 0xffff) }
@@ -1553,12 +1969,41 @@ class CalciumFrameView {
             // rows 1 .. height-2: b holds the three-across sums, a receives the nine-pixel mean (a's own rows are no longer needed)
             for (int i = width; i < n - width; i++) a[i] = (float) ((b[i - width] + b[i] + b[i + width]) * ninth)
         }
+        if (!Float.isNaN(none)) withoutRims(a, b, width, height, none)
         float low = (float) lo, scale = (float) (255d / Math.max(1e-9d, hi - lo))
         for (int i = 0; i < n; i++) {
             int g = (int) ((shown[i] - low) * scale)
             if (g < 0) g = 0 else if (g > 255) g = 255
             rgb[i] = (g << 16) | (g << 8) | g
         }
+    }
+    /** Takes the rims of shifted objects off a difference picture. A bright object that moves by a pixel gets brighter on one
+     *  side and darker on the other; a cell that responds only gets brighter. Each pixel of "a" (a smoothed difference; "none" is
+     *  the value that means no change) loses the size of the strongest darkening within about 10 pixels of it, beyond what the
+     *  frame's own noise explains: block means of 4 x 4 pixels, the lowest over 5 x 5 blocks, less 3 noise SDs of the block means.
+     *  So a rise beside an equal fall disappears and a rise on its own stays. "work" is a buffer of the frame's size. Display only. */
+    static void withoutRims(float[] a, float[] work, int width, int height, float none) {
+        int bw = (int) ((width + 3) / 4), bh = (int) ((height + 3) / 4), blocks = bw * bh
+        if (blocks < 25 || work.length < 3 * blocks) return
+        // work[0..blocks): block means, work[blocks..2*blocks): counts then the lowest nearby mean, work[2*blocks..3*blocks): sort
+        for (int k = 0; k < 2 * blocks; k++) work[k] = 0f
+        for (int y = 0; y < height; y++) { int by = y >> 2, row = y * width; for (int x = 0; x < width; x++) { int k = by * bw + (x >> 2); work[k] = (float) (work[k] + a[row + x] - none); work[blocks + k] = (float) (work[blocks + k] + 1f) } }
+        for (int k = 0; k < blocks; k++) { work[k] = work[blocks + k] > 0f ? (float) (work[k] / work[blocks + k]) : 0f; work[2 * blocks + k] = Math.abs(work[k]) }
+        Arrays.sort(work, 2 * blocks, 3 * blocks)
+        float allowed = (float) (3d * 1.4826d * work[2 * blocks + (int) (blocks / 2)])   // 3 SDs, from the median size of a block mean
+        for (int by = 0; by < bh; by++) for (int bx = 0; bx < bw; bx++) {
+            float lowest = 0f
+            for (int dy = -2; dy <= 2; dy++) { int yy = by + dy; if (yy < 0 || yy >= bh) continue
+                for (int dx = -2; dx <= 2; dx++) { int xx = bx + dx; if (xx < 0 || xx >= bw) continue; float v = work[yy * bw + xx]; if (v < lowest) lowest = v } }
+            float fall = (float) (lowest + allowed)
+            work[blocks + by * bw + bx] = fall < 0f ? fall : 0f
+        }
+        for (int y = 0; y < height; y++) { int by = y >> 2, row = y * width; for (int x = 0; x < width; x++) { float fall = work[blocks + by * bw + (x >> 2)], v = a[row + x]; if (fall < 0f && v > none) { v = (float) (v + fall); a[row + x] = v < none ? none : v } } }
+    }
+    /** A colour frame: "gray" (a frame as paint() left it) becomes the green channel and "rise" (the smoothed rise above the
+     *  resting picture, also from paint()) the magenta one, so a cell that responds turns from green to pink or white. */
+    static void tint(int[] gray, int[] rise) {
+        for (int i = 0; i < gray.length; i++) { int g = gray[i] & 255, m = rise[i] & 255; gray[i] = (m << 16) | (g << 8) | m }
     }
     /** The value below which this share of the finite numbers lies (0 when there are none). */
     static double share(double[][] rows, double share, boolean absolute) {
@@ -2344,7 +2789,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
                 [confirmed,kcl,preset,validation,loadProtocolButton,saveProtocolButton,loadTimesButton,clearTimesButton,sensitivityButton,diagnosticButton,clearDiagnosticsButton,templateButton,overrideButton,clearOverridesButton].each{it.enabled=true};logButton.enabled=job.logFile.isFile();savePlots.enabled=results!=null;updateDiagnosticAvailability()
                 if(failure){status.text=failure;status.foreground=CalciumTheme.INK;progress.string='Not completed';changed();return}
                 if(installing){progress.value=100;status.text='R and protocol support are ready. Check settings, then analyze.';return}
-                try{loadResults(answer);appliedFingerprint=submittedFingerprint;changed();String empty=CalciumAnalysisSettings.noEvaluableCells(answer);status.text=empty?:'Complete. Protocol, inputs and tables saved in '+answer.name;status.foreground=empty?CalciumTheme.WARN:CalciumTheme.INK;progress.value=100;progress.string='Complete';tabs.selectedIndex=1}catch(Throwable t){status.text='Could not display results: '+t.message;progress.string='Display error; see saved outputs'}
+                try{loadResults(answer);appliedFingerprint=submittedFingerprint;changed();String empty=CalciumAnalysisSettings.noEvaluableCells(answer);status.text=empty?:'Complete. Protocol, inputs and tables saved in '+answer.name+'.'+CalciumAnalysisSettings.byHowChosen(answer,measurement);status.foreground=empty?CalciumTheme.WARN:CalciumTheme.INK;progress.value=100;progress.string='Complete';tabs.selectedIndex=1}catch(Throwable t){status.text='Could not display results: '+t.message;progress.string='Display error; see saved outputs'}
             }
         }
     }
@@ -2464,6 +2909,53 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
 }
 
 /** Shared settings and portable protocol validation for both Step 4 views. */
+/** Writes a picture as PNG or TIFF with its resolution recorded in the file, so it opens at the intended size in a layout
+ *  program or a journal's checker. TIFF can be LZW- or ZIP-compressed; both are lossless. */
+class CalciumPictureFile {
+    static final List FORMATS=['png','tiff'],COMPRESSIONS=['lzw','zip','none']
+    static String extension(String format){format=='tiff'?'tif':'png'}
+    static byte[] encode(java.awt.image.BufferedImage source,String format,int dpi,String compression) {
+        if(!(format in FORMATS))throw new IllegalArgumentException('Choose PNG or TIFF.')
+        if(!(compression in COMPRESSIONS))throw new IllegalArgumentException('TIFF compression is LZW, ZIP or none.')
+        if(dpi<72||dpi>1200)throw new IllegalArgumentException('Resolution must be 72 to 1200 dpi.')
+        def bytes=new ByteArrayOutputStream(1<<20);def stream=javax.imageio.ImageIO.createImageOutputStream(bytes)
+        def writer=javax.imageio.ImageIO.getImageWritersByFormatName(format).next();def param=writer.getDefaultWriteParam()
+        try {
+            writer.setOutput(stream)
+            if(format=='png') {
+                def meta=writer.getDefaultImageMetadata(javax.imageio.ImageTypeSpecifier.createFromRenderedImage(source),param)
+                def root=new javax.imageio.metadata.IIOMetadataNode('javax_imageio_png_1.0'),size=new javax.imageio.metadata.IIOMetadataNode('pHYs')
+                String perMetre=''+(Math.round(dpi/0.0254d) as long)
+                size.setAttribute('pixelsPerUnitXAxis',perMetre);size.setAttribute('pixelsPerUnitYAxis',perMetre);size.setAttribute('unitSpecifier','meter');root.appendChild(size)
+                meta.mergeTree('javax_imageio_png_1.0',root)
+                writer.write(null,new javax.imageio.IIOImage(source,null,meta),param)
+            } else {
+                // TIFF without transparency: on white, three colour channels
+                def flat=new java.awt.image.BufferedImage(source.width,source.height,java.awt.image.BufferedImage.TYPE_INT_RGB);def g=flat.createGraphics()
+                g.setColor(java.awt.Color.WHITE);g.fillRect(0,0,flat.width,flat.height);g.drawImage(source,0,0,null);g.dispose()
+                if(compression!='none'){param.setCompressionMode(javax.imageio.ImageWriteParam.MODE_EXPLICIT);param.setCompressionType(compression=='zip'?'Deflate':'LZW')}
+                def meta=writer.getDefaultImageMetadata(javax.imageio.ImageTypeSpecifier.createFromRenderedImage(flat),param)
+                def directory=javax.imageio.plugins.tiff.TIFFDirectory.createFromMetadata(meta),tags=javax.imageio.plugins.tiff.BaselineTIFFTagSet.getInstance()
+                long[][] resolution=[[dpi as long,1L] as long[]] as long[][]
+                directory.addTIFFField(new javax.imageio.plugins.tiff.TIFFField(tags.getTag(javax.imageio.plugins.tiff.BaselineTIFFTagSet.TAG_X_RESOLUTION),javax.imageio.plugins.tiff.TIFFTag.TIFF_RATIONAL,1,resolution))
+                directory.addTIFFField(new javax.imageio.plugins.tiff.TIFFField(tags.getTag(javax.imageio.plugins.tiff.BaselineTIFFTagSet.TAG_Y_RESOLUTION),javax.imageio.plugins.tiff.TIFFTag.TIFF_RATIONAL,1,resolution))
+                directory.addTIFFField(new javax.imageio.plugins.tiff.TIFFField(tags.getTag(javax.imageio.plugins.tiff.BaselineTIFFTagSet.TAG_RESOLUTION_UNIT),javax.imageio.plugins.tiff.TIFFTag.TIFF_SHORT,1,[javax.imageio.plugins.tiff.BaselineTIFFTagSet.RESOLUTION_UNIT_INCH as char] as char[]))
+                writer.write(null,new javax.imageio.IIOImage(flat,null,directory.getAsMetadata()),param)
+            }
+        } finally {stream.close();writer.dispose()}
+        bytes.toByteArray()
+    }
+    /** The picture the page drew (PNG data), re-written in the chosen format. Returns [bytes, extension]. */
+    static List fromPage(String png,Object format,Object dpi,Object compression) {
+        byte[] sent=Base64.decoder.decode(png.replaceFirst(/^data:image\/png;base64,/,''))
+        if(sent.length<8||sent[1]!=(byte)0x50||sent[2]!=(byte)0x4E||sent[3]!=(byte)0x47)throw new IllegalArgumentException('That is not a PNG picture.')
+        String kind=format==null?'png':(''+format).toLowerCase()
+        if(kind=='png'&&dpi==null)return [sent,'png']   // as drawn, nothing to add
+        def image=javax.imageio.ImageIO.read(new ByteArrayInputStream(sent));if(image==null)throw new IllegalArgumentException('The picture could not be read.')
+        int dots=dpi instanceof Number?(dpi as int):(dpi==null?300:Integer.parseInt((''+dpi).trim()))
+        [encode(image,kind,dots,compression==null?'lzw':(''+compression).toLowerCase()),extension(kind)]
+    }
+}
 class CalciumAnalysisSettings {
     static final List VALUE_KEYS=['sampling_hz','baseline_start','baseline_end','condition','biological_unit']
     static final Map FILE_KEYS=[timestamps:'timestamps_file',sensitivity:'sensitivity_file',negative_control:'negative_control_file']
@@ -2471,6 +2963,85 @@ class CalciumAnalysisSettings {
         int n=data.frames as int,end=Math.min(n-2,Math.max(3,(data.baselineEnd?:20) as int))
         double rate=(data.hz?:Double.NaN) as double
         [sampling_hz:Double.isFinite(rate)&&rate>0?rate:'',baseline_start:data.baselineStart?:1,baseline_end:end,condition:'',biological_unit:'']
+    }
+    /** Step 4 starts from what was confirmed in Fiji, so nothing is typed twice. With frames confirmed for blind selection
+     *  ("frames before the stimulus", a to b): the stimulus is taken to follow frame b, and the resting baseline is the last 20
+     *  of those frames, or all of them when there are fewer (close to the stimulus, so fading over a long wait does not count).
+     *  Without them: the 20 frames before the rise the plugin found, or frames 1-20 when it found none. */
+    static Map framesFromFiji(def steps) {
+        int n=steps.n as int,a=steps.blindFirst as int,b=steps.blindLast as int
+        if(b>0&&b>=a){int first=Math.max(a,b-19)
+            return [first:first,last:b,chosen:[first:a,last:b],note:'Baseline frames '+first+'–'+b+' and the stimulus time (after frame '+b+') come from the frames you confirmed in Fiji ('+a+'–'+b+'). Check them, then run.']}
+        if(steps.found)return [first:steps.b0 as int,last:steps.b1 as int,note:'Baseline frames '+steps.b0+'–'+steps.b1+' and the stimulus time come from the rise the plugin found near frame '+steps.onset+'. Check them, then run.']
+        [first:1,last:Math.min(20,n-1),note:'No response was found, so the baseline is a guess (frames 1–'+Math.min(20,n-1)+'). Set the stimulus time, then run.']
+    }
+    /** The settings last used for this recording are kept beside its tables and filled in again the next time Step 4 opens
+     *  for the same recording with the same frames from Fiji. Uploaded files are not kept. */
+    /** After which frame the stimulus was added in the last analysis that was run, on any recording: the starting value for the
+     *  next recording, so the one fact is asked once per series. 0 when no analysis was run yet. */
+    static int lastStimulusFrame(){try{return (int)Math.rint(Prefs.get('calcium.step4.stimulus_after_frame',0d))}catch(Exception ignored){return 0}}
+    static void rememberStimulusFrame(Map data,Map draft){
+        try{
+            if(draft?.timestamps!=null)return
+            double hz=CalciumCsv.number(''+draft.values.sampling_hz);def w=(draft.protocol.windows as List)[0] as Map;def at=w.Stimulus_onset_s!=null?w.Stimulus_onset_s:w.Start_s
+            if(!(hz>0)||at==null)return
+            double onset=CalciumCsv.number(''+at);int n=data.frames as int,before=0
+            for(int k=0;k<n;k++)if(k/hz<onset-1e-9)before=k+1
+            if(before>=1&&before<n){Prefs.set('calcium.step4.stimulus_after_frame',before as double)}
+        }catch(Exception ignored){}
+    }
+    static File rememberedFile(Map data){data.folder instanceof File?new File(data.folder as File,'step4_last_settings.json'):null}
+    /** The baseline frames that came from Fiji itself (not from the last recording's stimulus frame): what remembered settings are filed under. */
+    static int fijiFrame(Map data,String end){def own=data['fijiBaseline'+end];(own!=null?own:data['baseline'+end]) as int}
+    static void remember(Map data,Map draft) {
+        File file=rememberedFile(data);if(file==null||!(draft?.values instanceof Map)||!(draft?.protocol instanceof Map))return
+        try{file.setText(groovy.json.JsonOutput.toJson([recording:''+data.recording,frames:data.frames as int,baseline_start:fijiFrame(data,'Start'),baseline_end:fijiFrame(data,'End'),
+            values:draft.values,protocol:draft.protocol]),'UTF-8')}catch(Exception ignored){}
+        rememberStimulusFrame(data,draft)
+    }
+    static Map remembered(Map data) {
+        File file=rememberedFile(data);if(file==null||!file.isFile())return null
+        try{def saved=new groovy.json.JsonSlurper().parseText(file.getText('UTF-8'))
+            if(!(saved instanceof Map)||saved.recording!=''+data.recording||(saved.frames as int)!=(data.frames as int)||(saved.baseline_start as int)!=fijiFrame(data,'Start')||(saved.baseline_end as int)!=fijiFrame(data,'End'))return null
+            if(!(saved.values instanceof Map)||!(saved.protocol instanceof Map))return null
+            Map candidate=[values:saved.values,protocol:saved.protocol,timestamps:null,sensitivity:null,negative_control:null]
+            return diagnose(candidate,data).errors?null:copy(candidate)
+        }catch(Exception ignored){return null}
+    }
+    /** When blind frames were used: % responding for the cells chosen blind and for the cells added after the response was shown.
+     *  Only the blind group is free of selection on the response. The table goes beside the measurement tables; the sentence
+     *  returned is shown on the page when the analysis finishes. */
+    static String byHowChosen(File dir,Map measurement) {
+        try {
+            if(!(measurement.chosenBlind instanceof Map))return ''
+            Map tags=measurement.chosenBlind as Map
+            def calls=CalciumCsv.read(new File(dir,'responder_calls.csv'));List h=calls[0];int cell=h.indexOf('Cell'),role=h.indexOf('Role'),status=h.indexOf('Status')
+            if(cell<0||status<0)return ''
+            Map tally=[blind:[0,0,0],later:[0,0,0]]   // responded, evaluable, registered
+            calls.drop(1).findAll{role<0||it[role]=='Stimulus'}.each{row->
+                if(!tags.containsKey(row[cell]))return
+                List t=tally[tags[row[cell]]?'blind':'later'];t[2]++
+                if(row[status]=='Responded'){t[0]++;t[1]++}else if(row[status]=='Did not respond')t[1]++
+            }
+            List all=(0..2).collect{int i->(tally.blind[i] as int)+(tally.later[i] as int)}
+            def pct={List t->(t[1] as int)>0?String.format(Locale.US,'%.1f',100d*(t[0] as int)/(t[1] as int)):''}
+            def line={String label,List t->label+': '+t[0]+' of '+t[1]+' responded'+((t[1] as int)>0?' ('+pct(t)+' %)':'')}
+            File out=new File(measurement.folder as File,measurement.recording+'_responders_by_how_chosen_'+dir.name+'.csv')
+            CalciumCsv.write(out,[['chosen','registered','evaluable','responded','percent_responding'],['blind']+[tally.blind[2],tally.blind[1],tally.blind[0],pct(tally.blind)],
+                ['after the response was shown']+[tally.later[2],tally.later[1],tally.later[0],pct(tally.later)],['all cells']+[all[2],all[1],all[0],pct(all)]])
+            if((tally.later[2] as int)==0)return ' All '+tally.blind[2]+' cells were chosen blind: '+tally.blind[0]+' of '+tally.blind[1]+' responded ('+pct(tally.blind)+' %).'
+            return ' '+line('Chosen blind',tally.blind)+'. '+line('Added after the response was shown',tally.later)+'. '+line('All cells',all)+'.'
+        }catch(Throwable ignored){return ''}
+    }
+    /** How the page was last arranged (pane sizes, explanations on or off). The page's address changes every time, so the
+     *  browser cannot remember these itself; they are kept with Fiji's preferences. */
+    static final Map PAGE_PREFS=['step4.side':/\d{2,4}px/,'step4.split':/\d{1,2}(\.\d)?%/,'step4.height':/\d{3,4}px/,'step4.help':/[01]/,
+        'step4.every':/\d{1,4}/,'step4.outline':/\d(\.\d)?/,'step4.format':/(png|tiff)/,'step4.size':/(screen|\d{1,2}(\.\d)?x\d{1,2}(\.\d)?)/,'step4.dpi':/(150|300|600)/,'step4.compression':/(lzw|zip|none)/]
+    static Map pagePrefs(){PAGE_PREFS.keySet().collectEntries{String k->[k,Prefs.get('calcium.'+k,'')]}.findAll{k,v->v&&(v==~PAGE_PREFS[k])}}
+    static Map setPagePref(Object key,Object value) {
+        if(!(key instanceof String)||!PAGE_PREFS.containsKey(key))throw new IllegalArgumentException('Unknown page preference.')
+        if(value!=null&&!(value instanceof String&&(value==~PAGE_PREFS[key])))throw new IllegalArgumentException('That value cannot be kept.')
+        Prefs.set('calcium.'+key,value==null?'':value as String);[kept:key]
     }
     static String full(Object value){value==null?'':''+value}
     static String shown(Object value){(value instanceof Double||value instanceof BigDecimal||value instanceof Float)?CalciumTheme.shortNumber(value as double):full(value)}
@@ -2481,7 +3052,8 @@ class CalciumAnalysisSettings {
     static Map draft(Map data) {
         Map values=suggested(data).collectEntries{k,v->[k,full(v)]};double hz=CalciumCsv.number(values.sampling_hz)
         double onset=Double.isFinite(hz)&&hz>0?(values.baseline_end as int)/hz:10d,end=Double.isFinite(hz)&&hz>0?((data.frames as int)-1)/hz:20d
-        [values:values,protocol:CalciumResponseProtocol.payload([CalciumResponseProtocol.window('Stimulus','Stimulus',0d,onset,end)],2,'Slow evoked response — provisional','provisional'),timestamps:null,sensitivity:null,negative_control:null]
+        double from=Double.isFinite(hz)&&hz>0?Math.max(0,(values.baseline_start as int)-1)/hz:0d
+        [values:values,protocol:CalciumResponseProtocol.payload([CalciumResponseProtocol.window('Stimulus','Stimulus',from,onset,end)],2,'Slow evoked response — provisional','provisional'),timestamps:null,sensitivity:null,negative_control:null]
     }
     /** Read-only feedback for incomplete drafts; the same authoritative checks also run on submission. */
     static Map diagnose(Map draft,Map measurement) {
@@ -2503,9 +3075,11 @@ class CalciumAnalysisSettings {
                 int last=CalciumCsv.number(draft.values.baseline_end.toString()) as int
                 // same sample selection as the engine (responders.R): from ≤ t < to
                 double from=(row.Baseline_start_s==null?times[0]:row.Baseline_start_s) as double,to=(row.Baseline_end_s==null?onset:row.Baseline_end_s) as double
-                int needed=(row.Min_baseline_samples==null?3:row.Min_baseline_samples) as int,available=times.count{double t->t>=from-1e-9&&t<to-1e-9} as int
+                int needed=(row.Min_baseline_samples==null?3:row.Min_baseline_samples) as int,available=0
+                double edge=8d*Math.ulp(1d)*Math.max(1d,[from,to,start,end].collect{Math.abs(it as double)}.max() as double)
+                for(double t:times)if(t>=from-edge&&t<to-edge)available++
                 if(available<needed)warnings<<row.Stimulus+': the response baseline ('+CalciumTheme.shortNumber(from)+'–'+CalciumTheme.shortNumber(to)+' s) holds '+available+' samples but at least '+needed+' are needed, so every cell will be unscorable.'
-                if(row.Role=='Stimulus'&&times[last-1]>=onset)warnings<<'The trace F₀ baseline includes the stimulus onset or later frames. Choose prestimulation frames if this is not intentional.'
+                if(row.Role=='Stimulus'&&times[last-1]>onset+edge)warnings<<'The trace F₀ baseline includes frames after the stimulus. Choose frames up to the stimulus if this is not intentional.'
             }
         }catch(Exception problem){errors<< (problem.message?:problem.toString())}
         [errors:errors,warnings:warnings]
@@ -2574,19 +3148,36 @@ class CalciumAnalysisSession {
     String validationFingerprint='';Map draftValidation=[:]
     double[] appliedTime=new double[0]
     String appliedTimeSource=''
-    ImagePlus movie;byte[] picture;int width=0,height=0
-    float[] rest,work,work2;double[] rawRange,changeRange,meanTrace=new double[0]
+    ImagePlus movie;byte[] picture,backgroundPicture;int width=0,height=0
+    float[] rest,work,work2,background;int[] tintBuffer;double[] rawRange,changeRange,flatRange,meanTrace=new double[0];double riseTop=1d
     int restFirst=1,restLast=1,frameEpoch=0
     java.awt.image.BufferedImage frameImage
+    /** Whether the field moved (CalciumMotion.summary): from Fiji, or checked here when the session was started without it. */
+    Map motion
+    /** Where the starting stimulus frame came from ('fiji', 'last-recording' or 'last-session'), and Fiji's own values when the last session's were used. */
+    String stimulusFrom='fiji';Map fijiDraft
     /** Names what a frame looks like: the baseline behind "Change from baseline" and the display range. The page keys its buffer by it. */
     synchronized String frameVersion(){restFirst+'-'+restLast+'.'+frameEpoch}
     CalciumAnalysisSession(Map data) {
         measurement=new LinkedHashMap(data);measurementIdentity=CalciumAnalysisSettings.identity(data);draft=CalciumAnalysisSettings.draft(data)
+        stimulusFrom=data.stimulusFrom?(''+data.stimulusFrom):'fiji'
+        if(data.framesNote)message=''+data.framesNote
+        Map before=CalciumAnalysisSettings.remembered(data)
         restFirst=(data.baselineStart?:1) as int;restLast=draft.values.baseline_end as int
+        if(before!=null){
+            double a=CalciumCsv.number(''+before.values.baseline_start),b=CalciumCsv.number(''+before.values.baseline_end)
+            if(Double.isFinite(a)&&Double.isFinite(b)&&a==Math.rint(a)&&b==Math.rint(b)&&a>=1&&b>=a&&b<=(data.frames as int)){
+                fijiDraft=CalciumAnalysisSettings.copy(draft);stimulusFrom='last-session';draft=before;restFirst=a as int;restLast=b as int;message='Your last settings for this recording are filled in.'}
+        }
+        if(data.backgroundPicture instanceof ImagePlus){def out=new ByteArrayOutputStream();javax.imageio.ImageIO.write((data.backgroundPicture as ImagePlus).getBufferedImage(),'png',out);backgroundPicture=out.toByteArray()}
         if(data.picture!=null){def image=(data.picture as ImagePlus).getBufferedImage();width=image.width;height=image.height;def out=new ByteArrayOutputStream();javax.imageio.ImageIO.write(image,'png',out);picture=out.toByteArray()}
         // The original recording must match the measured picture, frame count and ROI coordinates. It is read only.
         if(data.movie instanceof ImagePlus&&picture!=null&&(data.movie as ImagePlus).width==width&&(data.movie as ImagePlus).height==height&&(data.movie as ImagePlus).stackSize>=(data.frames as int))movie=data.movie as ImagePlus
+        if(data.motion instanceof Map)motion=data.motion as Map
+        else if(movie!=null)try{Map chosen=data.fijiFrames instanceof Map?data.fijiFrames as Map:null;motion=CalciumMotion.summary(CalciumMotion.shifts(movie.getStack(),data.frames as int),chosen?chosen.first as int:0,chosen?chosen.last as int:0)}catch(Throwable ignored){motion=null}
     }
+    /** The frames (counted from 1) in which the field was displaced. */
+    Set<Integer> movedSet(){Set<Integer> out=new HashSet<Integer>();if(motion!=null)(motion.runs as List).each{r->int a=(r as List)[0] as int,b=(r as List)[1] as int;for(int f=a;f<=b;f++)out.add(f)};out}
     static String json(Object value) {
         def clean;clean={v->v instanceof Map?v.collectEntries{k,x->[''+k,clean(x)]}:v instanceof Collection?v.collect{clean(it)}:(v instanceof double[]||v instanceof float[]||v instanceof int[])?(v as List).collect{clean(it)}:(v instanceof Double||v instanceof Float)?(Double.isFinite(v as double)?v:null):v instanceof File?v.name:v}
         groovy.json.JsonOutput.toJson(clean(value))
@@ -2603,7 +3194,8 @@ class CalciumAnalysisSession {
     }
     synchronized Map described() {
         [recording:''+(measurement.recording?:''),key:measurementIdentity,frames:measurement.frames as int,names:(measurement.names?:[]) as List,width:width,height:height,
-         hasPicture:picture!=null,hasMovie:movie!=null,pluginVersion:CalciumRelease.VERSION,selectionBasis:measurement.selectionBasis?:'Not recorded',
+         hasPicture:picture!=null,hasBackground:backgroundPicture!=null&&picture!=null,hasMovie:movie!=null,pluginVersion:CalciumRelease.VERSION,prefs:CalciumAnalysisSettings.pagePrefs(),
+         recordedHz:(measurement.hz instanceof Number&&Double.isFinite(measurement.hz as double)&&(measurement.hz as double)>0)?measurement.hz:null,fijiFrames:measurement.fijiFrames instanceof Map?measurement.fijiFrames:null,stimulusFrom:stimulusFrom,fijiDraft:fijiDraft,motion:motion,motionNote:CalciumMotion.sentence(motion),selectionBasis:measurement.selectionBasis?:'Not recorded',
          rois:((measurement.rois?:new Roi[0]) as List).collect{Roi roi->def p=roi.getPolygon();(0..<p.npoints).collect{int i->[p.xpoints[i],p.ypoints[i]]}},
          draft:CalciumAnalysisSettings.copy(draft),draftRevision:draftRevision,
          settings:CalciumAnalysisSettings.suggested(measurement).collect{k,v->[key:k,shown:CalciumAnalysisSettings.shown(v),exact:CalciumAnalysisSettings.full(v)]}]+timing()
@@ -2624,7 +3216,9 @@ class CalciumAnalysisSession {
         if(value==null)throw new IllegalArgumentException('Provide the pending draft settings.')
         if(revision!=null){if(!(revision instanceof Number)||!Double.isFinite(revision as double)||(revision as double)!=(revision as long)||revision<0)throw new IllegalArgumentException('Draft revision must be a nonnegative integer.');if((revision as long)<draftRevision)return state();draftRevision=revision as long}
         draft=CalciumAnalysisSettings.copy(value)
-        state()
+        Map now=state()
+        if(!(draftValidation?.errors))CalciumAnalysisSettings.remember(measurement,draft)   // kept for the next time this recording is opened
+        now
     }
     void launch(boolean setup,Closure action,String fingerprint=null,Map submitted=null) {
         synchronized(this){if(busy)throw new IllegalStateException('A job is already running.');busy=true;if(fingerprint!=null)submittedFingerprint=fingerprint}
@@ -2635,12 +3229,31 @@ class CalciumAnalysisSession {
             try {File output=action.call(mine) as File
                 if(setup){percent=100;message='R is ready. Check the settings, then run analysis.';tone='good'}
                 else {load(output,fingerprint,submitted);percent=100;String empty=CalciumAnalysisSettings.noEvaluableCells(output)
-                    if(empty){message=empty;tone='warn'} else {message='Complete. Protocol, input snapshots and tables saved in '+output.name;tone='good'}}
+                    if(empty){message=empty;tone='warn'} else {message='Complete. Protocol, input snapshots and tables saved in '+output.name+'.'+CalciumAnalysisSettings.byHowChosen(output,measurement);tone='good'}}
             }catch(java.util.concurrent.CancellationException ignored){message='Cancelled. Completed analyses are kept; partial output is not used.';tone='plain';stage='';percent=0}
             catch(Throwable t){message=t.message?:t.toString();tone='bad'}
             finally{busy=false}
         }
     }
+    /** Saves what the page shows (the picture, the numbers behind it, and how it was made) in a "plots" folder beside the
+     *  measurement tables, so nothing has to be fished out of the browser's Downloads. Only that folder is written. */
+    Map export(Map body) {
+        if(!(measurement.folder instanceof File))throw new IllegalStateException('This measurement has no folder to save into.')
+        // a set of pictures (the frames of a movie view) goes into a folder of its own inside "plots"
+        String sub=body.folder instanceof String?(body.folder as String).replaceAll(/[^A-Za-z0-9._-]+/,'_').replaceAll(/^[._]+/,''):''
+        File dir=sub.isEmpty()?plotsFolder():new File(plotsFolder(),sub.length()>120?sub.substring(0,120):sub);if(!dir.isDirectory()&&!dir.mkdirs())throw new IOException('Could not create the folder '+dir.path)
+        String stem=(''+(body.name?:'plot')).replaceAll(/[^A-Za-z0-9._-]+/,'_').replaceAll(/^[._]+/,'');if(stem.isEmpty())stem='plot';if(stem.length()>160)stem=stem.substring(0,160)
+        List saved=[]
+        if(body.png instanceof String){
+            List picture=CalciumPictureFile.fromPage(body.png as String,body.format,body.dpi,body.compression)
+            new File(dir,stem+'.'+picture[1]).bytes=picture[0] as byte[];saved<<stem+'.'+picture[1]
+        }
+        if(body.csv instanceof String&&!(body.csv as String).isEmpty()){new File(dir,stem+'.csv').setText(body.csv as String,'UTF-8');saved<<stem+'.csv'}
+        if(body.metadata instanceof Map){new File(dir,stem+'.metadata.json').setText(groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(body.metadata)),'UTF-8');saved<<stem+'.metadata.json'}
+        if(saved.isEmpty())throw new IllegalArgumentException('There was nothing to save.')
+        [folder:dir.path,folderName:dir.name,saved:saved]
+    }
+    File plotsFolder(){new File(measurement.folder as File,'plots')}
     void setup(){launch(true){task->runtime.setup(task)}}
     /** Validate an exact copy, write private uploads, then let the engine snapshot them into the completed run. */
     synchronized void analyze(Map incoming,boolean confirmed) {
@@ -2650,6 +3263,7 @@ class CalciumAnalysisSession {
         Map submitted=CalciumAnalysisSettings.copy(incoming),uploads=[:]
         Map validation=CalciumAnalysisSettings.diagnose(submitted,measurement)
         if(validation.errors)throw new IllegalArgumentException(validation.errors.join(' '))
+        CalciumAnalysisSettings.remember(measurement,submitted)
         CalciumAnalysisSettings.FILE_KEYS.each{k,v->uploads[k]=CalciumAnalysisSettings.upload(submitted[k],k)}
         if(uploads.timestamps)CalciumMeasurement.readTimesRows(CalciumCsv.parse(uploads.timestamps.content as String),measurement.frames as int)
         // Check everything independent of filesystem writes before creating the request snapshot.
@@ -2692,9 +3306,18 @@ class CalciumAnalysisSession {
         def protocol={String name->File file=new File(dir,name);file.isFile()?new groovy.json.JsonSlurper().parse(file,'UTF-8'):null}
         String applied=fingerprint?:manifest.draft_sha256?:''
         List mean=numbers(average,1)
+        // The plot can also show the gray values themselves: corrected (cell minus its background) and raw (not corrected).
+        // They come from the measurement's own tables and are offered only when those hold exactly the analysed cells and frames.
+        def grayTable={File file->Map out=[:]
+            try{if(file!=null&&file.isFile()){def rows=CalciumCsv.read(file)
+                if(rows.size()==time.size()+1&&(rows[0].drop(1).collect{''+it} as Set).containsAll(traces.keySet())&&(rows[0].drop(1).collect{''+it} as Set)==((measurement.names?:[]).collect{''+it} as Set))rows[0].drop(1).eachWithIndex{name,i->out[''+name]=numbers(rows,i+1)}}}catch(Throwable ignored){out=[:]}
+            out}
+        File tableFolder=measurement.folder instanceof File?measurement.folder as File:null
+        Map corrected=grayTable(measurement.csv instanceof File?measurement.csv as File:null)
+        Map raw=grayTable(tableFolder==null?null:new File(tableFolder,measurement.recording+'_gray_values_raw.csv'))
         Map loaded=[folder:dir.name,time:time,frameTimes:time,timeSource:manifest.time_source?:'constant_fps',timingProvisional:false,mean:mean,sem:numbers(average,2),traces:traces,calls:calls,counts:counts,windows:windows,callsByWindow:callsByWindow,countsByWindow:countsByWindow,
             baseline:[time[first-1],time[last-1]],baselineFrames:[first,last],stimulus:[CalciumCsv.number(firstCall.Start_s?:manifest.stimulus_start),CalciumCsv.number(firstCall.Effective_end_s?:firstCall.End_s?:manifest.stimulus_end)],
-            appliedDraft:submitted==null?null:CalciumAnalysisSettings.copy(submitted),protocol:protocol('protocol.json'),appliedProtocol:protocol('applied_protocol.json'),manifest:manifest,appliedFingerprint:applied,tables:tables]
+            corrected:corrected,raw:raw,chosenBlind:(measurement.chosenBlind instanceof Map?measurement.chosenBlind:null),appliedDraft:submitted==null?null:CalciumAnalysisSettings.copy(submitted),protocol:protocol('protocol.json'),appliedProtocol:protocol('applied_protocol.json'),manifest:manifest,appliedFingerprint:applied,tables:tables]
         String text=json(loaded)
         synchronized(this){meanTrace=mean as double[];restFirst=first;restLast=last;rest=null;frameEpoch++;appliedTime=time as double[];appliedTimeSource=loaded.timeSource;appliedFingerprint=applied;results=dir;resultsJson=text;version++}
     }
@@ -2721,22 +3344,52 @@ class CalciumAnalysisSession {
         if(movie==null)throw new FileNotFoundException('No recording is attached to this measurement.')
         int n=measurement.frames as int
         if(wanted<1||wanted>n)throw new IllegalArgumentException('Frame must be between 1 and '+n+'.')
-        if(!(mode in ['raw','change']))throw new IllegalArgumentException('Frame mode must be raw or change.')
+        if(!(mode in ['raw','flat','magenta','change']))throw new IllegalArgumentException('Frame mode must be raw, flat, magenta or change.')
         def stack=movie.getStack();int f=wanted
         if(rest==null) {
-            rest=CalciumFrameView.mean(stack,restFirst,restLast)
+            rest=CalciumFrameView.mean(stack,restFirst,restLast,movedSet())   // moved frames would smear the resting picture
             // the frame where the cells are brightest on average sets the display range, so it does not flicker from frame to frame
             int peak=Math.max(1,Math.min(n,(restLast+n).intdiv(2)));double top=Double.NEGATIVE_INFINITY
             meanTrace.eachWithIndex{double v,int i->if(Double.isFinite(v)&&v>top&&i<n){top=v;peak=i+1}}
             def brightest=stack.getProcessor(peak);def resting=new ij.process.FloatProcessor(width,height,rest)
             double rise=CalciumFrameView.level(brightest,rest,0.9995d);if(!(rise>0d))rise=1d
+            // What a resting frame shows by itself (the last baseline frame against the resting picture): camera noise. A change is
+            // drawn at full strength only from twice that, so a recording in which nothing responds stays dark instead of showing
+            // its noise as if it were a response.
+            def quiet=stack.getProcessor(Math.max(1,Math.min(n,restLast)));double quietMiddle=CalciumFrameView.level(quiet,rest,0.5d)
+            double quietSpread=CalciumFrameView.level(quiet,rest,0.99d)-quietMiddle,quietTop=CalciumFrameView.level(quiet,rest,0.9995d)-quietMiddle
+            rise=Math.max(rise,2d*quietTop)
             changeRange=[-0.1d*rise,rise] as double[]
             double low=CalciumFrameView.level(resting,null,0.005d),high=Math.max(CalciumFrameView.level(resting,null,0.9995d),CalciumFrameView.level(brightest,null,0.9995d));if(!(high>low))high=low+1d
             rawRange=[low,high] as double[]
+            // "Background removed" and "response in magenta": the smooth background of the resting picture (Process > Subtract
+            // Background, rolling ball, as for the plugin's all-frames picture) is taken off every frame, so the lamp's uneven
+            // light goes and the cells stand out. Shown from 0 to the level 97 % of the brightest frame's pixels stay under, so
+            // very bright objects do not set the range. Magenta is the rise above the resting picture. The whole field fades
+            // during a recording, so each frame's own middle value (the median over the picture) is taken as "no change"; magenta
+            // starts a little above it and is full at 0.6 of the level 99 % of the brightest frame's pixels stay under. Display only.
+            def ground=new ij.process.FloatProcessor(width,height,(float[])rest.clone())
+            new ij.plugin.filter.BackgroundSubtracter().rollingBallBackground(ground,CalciumSteps.BALL_RADIUS,true,false,false,true,true)
+            background=(float[])ground.getPixels()
+            double flatTop=CalciumFrameView.level(brightest,background,0.97d);if(!(flatTop>0d))flatTop=1d
+            flatRange=[0d,flatTop] as double[]
+            riseTop=CalciumFrameView.level(brightest,rest,0.99d)-CalciumFrameView.level(brightest,rest,0.5d);if(!(riseTop>0d))riseTop=rise
+            riseTop=Math.max(riseTop,2d*quietSpread)
             frameImage=new java.awt.image.BufferedImage(width,height,java.awt.image.BufferedImage.TYPE_INT_RGB);work=new float[width*height];work2=new float[width*height]
         }
+        int[] pixels=((java.awt.image.DataBufferInt)frameImage.getRaster().getDataBuffer()).getData()
+        if(mode=='flat'){CalciumFrameView.paint(stack.getProcessor(f),background,flatRange[0],flatRange[1],pixels,work,work2,false);return frameImage}
+        if(mode=='magenta'){
+            if(tintBuffer==null||tintBuffer.length!=pixels.length)tintBuffer=new int[pixels.length]
+            double middle=CalciumFrameView.level(stack.getProcessor(f),rest,0.5d)
+            CalciumFrameView.paint(stack.getProcessor(f),rest,middle+0.15d*riseTop,middle+0.6d*riseTop,tintBuffer,work,work2,true,(float)middle)
+            CalciumFrameView.paint(stack.getProcessor(f),background,flatRange[0],flatRange[1],pixels,work,work2,false)
+            CalciumFrameView.tint(pixels,tintBuffer);return frameImage
+        }
         boolean change=mode!='raw';double[] range=change?changeRange:rawRange
-        CalciumFrameView.paint(stack.getProcessor(f),change?rest:null,range[0],range[1],((java.awt.image.DataBufferInt)frameImage.getRaster().getDataBuffer()).getData(),work,work2,change)
+        // "Change from baseline" counts from each frame's own middle value too (the whole field fades), and loses the rims of shifted objects
+        if(change){double middle=CalciumFrameView.level(stack.getProcessor(f),rest,0.5d);CalciumFrameView.paint(stack.getProcessor(f),rest,middle+range[0],middle+range[1],pixels,work,work2,true,(float)middle)}
+        else CalciumFrameView.paint(stack.getProcessor(f),null,range[0],range[1],pixels,work,work2,false)
         frameImage
     }
 }
@@ -2805,6 +3458,7 @@ class CalciumWebServer {
                     case 'api/state':replyJson(exchange,200,now.state());return
                     case 'api/results':replyJson(exchange,200,now.resultsJson);return
                     case 'api/picture':if(now.picture==null)reply(exchange,404,'txt','No picture'.bytes) else reply(exchange,200,'png',now.picture);return
+                    case 'api/background':if(now.backgroundPicture==null)reply(exchange,404,'txt','No background picture'.bytes) else reply(exchange,200,'png',now.backgroundPicture);return
                     case 'api/frame':
                         if(!query.containsKey('f')||!query.containsKey('mode'))throw new IllegalArgumentException('Ask for a frame number and a display mode.')
                         String frame=query.f,size=query.w?:'0'
@@ -2823,12 +3477,18 @@ class CalciumWebServer {
                     case 'api/analyze':now.analyze(body.draft as Map,body.confirmed==true);replyJson(exchange,200,now.state());return
                     case 'api/setup':now.setup();replyJson(exchange,200,now.state());return
                     case 'api/cancel':now.cancel();replyJson(exchange,200,now.state());return
+                    case 'api/export':replyJson(exchange,200,now.export(body));return
+                    case 'api/prefs':replyJson(exchange,200,CalciumAnalysisSettings.setPagePref(body.key,body.value));return
+                    case 'api/convert':   // the same file as Save writes, handed back for the browser's own download
+                        if(!(body.png instanceof String))throw new IllegalArgumentException('There is no picture to convert.')
+                        List converted=CalciumPictureFile.fromPage(body.png as String,body.format,body.dpi,body.compression)
+                        replyJson(exchange,200,[extension:converted[1],base64:Base64.encoder.encodeToString(converted[0] as byte[])]);return
                     case 'api/close':
                         if(now.busy)throw new IllegalStateException('Cancel or finish the analysis before closing this page.')
                         replyJson(exchange,200,[closed:true]);Thread.startDaemon('Close calcium analysis page'){stop()};return
                     case 'api/open':
-                        File target=body.what=='log'?now.job?.logFile:now.results
-                        if(target==null||!target.exists()){replyJson(exchange,404,[error:body.what=='log'?'There is no log yet.':'There are no saved results yet.']);return}
+                        File target=body.what=='log'?now.job?.logFile:body.what=='plots'?(now.measurement.folder instanceof File?now.plotsFolder():null):now.results
+                        if(target==null||!target.exists()){replyJson(exchange,404,[error:body.what=='log'?'There is no log yet.':body.what=='plots'?'No plot has been saved yet.':'There are no saved results yet.']);return}
                         now.open.call(target);replyJson(exchange,200,[opened:target.name]);return
                 }
             }
@@ -2872,8 +3532,11 @@ class CalciumSimpleCaBundle {
 
 // BEGIN GENERATED WEB BUNDLE
 class CalciumWebBundle {
-    static final String SHA256 = "f96a6f4cef185850560b22fc8e20a3c38a0097bce3af0315b117c8a88451b6ca"
-    static final String CONTENT = "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"
+    static final String SHA256 = "cf869404e36103ed39e473767bf71955ca335461872b7e92571642933396cd79"
+    static final List<String> PARTS = [
+        "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"]
+    static final String CONTENT = PARTS.join("")
 }
 // END GENERATED WEB BUNDLE
 
@@ -3106,8 +3769,11 @@ class CalciumUpdatesPanel extends CalciumCard {
             }
             releasePage = found.page; selectedRelease = found
             installBtn.setVisible(found.newer && found.installable); laterBtn.setVisible(found.newer)
+            boolean aheadOfRelease = false
+            try { aheadOfRelease = !found.newer && CalciumRelease.newer(CalciumRelease.VERSION, String.valueOf(found.version)) } catch (Exception ignored) { }
             message(found.newer ? '<b>Update available: '+CalciumInstaller.escape(found.version)+'.</b> '+
                 (found.installable ? 'Install it here, then restart Fiji to use it.' : 'Open Release notes for installation instructions.') :
+                aheadOfRelease ? 'This copy ('+CalciumRelease.VERSION+') is newer than the latest release ('+CalciumInstaller.escape(found.version)+'): a test build that has not been released.' :
                 'You are up to date (installed '+CalciumRelease.VERSION+'; latest release '+CalciumInstaller.escape(found.version)+').')
         })
         if (accepted) {
@@ -3162,6 +3828,27 @@ class CalciumStartDialog {
         dialog.setSize(Math.min(dialog.getWidth(), (int) bounds.getWidth() - insets.left - insets.right - 40),
             Math.min(dialog.getHeight(), (int) bounds.getHeight() - insets.top - insets.bottom - 60))
     }
+    /** Blind selection: which frames come before the stimulus. Offers the plugin's own estimate (the frames before the rise it
+     *  found, which end well ahead of it) for the user to confirm or change. Returns [first, last], or null when cancelled. */
+    static int[] askBlindFrames(def steps) {
+        int n = (int) steps.n, estimate = (int) steps.estimatedLastBeforeStimulus()
+        int first = steps.blind ? (int) steps.blindFirst : 1, last = steps.blind ? (int) steps.blindLast : (estimate > 0 ? estimate : Math.min(20, n))
+        while (true) {
+            def gd = new GenericDialog("Frames before the stimulus")
+            gd.addMessage(estimate > 0 ? "The cells start to rise near frame " + steps.onset + ". The frames offered end " + (steps.onset - estimate) + " frames before that,\nso cells that respond early are not in them. Check the last frame against when the stimulus was added." :
+                "No response was found, so the plugin cannot tell when the stimulus was added.\nType the last frame before it.")
+            gd.addNumericField("First frame", first, 0)
+            gd.addNumericField("Last frame before the stimulus", last, 0)
+            gd.addMessage("Cells are found and chosen on these frames only; more frames give a clearer picture.\nStep 4 takes its baseline and the stimulus time from them. Measurements still use every frame.")
+            gd.showDialog(); if (gd.wasCanceled()) return null
+            double a = gd.getNextNumber(), b = gd.getNextNumber()
+            if (!Double.isFinite(a) || !Double.isFinite(b) || a != Math.floor(a) || b != Math.floor(b) || a < 1 || b < a || b > n) { IJ.error("Calcium imaging", "Choose whole frame numbers from 1 to " + n + ", the first no later than the last."); continue }
+            first = (int) a; last = (int) b
+            if (steps.found && last >= (int) steps.onset && !IJ.showMessageWithCancel("Calcium imaging", "Frame " + last + " is at or after the rise near frame " + steps.onset + ".\nFrames after the stimulus are not blind: cells that respond are brighter in them.\n\nUse these frames anyway?")) continue
+            if (estimate > 0 && estimate - last >= 20 && IJ.showMessageWithCancel("Calcium imaging", "The cells start to rise near frame " + steps.onset + ", so the frames up to " + estimate + " come before the stimulus.\nYou chose frames " + first + "-" + last + ". With more frames the picture is clearer and more cells are found.\n\nOK: use frames " + first + "-" + estimate + ".    Cancel: keep " + first + "-" + last + ".")) last = estimate
+            return [first, last] as int[]
+        }
+    }
     /** The file and folder choosers; tests replace them so no native dialog opens. Each returns a path, or null when cancelled. */
     static Closure chooseFile = { -> def od = new ij.io.OpenDialog("Choose the recording (.zvi, .czi, .tif ...)"); od.getFileName() == null ? null : od.getPath() }
     static Closure chooseFolder = { String from -> ij.io.DirectoryChooser.setDefaultDirectory(from); new ij.io.DirectoryChooser("Folder for the results").getDirectory() }
@@ -3180,7 +3867,14 @@ class CalciumStartDialog {
             def recording = new CalciumCard("", "Recording", false)
             def choice = new javax.swing.JComboBox<String>(labels as String[]); choice.setSelectedItem(preselected); choice.setFont(CalciumTheme.font()); choice.setAlignmentX(0f)
             choice.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, (int) choice.getPreferredSize().height))
-            def look = new javax.swing.JCheckBox("Look for a response and show it in magenta", false); CalciumTheme.plain(look)
+            // How cells are chosen. Blind is the default: for % responding, whether a cell is chosen must not depend on its response.
+            def blindChoice = new javax.swing.JRadioButton("Before the stimulus only (blind): for % responding", true)
+            def allChoice = new javax.swing.JRadioButton("All frames", false)
+            def look = new javax.swing.JRadioButton("All frames, with the response in magenta (not for % responding)", false)
+            blindChoice.setToolTipText("<html>Cellpose and you see only the frames before the stimulus, and traces are hidden while choosing,<br>so a cell is chosen the same way whether or not it responds. You confirm the last frame before the stimulus.</html>")
+            allChoice.setToolTipText("<html>The average of all frames. It includes the frames after the stimulus,<br>so cells that stay bright after it are a little easier to see.</html>")
+            look.setToolTipText("<html>Cells that brighten after the stimulus turn magenta and are easier to find.<br>Dim cells are then chosen only if they respond, which raises % responding.<br>Use it for the size or timing of responses, not for % responding.</html>")
+            def choiceGroup = new javax.swing.ButtonGroup(); [blindChoice, allChoice, look].each { choiceGroup.add(it); CalciumTheme.plain(it) }
             // Choosing "from disk" asks for the file here, straight away, and shows its name; Next is not needed to get the file chooser.
             String file = null
             def fileButton = CalciumTheme.button("Choose file…"), fileName = CalciumTheme.label("No file chosen yet", CalciumTheme.MUTED)
@@ -3202,7 +3896,8 @@ class CalciumStartDialog {
             fileButton.addActionListener({ e -> pickFile() } as java.awt.event.ActionListener)
             choice.addActionListener({ e -> showFileRow(); if (dialog.isVisible() && choice.getSelectedItem() == diskLabel) javax.swing.SwingUtilities.invokeLater { pickFile() } } as java.awt.event.ActionListener)
             fileRow.setVisible(choice.getSelectedItem() == diskLabel)
-            [choice, fileRow, javax.swing.Box.createVerticalStrut(4), hint("Pick the original movie, not a processed copy."), javax.swing.Box.createVerticalStrut(8), look].each { recording.body.add(it) }
+            [choice, fileRow, javax.swing.Box.createVerticalStrut(4), hint("Pick the original movie, not a processed copy."), javax.swing.Box.createVerticalStrut(10),
+             CalciumTheme.label("Choose cells on:", CalciumTheme.INK), blindChoice, allChoice, look].each { recording.body.add(it) }
             def results = new CalciumCard("", "Folder for the results", false)
             def folder = new javax.swing.JTextField(defaultFolder, 30); folder.setFont(CalciumTheme.font()); def browse = CalciumTheme.button("Browse…")
             def line = new javax.swing.JPanel(new java.awt.BorderLayout(6, 0)); line.setOpaque(false); line.setAlignmentX(0f); line.add(folder, java.awt.BorderLayout.CENTER); line.add(browse, java.awt.BorderLayout.EAST)
@@ -3225,7 +3920,7 @@ class CalciumStartDialog {
                 boolean disk = choice.getSelectedItem() == diskLabel
                 if (disk && file == null) pickFile()          // Next without a file still asks for one,
                 if (disk && file == null) return              // and stays here if that was cancelled
-                answer = [recording: choice.getSelectedItem() as String, look: look.isSelected(), folder: folder.getText(), file: disk ? file : null]; dismiss()
+                answer = [recording: choice.getSelectedItem() as String, look: look.isSelected(), blind: blindChoice.isSelected(), folder: folder.getText(), file: disk ? file : null]; dismiss()
             } as java.awt.event.ActionListener)
             cancel.addActionListener({ e -> dismiss() } as java.awt.event.ActionListener)
             dialog.getRootPane().setDefaultButton(next)
@@ -3272,6 +3967,7 @@ def start = CalciumStartDialog.ask(labels, pre, defaultDir, fromDisk)
 if (start == null) return
 def picked = start.recording
 boolean look = start.look
+boolean blindStart = start.blind == true
 def outRoot = start.folder
 if (outRoot == null || outRoot.trim().isEmpty()) outRoot = defaultDir
 Prefs.set("calcium.steps.folder", outRoot)
@@ -3288,7 +3984,12 @@ if (imp == null || imp.getStackSize() < 2) { IJ.error("Calcium imaging", "No mov
 IJ.showStatus("Making the cells visible...")
 if (imp.getBitDepth() == 32) IJ.log("Calcium imaging plugin: this movie is 32-bit, so it looks like a processed copy. Background is meant to be taken on the original movie.")
 def steps = new CalciumSteps()
-steps.prepare(imp, look)
+steps.prepare(imp, look || blindStart)   // blind: the response is looked for only to offer when the stimulus came; it is never shown while choosing
+if (blindStart) {
+    int[] frames = CalciumStartDialog.askBlindFrames(steps)
+    if (frames == null) { IJ.showStatus("Calcium imaging: cancelled"); return }
+    steps.startBlind(frames[0], frames[1])
+}
 steps.colourPic.show()
 IJ.run(steps.colourPic, "Set... ", "zoom=75")
 def rm = testGui ? new RoiManager(false) : RoiManager.getRoiManager()
@@ -3299,7 +4000,7 @@ def outDir = new File(outRoot, base)
 // ---- the window that stays open for steps 2 and 3 ----
 def GRADE_TEXT = ["responds on its own", "likely a cell", "unsure", "very bright: probably precipitate"]
 def GRADE_SHARE = ["about 8 in 10 such outlines were real cells in tests", "about 8 in 10 such outlines were real cells in tests", "about 4 in 10 such outlines were real cells in tests", "about 1 in 10 such outlines were real cells in tests"]
-def CYAN = new Color(0, 220, 255), GREY = new Color(205, 205, 205), ORANGE = new Color(255, 150, 0), BLUE = new Color(40, 150, 255)
+def CYAN = new Color(0, 220, 255), GREY = new Color(205, 205, 205), RED = new Color(255, 70, 70), BLUE = new Color(40, 150, 255)
 def DASH = new java.awt.BasicStroke(1f, java.awt.BasicStroke.CAP_BUTT, java.awt.BasicStroke.JOIN_MITER, 10f, [4f, 4f] as float[], 0f)
 def small = CalciumTheme.font(), bold = CalciumTheme.font(java.awt.Font.BOLD, 1f)
 def MUTED = CalciumTheme.hex(CalciumTheme.MUTED)
@@ -3311,7 +4012,21 @@ def lineIcon = { Color c, int width, boolean dashed, boolean filled ->
     else { g.setStroke(dashed ? DASH : new java.awt.BasicStroke((float) width)); g.drawOval(5, 2, 20, 10) }
     g.dispose(); new javax.swing.ImageIcon(bi)
 }
-def legendRow = { javax.swing.Icon ic, String s -> def l = new javax.swing.JLabel(s, ic, javax.swing.SwingConstants.LEFT); l.setFont(CalciumTheme.font(java.awt.Font.PLAIN, -1f)); l.setForeground(CalciumTheme.MUTED); l.setIconTextGap(6); l.setAlignmentX(0f); l }
+// The legend is also the switch for what is drawn on the picture: click an entry to hide or show that kind (your cells,
+// the background, or one grade of suggestion); double-click an entry to see only that kind, and again to see everything.
+def hiddenKinds = [] as Set          // 'cells', 'background', 'g0' responds, 'g1' likely, 'g2' unsure, 'g3' precipitate?
+def legendEntries = [:]
+Closure legendClicked = null         // set below, once the picture can be redrawn
+def legendRow = { javax.swing.Icon ic, String s, String kind = null ->
+    def l = new javax.swing.JLabel(s, ic, javax.swing.SwingConstants.LEFT); l.setFont(CalciumTheme.font(java.awt.Font.PLAIN, -1f)); l.setForeground(CalciumTheme.MUTED); l.setIconTextGap(6); l.setAlignmentX(0f)
+    if (kind != null) {
+        legendEntries[kind] = [label: l, text: s]
+        l.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR))
+        l.setToolTipText("Click to hide or show these on the picture. Double-click to see only these (double-click again for everything).")
+        l.addMouseListener(new java.awt.event.MouseAdapter() { void mouseClicked(java.awt.event.MouseEvent e) { if (legendClicked != null) legendClicked.call(kind, e.getClickCount() >= 2) } })
+    }
+    l
+}
 def section = { String number, String title, boolean collapsible = true -> new CalciumCard(number, title, collapsible) }
 def row = { java.awt.Component... cs -> def p = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 3)); p.setOpaque(false); cs.each { p.add(it) }; p.setAlignmentX(0f); p }
 def note = { String s -> def l = new javax.swing.JLabel("<html><body style='width:300px'>" + s + "</body></html>"); l.setFont(small); l.setForeground(CalciumTheme.INK); l.setAlignmentX(0f); l }
@@ -3326,9 +4041,13 @@ def root = new CalciumScrollPanel(); root.setBorder(javax.swing.BorderFactory.cr
 // One card per step. Step 1 is already done; of steps 2 to 4 only one is open at a time, so the window fits the screen.
 def s1 = section("1", "Recording", false); s1.setDone(true)
 def recordingNote = note("&nbsp;")
+// "The field moved (about 16 px) during frames 1–10.", or nothing (also for a window built without the movement check)
+// For Step 4 the movement is counted from the frames the cells were chosen on whenever such frames were confirmed, also after cells were added with the response.
+def motionForPage = { chosen -> try { return chosen != null && steps.motionShifts != null ? CalciumMotion.summary(steps.motionShifts, chosen.first as int, chosen.last as int) : steps.motion } catch (Throwable ignored) { return null } }
+def movedNote = { -> try { steps.sayMotion(); return CalciumMotion.sentence(steps.motion) } catch (Throwable ignored) { return "" } }
 def describeRecording = { ->
-    recordingNote.setText("<html><body style='width:300px'><b>" + CalciumTheme.middle(imp.getTitle(), 40) + "</b><br><font color='" + MUTED + "'>" + steps.n + " frames · " + (steps.found ? "response near frame " + steps.onset + " (magenta)" : (steps.looked ? "no response found (no magenta)" : "response not looked for")) + "</font></body></html>")
-    recordingNote.setToolTipText(imp.getTitle() + ". " + (steps.found ? "Brightness rises near frame " + steps.onset + "; the response can be shown in magenta." : (steps.looked ? "No response was found, so there is no magenta. Every cell is still shown in green." : "The response has not been looked for. Choose Response (magenta) in Step 2 to look for it.")))
+    recordingNote.setText("<html><body style='width:300px'><b>" + CalciumTheme.middle(imp.getTitle(), 40) + "</b><br><font color='" + MUTED + "'>" + steps.n + " frames · " + (steps.blind ? "cells chosen blind on frames " + steps.blindFirst + "–" + steps.blindLast : steps.found ? "response near frame " + steps.onset + " (magenta)" : (steps.looked ? "no response found (no magenta)" : "response not looked for")) + "</font>" + (movedNote() ? "<br><font color='#9A5B00'>" + movedNote() + "</font>" : "") + "</body></html>")
+    recordingNote.setToolTipText(imp.getTitle() + ". " + (steps.blind ? "Cells are chosen on frames " + steps.blindFirst + "–" + steps.blindLast + ", before the stimulus" + (steps.found ? "; the cells start to rise near frame " + steps.onset : "") + ". The response is not shown while choosing." : steps.found ? "Brightness rises near frame " + steps.onset + "; the response can be shown in magenta." : (steps.looked ? "No response was found, so there is no magenta. Every cell is still shown in green." : "The response has not been looked for. Choose Response (magenta) in Step 2 to look for it.")))
 }
 describeRecording()
 def changeBtn = btn("‹ Change recording")
@@ -3336,11 +4055,12 @@ changeBtn.setToolTipText("Back to the first screen, to choose another recording 
 s1.body.add(recordingNote); s1.body.add(row(changeBtn))
 
 def s2 = section("2", "Choose the cells")
-String selectionBasis = steps.found ? 'Response-assisted review' : 'All-frames structural review'
+String selectionBasis = steps.blind ? steps.blindBasis() : steps.found ? 'Response-assisted review' : 'All-frames structural review'
 // What the colour picture shows while cells are chosen. The choice is recorded with the measurement as the selection basis.
-def viewAllBtn = btn('All frames'), viewBaselineBtn = btn('Baseline…'), viewResponseBtn = btn('Response (magenta)')
+def viewAllBtn = btn('All frames'), viewBaselineBtn = btn('Before stimulus (blind)…'), viewResponseBtn = btn('Response (magenta)')
 viewAllBtn.setToolTipText('The average of all frames with the background removed: cells by their structure')
-viewBaselineBtn.setToolTipText('Only frames before the stimulus, so a cell looks the same whether or not it responds')
+viewBaselineBtn.setToolTipText('<html>Only frames before the stimulus. Suggestions are made on this picture too, traces are hidden<br>and grades use shape, size and brightness only, so whether a cell is chosen cannot depend on its response.</html>')
+def blindNote = { -> 'Blind: frames ' + steps.blindFirst + '–' + steps.blindLast + ' only, before the stimulus. Suggestions come from this picture, traces are hidden, and grades use shape, size and brightness. Recorded as pre-stimulus, blind.' }
 viewResponseBtn.setToolTipText('<html>Cells that brighten after the stimulus turn magenta.<br>Choosing cells with this on is recorded as response-assisted selection,<br>which can raise percent responding.</html>')
 def selectionNote = hint('&nbsp;')
 def showView = { String which, String text ->
@@ -3365,17 +4085,32 @@ edgeBox.setToolTipText("<html>At the edge a cell's background can only be taken 
 def status = new javax.swing.JLabel("<html><body style='width:300px'><b>Cells chosen: 0</b></body></html>"); status.setFont(small); status.setForeground(CalciumTheme.INK); status.setAlignmentX(0f)
 def info = note("&nbsp;")
 def trace = new CalciumTracePanel(); trace.setAlignmentX(0f); trace.setFont(small)
+if (steps.blind) { trace.show(null, "Traces are hidden while choosing cells blind", 0, 0); trace.setVisible(false) }   // no empty frame while choosing blind
+// Step 2 leads through its own order: suggest, accept the likely ones, check the dashed ones, add the cells that only show when
+// they respond, continue. This line always names the one thing to do next (set in refresh, from what has been done so far).
+def nextLine = note("&nbsp;")
+def sayNext = { String text -> nextLine.setText("<html><body style='width:300px'><b><font color='#1F6FB2'>Next:</font></b> " + text + "</body></html>") }
+def addRespondersBtn = btn("Add cells that respond…")
+addRespondersBtn.setToolTipText("<html>Shows the response (magenta) and looks for the cells that only show when they respond.<br>Your cells so far stay recorded as chosen blind; the ones you add are counted apart in Step 4.</html>")
+addRespondersBtn.setVisible(steps.blind == true)
+boolean detecting = false, autoSuggestAsked = false
+s2.body.add(nextLine); s2.body.add(javax.swing.Box.createVerticalStrut(4))
 s2.body.add(row(CalciumTheme.label('Picture:', CalciumTheme.MUTED), viewAllBtn, viewBaselineBtn, viewResponseBtn)); s2.body.add(selectionNote)
 def cpLabel = hint("&nbsp;")
 def setupBtn = btn("Set up Cellpose (one time)"); def setupRow = row(setupBtn)
 def detectionProgress = new CalciumOutlineProgress()
 def continueBtn = btn("Continue to measure  ›")
-showView(steps.found ? 'response' : 'all', steps.found ? 'Magenta: cells that brightened near frame ' + steps.onset + '. Picking cells this way is recorded as response-assisted.' : 'Choosing cells on the average of all frames.')
-s2.body.add(row(suggestBtn, acceptAllBtn)); s2.body.add(detectionProgress); s2.body.add(cpLabel); s2.body.add(setupRow)
-s2.body.add(row(CalciumTheme.label("Or draw:", CalciumTheme.MUTED), ovalBtn, freeBtn, addBtn))
-s2.body.add(row(showSug, showBg)); s2.body.add(row(edgeBox))
+showView(steps.blind ? 'baseline' : steps.found ? 'response' : 'all', steps.blind ? blindNote() : steps.found ? 'Magenta: cells that brightened near frame ' + steps.onset + '. Picking cells this way is recorded as response-assisted.' : 'Choosing cells on the average of all frames.')
+s2.body.add(row(suggestBtn, acceptAllBtn)); s2.body.add(row(addRespondersBtn, continueBtn)); s2.body.add(detectionProgress); s2.body.add(cpLabel); s2.body.add(setupRow)
+// Drawing by hand and what is shown are used now and then: one line opens them, so the sequence above stays short.
+def moreRows = new javax.swing.JPanel(); moreRows.setLayout(new javax.swing.BoxLayout(moreRows, javax.swing.BoxLayout.Y_AXIS)); moreRows.setOpaque(false); moreRows.setAlignmentX(0f)
+moreRows.add(row(CalciumTheme.label("Draw:", CalciumTheme.MUTED), ovalBtn, freeBtn, addBtn)); moreRows.add(row(showSug, showBg)); moreRows.add(row(edgeBox))
+def moreBtn = btn("Draw by hand, what is shown  ▸"); moreBtn.setToolTipText("Oval, Freehand and Add outline; show or hide suggestions and background; cells at the edge")
+moreRows.setVisible(false)
+moreBtn.addActionListener { moreRows.setVisible(!moreRows.isVisible()); moreBtn.setText("Draw by hand, what is shown  " + (moreRows.isVisible() ? "▾" : "▸")); frame.revalidate(); frame.repaint() }
 s2.body.add(javax.swing.Box.createVerticalStrut(4)); s2.body.add(status)
 s2.body.add(row(removeBtn, undoBtn, removeMode)); s2.body.add(editHint)
+s2.body.add(row(moreBtn)); s2.body.add(moreRows)
 s2.body.add(info); s2.body.add(trace); s2.body.add(javax.swing.Box.createVerticalStrut(6))
 def legend = new javax.swing.JPanel(new java.awt.GridLayout(0, 3, 6, 2)); legend.setAlignmentX(0f); legend.setOpaque(false)
 def acceptedIcon = new java.awt.image.BufferedImage(30, 14, java.awt.image.BufferedImage.TYPE_INT_ARGB)
@@ -3384,20 +4119,25 @@ acceptedGraphics.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java
 acceptedGraphics.setColor(new Color(24, 30, 36)); acceptedGraphics.fillRoundRect(0, 0, 30, 14, 6, 6)
 acceptedGraphics.setColor(Color.black); acceptedGraphics.setStroke(new java.awt.BasicStroke(5f)); acceptedGraphics.drawOval(6, 3, 18, 8)
 acceptedGraphics.setColor(Color.white); acceptedGraphics.setStroke(new java.awt.BasicStroke(2f)); acceptedGraphics.drawOval(6, 3, 18, 8); acceptedGraphics.dispose()
-legend.add(legendRow(new javax.swing.ImageIcon(acceptedIcon), "your cells"))
-legend.add(legendRow(lineIcon(CYAN, 2, false, false), "responds"))
-legend.add(legendRow(lineIcon(GREY, 1, true, false), "unsure"))
-legend.add(legendRow(lineIcon(BLUE, 1, false, true), "background"))
-legend.add(legendRow(lineIcon(CYAN, 1, false, false), "likely a cell"))
-legend.add(legendRow(lineIcon(ORANGE, 1, false, false), "precipitate?"))
-legend.setToolTipText("White: your cells. Blue: the background used. The other four are suggestions, by grade.")
+legend.add(legendRow(new javax.swing.ImageIcon(acceptedIcon), "your cells", "cells"))
+def respondsLegend = legendRow(lineIcon(CYAN, 2, false, false), "responds", "g0"); respondsLegend.setVisible(!steps.blind)   // no such grade while choosing blind
+legend.add(legendRow(lineIcon(CYAN, 1, false, false), "likely a cell", "g1"))
+legend.add(legendRow(lineIcon(GREY, 1, true, false), "unsure", "g2"))
+legend.add(legendRow(lineIcon(BLUE, 1, false, true), "background", "background"))
+legend.add(legendRow(lineIcon(RED, 2, false, false), "precipitate?", "g3"))
+legend.add(respondsLegend)   // last, so the grid has no hole when it is hidden
+legend.setToolTipText("White: your cells. Blue: the background used. The others are suggestions, by grade. Click an entry to hide or show it on the picture; double-click to see only that one.")
+def legendHint = CalciumTheme.label("Click an entry to hide or show it on the picture; double-click to see only that one.", CalciumTheme.MUTED)
+legendHint.setFont(CalciumTheme.font(java.awt.Font.PLAIN, -2f)); legendHint.setAlignmentX(0f)
 legend.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, (int) legend.getPreferredSize().height))
-s2.body.add(legend); s2.body.add(row(continueBtn))
+s2.body.add(legend)   // how to use the legend is in its tooltip
 
 def s3 = section("3", "Measure and save")
 def makeMovie = box("Also open a background-corrected movie", true)
 def saveMovie = box("Save that movie as a TIFF too (large)", false)
 saveMovie.setToolTipText("About 1.7 GB for 300 frames of 1388 x 1040")
+def sensBox = box("Sensitivity check after measuring (blind only)", true); sensBox.setVisible(steps.blind == true)
+sensBox.setToolTipText("<html>Runs response-assisted detection once, for comparison, and reports how many of its outlines<br>the blind detection also found. A second Cellpose run: about 20 s with a graphics chip, a few minutes<br>without; saved outlines are reused. Its outlines are never added to your cells or measured.</html>")
 def go = CalciumTheme.button("Measure and save", true)
 def savedIn = "..." + File.separator + CalciumTheme.middle(outDir.getParentFile().getName(), 24) + File.separator + "<br>" + CalciumTheme.middle(outDir.getName(), 44)
 def result = note("Saves the tables in: " + savedIn); result.setToolTipText(outDir.getPath())
@@ -3405,7 +4145,7 @@ def openBtn = btn("Open results folder"); openBtn.setVisible(false)
 def closeBtn = btn("Close")
 closeBtn.setToolTipText("Close this window; the pictures and saved results stay")
 def backToCellsBtn = btn('‹ Back to cells')
-s3.body.add(makeMovie); s3.body.add(saveMovie); s3.body.add(row(go, openBtn)); s3.body.add(result); s3.body.add(row(backToCellsBtn))
+s3.body.add(makeMovie); s3.body.add(saveMovie); s3.body.add(sensBox); s3.body.add(row(go, openBtn)); s3.body.add(result); s3.body.add(row(backToCellsBtn))
 def s4 = section("4", "Analyze responses")
 def analyzeBtn = CalciumTheme.button("Open analysis page", true); analyzeBtn.setEnabled(false)
 analyzeBtn.setToolTipText("Opens the analysis page in your browser. It runs on this computer only; nothing is sent anywhere.")
@@ -3431,31 +4171,44 @@ scroll.setWheelScrollingEnabled(true)
 scroll.getVerticalScrollBar().setUnitIncrement(24)
 scroll.getHorizontalScrollBar().setUnitIncrement(24)
 frame.getContentPane().add(scroll)
-frame.pack(); frame.setAlwaysOnTop(true)
+frame.pack()
+// An ordinary window: clicking a picture or another program puts this window behind it, like any other window.
+// (It used to stay above all of Fiji's windows, and could not be sent back.) It opens beside the picture, so both stay visible.
 if (!testGui) { def scr = java.awt.Toolkit.getDefaultToolkit().getScreenSize(); frame.setLocation((int) Math.max(0, scr.width - frame.getWidth() - 12), 40) }
 if (!testGui) CalciumTheme.beside(steps.colourPic, frame)   // the colour picture takes the free space on the left; this window stays on the right
-// Stay above Fiji's own windows while Fiji is in use, but drop back when another program (a browser, e-mail) is in front.
-// Fiji has no active window while another program is in front. A short delay stops flicker when moving between Fiji's own windows.
-if (!testGui) {
-    def focus = java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager()
-    def settle = new javax.swing.Timer(250, { e -> if (frame.isDisplayable()) frame.setAlwaysOnTop(focus.getActiveWindow() != null) } as java.awt.event.ActionListener)
-    settle.setRepeats(false)
-    def follow = { java.beans.PropertyChangeEvent e -> settle.restart() } as java.beans.PropertyChangeListener
-    focus.addPropertyChangeListener("activeWindow", follow)
-    frame.addWindowListener(new java.awt.event.WindowAdapter() { void windowClosed(java.awt.event.WindowEvent e) { settle.stop(); focus.removePropertyChangeListener("activeWindow", follow) } })
-}
 
 // ---- what the window does ----
 def lastKey = ""; int[][] lastBg = new int[0][]
 def proposals = []        // automatic outlines: [roi, grade (0 responds, 1 likely, 2 unsure, 3 bright), ev (the measured evidence), cx, cy]
 def cellEdits = new CalciumCellEdits(manager: rm, picture: steps.colourPic)
 def measuredKey = { Roi[] rois -> rois.collect { CalciumInstaller.digest(RoiEncoder.saveAsByteArray(it)) }.join(':') }
+// Blind selection stays blind only while nothing of the response has been shown: a trace, the magenta picture or Step 4.
+// The outlines held at that moment were chosen blind; outlines changed afterwards are recorded as not blind.
+boolean responseSeen = steps.found && !steps.blind && look      // magenta shown from the start
+String blindKey = null
+// Per cell: the outlines held when the response was first shown. A cell with one of these outlines, unchanged, was chosen blind;
+// a cell added or reshaped afterwards was not. Lets blind and response-assisted choosing be used together and counted apart.
+Set blindCellKeys = null             // set when blind choosing ends; null while it has never ended
+Set notBlindKeys = [] as Set         // cells added outside blind choosing, kept apart if blind choosing is started again
+def cellKey = { Roi r -> r.getBounds().toString() + '#' + r.getContainedPoints().length }
+Closure endBlindChoosing = null      // set below, once the outlines can be read
+Closure reveal = null                                             // set below, once the outlines can be read
+def basisFor = { Roi[] all ->
+    if (!steps.blind) {
+        // cells chosen blind first and others added afterwards: say so, with the counts (the registry has it cell by cell)
+        int blindly = steps.blindLast > 0 && blindCellKeys != null ? (all.count { blindCellKeys.contains(cellKey(it)) } as int) : 0
+        return blindly == 0 ? selectionBasis : 'Blind on frames ' + steps.blindFirst + '-' + steps.blindLast + ', then ' + (selectionBasis.startsWith('Response') ? 'response-assisted' : 'all frames') + ': ' + blindly + ' chosen blind, ' + (all.length - blindly) + ' added afterwards'
+    }
+    (!responseSeen || measuredKey(all) == blindKey) ? steps.blindBasis() :
+        'Pre-stimulus picture (frames ' + steps.blindFirst + '-' + steps.blindLast + '), not blind: the response had been shown before these outlines were final'
+}
 // Step 4 opens as a page in the browser, served from this computer by the plugin. The Fiji window does the same analysis
 // and is used when asked for, or when the page cannot be served or opened here.
 CalciumWebPages stepFourPages = new CalciumWebPages()
 def openFijiWindow = { -> def window = new CalciumAnalysisWindow(analysisMeasurement); window.besideControls(frame); window.setVisible(true) }
 analyzeBtn.addActionListener({ e ->
     if (analysisMeasurement == null) return
+    reveal()
     if (testGui) { openFijiWindow(); return }
     try {
         def stepFourPage = stepFourPages.page(analysisMeasurement)
@@ -3466,7 +4219,7 @@ analyzeBtn.addActionListener({ e ->
         openFijiWindow()
     }
 } as java.awt.event.ActionListener)
-classicBtn.addActionListener({ e -> if (analysisMeasurement != null) openFijiWindow() } as java.awt.event.ActionListener)
+classicBtn.addActionListener({ e -> if (analysisMeasurement != null) { reveal(); openFijiWindow() } } as java.awt.event.ActionListener)
 // Browser pages keep their own measurement snapshots until Close analysis or Fiji exits.
 def cellRois = { ->
     Roi[] accepted=rm.getRoisAsArray()
@@ -3476,6 +4229,8 @@ def cellRois = { ->
     def all = unique as List
     all.findAll { it != null && it.isArea() }.collect { def r = (Roi) it.clone(); r.setPosition(0); r } as Roi[]
 }
+endBlindChoosing = { -> if (steps.blindLast > 0 && blindCellKeys == null) blindCellKeys = (cellRois().collect { cellKey(it) } as Set) - notBlindKeys }
+reveal = { -> if (!responseSeen) { responseSeen = true; blindKey = measuredKey(cellRois()); endBlindChoosing() } }
 // the outlines in the ROI Manager, split into the cells that count and (when the box is ticked) the ones at the picture's edge
 def splitCells = { ->
     Roi[] all = cellRois(); boolean cut = edgeBox.isSelected()
@@ -3488,7 +4243,7 @@ def unusedProposals = { Roi[] cells ->
 def evidenceText = { p ->
     double[] e = p.ev; def parts = []
     parts << String.format(Locale.US, "%.0f um across", 2 * Math.sqrt(e[1] / Math.PI) * steps.movie.getCalibration().pixelWidth)
-    if (steps.respDiff != null) parts << String.format(Locale.US, "rise after the stimulus %.1f gray levels inside, %.1f around it", e[5], e[6])
+    if (steps.respDiff != null && !p.blind && !steps.blind) parts << String.format(Locale.US, "rise after the stimulus %.1f gray levels inside, %.1f around it", e[5], e[6])
     parts << String.format(Locale.US, "%.1f gray levels brighter than its surroundings", e[4])
     if (e[3] >= 0.02) parts << String.format(Locale.US, "%.0f %% of it is very bright", 100 * e[3])
     if (e[7] > 0) parts << "touches the edge of the picture"
@@ -3498,11 +4253,13 @@ def evidenceText = { p ->
 def refresh = { boolean force ->
     try {
         def sp = splitCells(); Roi[] all = (Roi[]) sp.all; Roi[] cells = (Roi[]) sp.cells; Roi[] edgeCells = (Roi[]) sp.edge
-        def key = all.collect { it.getBounds().toString() + it.getContainedPoints().length }.join("|") + "#" + Arrays.toString(rm.getSelectedIndexes()) + "#" + showBg.isSelected() + "#" + proposals.size() + "#" + showSug.isSelected() + "#" + edgeBox.isSelected() + '#'+selectionBasis + (analysisMeasurement!=null ? '#'+measuredKey(all) : '')
+        def key = all.collect { it.getBounds().toString() + it.getContainedPoints().length }.join("|") + "#" + Arrays.toString(rm.getSelectedIndexes()) + "#" + showBg.isSelected() + "#" + proposals.size() + "#" + showSug.isSelected() + "#" + edgeBox.isSelected() + '#'+selectionBasis + '#' + responseSeen + (analysisMeasurement!=null ? '#'+measuredKey(all) : '')
         if (!force && key == lastKey) return
         lastKey = key
+        boolean measuredNow = false   // the cells on the picture are the ones in the saved tables
         if (analysisMeasurement != null) {
-            boolean current = measuredKey(all)+'#edge='+edgeBox.isSelected()+'#selection='+selectionBasis == analysisMeasurement.key
+            boolean current = measuredKey(all)+'#edge='+edgeBox.isSelected()+'#selection='+basisFor(all) == analysisMeasurement.key
+            measuredNow = current
             analyzeBtn.setEnabled(current && go.isEnabled())
             s3.setDone(current); s4.setSummary(current ? "ready" : "measure again first")
             analysisNote.setText("<html><body style='width:300px'>" + (current ? "Review the recording, check timing, and run analysis in your browser. Keep Fiji open." : "Cell outlines changed. Measure and save again before analysis.") + "</body></html>")
@@ -3511,60 +4268,93 @@ def refresh = { boolean force ->
         lastBg = steps.backgrounds(cells)
         int none = lastBg.count { it.length == 0 } as int
         def ov = new Overlay()
-        if (showBg.isSelected() && cells.length > 0) {
+        if (showBg.isSelected() && cells.length > 0 && !hiddenKinds.contains('background')) {
             int sel = rm.getSelectedIndex(); int only = -1
             if (sel >= 0 && rm.getSelectedIndexes().length == 1) { def allR = rm.getRoisAsArray(); int k = -1; for (int i = 0; i <= sel && i < allR.length; i++) if (allR[i].isArea()) k++; only = sp.keptIdx.indexOf(k) }
             ov.add(steps.blueLayer(lastBg, only))
         }
         def left = unusedProposals(all)
         if (showSug.isSelected()) left.each { p ->
+            if (hiddenKinds.contains('g' + Math.min(3, (int) p.grade))) return
             def r = (Roi) p.roi.clone()
             if (p.grade == 0) { r.setStrokeColor(CYAN); r.setStrokeWidth(2) }
             else if (p.grade == 1) { r.setStrokeColor(CYAN); r.setStrokeWidth(1) }
             else if (p.grade == 2) { r.setStrokeColor(GREY); r.setStroke(DASH) }
-            else { r.setStrokeColor(ORANGE); r.setStrokeWidth(1) }
+            else { r.setStrokeColor(RED); r.setStrokeWidth(2) }
             ov.add(r)
         }
         def selectedAreas = []; int areaIndex = 0
         rm.getRoisAsArray().eachWithIndex { r, i -> if (r.isArea()) { if (rm.isSelected(i)) selectedAreas << areaIndex; areaIndex++ } }
-        all.eachWithIndex { c, i -> CalciumCellAppearance.add(ov, c, !sp.keptIdx.contains(i), selectedAreas.contains(i)) }
+        if (!hiddenKinds.contains('cells')) all.eachWithIndex { c, i -> CalciumCellAppearance.add(ov, c, !sp.keptIdx.contains(i), selectedAreas.contains(i)) }
         steps.colourPic.setOverlay(ov)
         int nLikely = left.count { it.grade <= 1 } as int
         int edgeSug = edgeBox.isSelected() ? (proposals.count { it.edge } as int) : 0
-        status.setText("<html><body style='width:300px'><b>Cells chosen: " + cells.length + "</b>" + (edgeCells.length > 0 ? " &nbsp;(+" + edgeCells.length + " at the edge, left out)" : "") + (none > 0 ? " &nbsp;(" + none + " without background)" : "") + (proposals.size() > 0 ? "<br><font color='" + MUTED + "'>Suggestions left: " + nLikely + " likely, " + left.count { it.grade == 2 } + " unsure, " + left.count { it.grade == 3 } + " bright" + (edgeSug > 0 ? "; " + edgeSug + " at the edge not shown" : "") + "</font>" : "") + "</body></html>")
+        status.setText("<html><body style='width:300px'><b>Cells chosen: " + cells.length + "</b>" + (edgeCells.length > 0 ? " &nbsp;(+" + edgeCells.length + " at the edge, left out)" : "") + (none > 0 ? " &nbsp;(" + none + " without background)" : "") + (proposals.size() > 0 ? "<br><font color='" + MUTED + "'>Suggestions left: " + nLikely + " likely, " + left.count { it.grade == 2 } + " unsure, " + left.count { it.grade == 3 } + " very bright (precipitate?)" + (edgeSug > 0 ? "; " + edgeSug + " at the edge not shown" : "") + "</font>" : "") + "</body></html>")
         s2.setSummary(cells.length + (cells.length == 1 ? " cell chosen" : " cells chosen")); s2.setDone(cells.length > 0 && !s2.expanded)
-        acceptAllBtn.setText("Accept likely (" + nLikely + ")"); acceptAllBtn.setEnabled(nLikely > 0)
+        boolean withResponse = !steps.blind && steps.found && selectionBasis.startsWith('Response')
+        acceptAllBtn.setText((withResponse ? "Accept responding and likely (" : "Accept likely (") + nLikely + ")"); acceptAllBtn.setEnabled(nLikely > 0); acceptAllBtn.setVisible(nLikely > 0)
+        int nUnsure = left.count { it.grade == 2 && !(edgeBox.isSelected() && it.edge) } as int
+        def hiddenNames = legendEntries.findAll { k, v -> hiddenKinds.contains(k) }.collect { k, v -> v.text }
+        String hiddenNote = hiddenNames ? " <font color='#9A5B00'>Hidden on the picture now: " + hiddenNames.join(", ") + " (click them in the legend to show them).</font>" : ""
+        addRespondersBtn.setVisible(steps.blind == true); addRespondersBtn.setEnabled(steps.blind == true && all.length > 0 && !detecting)
+        // one blue button: the next thing to press (cosmetic, so a window without these buttons carries on)
+        try {
+            String blue = detecting ? '' : measuredNow ? '' : (proposals.isEmpty() && all.length == 0) || (!steps.blind && proposals.any { it.blind }) ? 'suggest' : nLikely > 0 ? 'accept' : all.length > 0 ? 'continue' : 'suggest'
+            CalciumTheme.primary(suggestBtn, blue == 'suggest'); CalciumTheme.primary(acceptAllBtn, blue == 'accept'); CalciumTheme.primary(continueBtn, blue == 'continue')
+        } catch (Throwable ignored) { }
+        if (detecting) sayNext("wait while the cell outlines are made (see the bar below).")
+        else if (measuredNow) sayNext("these " + cells.length + " cells are measured. Go on to <b>Analyze responses</b>, or change the cells here and measure again." + hiddenNote)
+        else if (proposals.isEmpty() && all.length == 0) sayNext("press <b>Suggest cells automatically</b>, or draw the cells yourself." + hiddenNote)
+        else if (!steps.blind && proposals.any { it.blind }) sayNext("press <b>Suggest cells again</b>: the outlines on the picture were made before the stimulus, not with the response." + hiddenNote)
+        else if (nLikely > 0) sayNext("press <b>" + (withResponse ? "Accept responding and likely" : "Accept likely") + " (" + nLikely + ")</b>." + hiddenNote)
+        else if (steps.blind) sayNext((nUnsure > 0 ? "click the dashed outlines that are real cells (" + nUnsure + " left). Then " : "") + "<b>Add cells that respond…</b> or <b>Continue to measure</b>." + hiddenNote)
+        else sayNext((nUnsure > 0 ? "click the dashed outlines that are real cells (" + nUnsure + " left), then " : "") + "<b>Continue to measure</b>." + hiddenNote)
         undoBtn.setEnabled(!cellEdits.history.isEmpty())
     } catch (Throwable t) { status.setText("" + t) }
 }
+def paintLegend = { -> legendEntries.each { k, v -> boolean off = hiddenKinds.contains(k); v.label.setText(off ? "<html><strike>" + v.text + "</strike></html>" : v.text); v.label.setForeground(off ? new Color(0xB0B7C0) : CalciumTheme.MUTED) } }
+legendClicked = { String kind, boolean only ->
+    def kinds = legendEntries.keySet()
+    if (only) {
+        if (!hiddenKinds.remove(kind)) hiddenKinds.add(kind)                      // take back what the first click of the double-click did
+        boolean alreadyOnly = !hiddenKinds.contains(kind) && hiddenKinds.size() == kinds.size() - 1
+        hiddenKinds.clear(); if (!alreadyOnly) hiddenKinds.addAll(kinds.findAll { it != kind })
+    } else if (!hiddenKinds.remove(kind)) hiddenKinds.add(kind)
+    paintLegend(); refresh(true)
+}
 def viewButtons = [viewAllBtn, viewBaselineBtn, viewResponseBtn]
 def busyView = { boolean busy -> viewButtons.each { it.setEnabled(!busy) } }
+def currentView = { -> steps.blind ? 'baseline' : selectionBasis.startsWith('Response') ? 'response' : 'all' }
+def blindControls = { boolean on -> respondsLegend.setVisible(!on); sensBox.setVisible(on); trace.setVisible(!on); frame.refreshContents() }
 viewAllBtn.addActionListener({
-    steps.showAllFrames(); steps.hideResponse()
+    if (steps.blind) endBlindChoosing()          // the all-frames picture holds the response frames: cells added from here on are not blind
+    steps.stopBlind(); steps.showAllFrames(); steps.hideResponse()
     selectionBasis = 'All-frames structural review'
-    showView('all', 'Choosing cells on the average of all frames.'); refresh(true)
+    showView('all', 'Choosing cells on the average of all frames.'); blindControls(false); describeRecording(); refresh(true)
 } as java.awt.event.ActionListener)
 viewBaselineBtn.addActionListener({
-    def prompt = new GenericDialog('Baseline frames for choosing cells')
-    prompt.addNumericField('First baseline frame', steps.found ? steps.b0 : 1, 0); prompt.addNumericField('Last baseline frame', steps.found ? steps.b1 : Math.min(20, steps.n), 0)
-    prompt.addMessage('Choose frames before stimulation. The recording and measurements are unchanged.')
-    prompt.showDialog(); if (prompt.wasCanceled()) return
-    double first = prompt.getNextNumber(), last = prompt.getNextNumber()
-    if (!Double.isFinite(first) || !Double.isFinite(last) || first != Math.floor(first) || last != Math.floor(last) || first < 1 || last < first || last > steps.n) { IJ.error('Calcium imaging', 'Choose whole frame numbers from 1 to ' + steps.n + ', the first no later than the last.'); return }
-    busyView(true); selectionNote.setText("<html><body style='width:300px'>Making the baseline picture…</body></html>")
-    Thread.start('Calcium baseline picture') {
+    int[] range = CalciumStartDialog.askBlindFrames(steps); if (range == null) return
+    busyView(true); selectionNote.setText("<html><body style='width:300px'>Making the picture of frames " + range[0] + "–" + range[1] + "…</body></html>")
+    Thread.start('Calcium pre-stimulus picture') {
         float[] picture = null; String problem = null
-        try { picture = steps.baselinePicture(first as int, last as int) } catch (Throwable t) { problem = t.message ?: t.toString() }
+        try { picture = steps.framesPicture(range[0], range[1]) } catch (Throwable t) { problem = t.message ?: t.toString() }
         javax.swing.SwingUtilities.invokeLater {
             busyView(false)
-            if (picture == null) { showView(selectionBasis.startsWith('Baseline') ? 'baseline' : selectionBasis.startsWith('Response') ? 'response' : 'all', 'Could not make the baseline picture: ' + problem); return }
-            steps.showPicture(picture); steps.hideResponse()
-            selectionBasis = 'Baseline frames ' + (first as int) + '-' + (last as int)
-            showView('baseline', 'Choosing cells on frames ' + (first as int) + '–' + (last as int) + ': a cell looks the same whether or not it responds.'); refresh(true)
+            if (picture == null) { showView(currentView(), 'Could not make the picture of frames before the stimulus: ' + problem); return }
+            // Blind choosing starts again. If the response has not been shown, the cells added from now on are blind again; the
+            // ones added in between are remembered as not blind. Once the response has been seen, nothing added is blind.
+            if (!responseSeen && blindCellKeys != null) { notBlindKeys = (cellRois().collect { cellKey(it) } as Set) - blindCellKeys; blindCellKeys = null }
+            steps.startBlind(range[0], range[1], picture)
+            // suggestions made with the response (or on all frames) would show it: only blind suggestions stay
+            proposals.removeAll { !it.blind }; if (proposals.isEmpty()) suggestBtn.setText("Suggest cells automatically")
+            trace.show(null, "Traces are hidden while choosing cells blind", 0, 0); info.setText("<html><body style='width:300px'>&nbsp;</body></html>")
+            selectionBasis = steps.blindBasis()
+            showView('baseline', blindNote()); blindControls(true); describeRecording(); refresh(true)
         }
     }
 } as java.awt.event.ActionListener)
 viewResponseBtn.addActionListener({
+    if (steps.blind && !testGui && javax.swing.JOptionPane.showConfirmDialog(frame, "<html><body style='width:320px'>The cells you have now stay recorded as <b>chosen blind</b>, as long as you do not change them.<br><br>The response is shown next and the plugin looks for the cells that only show when they respond. Cells you add from now on are recorded as <b>added after the response was shown</b>. Step 4 gives % responding for both groups.</body></html>", "Add cells that respond", javax.swing.JOptionPane.OK_CANCEL_OPTION) != javax.swing.JOptionPane.OK_OPTION) return
     boolean first = !steps.looked
     busyView(true); if (first) selectionNote.setText("<html><body style='width:300px'>Looking for the response in all " + steps.n + " frames…</body></html>")
     Thread.start('Calcium response picture') {
@@ -3572,18 +4362,22 @@ viewResponseBtn.addActionListener({
         try { if (!steps.looked) steps.findResponse() } catch (Throwable t) { problem = t.message ?: t.toString() }
         javax.swing.SwingUtilities.invokeLater {
             busyView(false); describeRecording()
-            String previous = selectionBasis.startsWith('Baseline') ? 'baseline' : selectionBasis.startsWith('Response') ? 'response' : 'all'
+            String previous = currentView()
             if (problem != null) { showView(previous, 'Could not look for the response: ' + problem); return }
             if (!steps.found) { showView(previous, 'No response found (' + steps.why + '), so there is no magenta. The picture is unchanged.'); return }
-            steps.showAllFrames(); steps.showResponse()
+            reveal(); steps.stopBlind(); steps.showAllFrames(); steps.showResponse()
             selectionBasis = 'Response-assisted review'
-            showView('response', 'Magenta: cells that brightened near frame ' + steps.onset + '. Picking cells this way is recorded as response-assisted.'); refresh(true)
+            showView('response', 'Magenta: cells that brightened near frame ' + steps.onset + '. Picking cells this way is recorded as response-assisted.'); blindControls(false); describeRecording(); refresh(true)
+            // The outlines on the picture were made before the stimulus. Look for the cells that respond straight away, so
+            // nobody has to know that "Suggest cells again" is the next press. (Saved outlines of the same picture are reused.)
+            if (proposals.any { it.blind }) { autoSuggestAsked = true; if (!testGui) suggestBtn.doClick() }
         }
     }
 } as java.awt.event.ActionListener)
+addRespondersBtn.addActionListener({ e -> viewResponseBtn.doClick() } as java.awt.event.ActionListener)
 def addCell = { Roi r0 -> def r = (Roi) r0.clone(); r.setPosition(0); r.setStrokeColor(null); rm.addRoi(r) }
 def acceptAt = { int x, int y ->
-    def hit = unusedProposals(cellRois()).findAll { it.roi.contains(x, y) }
+    def hit = unusedProposals(cellRois()).findAll { !hiddenKinds.contains('g' + Math.min(3, (int) it.grade)) && it.roi.contains(x, y) }
     if (hit.isEmpty()) return false
     cellEdits.change('add cell') { addCell(hit.min { it.roi.getBounds().width * it.roi.getBounds().height }.roi) }
     rm.deselect(); steps.colourPic.deleteRoi()
@@ -3593,7 +4387,7 @@ def acceptAll = { -> def todo = unusedProposals(cellRois()).findAll { it.grade <
 def lastHover = null
 def hoverAt = { int x, int y ->
     Roi[] cells = cellRois()
-    def p = showSug.isSelected() ? unusedProposals(cells).findAll { it.roi.contains(x, y) }.min { it.roi.getBounds().width * it.roi.getBounds().height } : null
+    def p = showSug.isSelected() ? unusedProposals(cells).findAll { !hiddenKinds.contains('g' + Math.min(3, (int) it.grade)) && it.roi.contains(x, y) }.min { it.roi.getBounds().width * it.roi.getBounds().height } : null
     def target = null; def text = "&nbsp;"; def cap = ""
     if (p != null) { target = p.roi; text = evidenceText(p); cap = "this suggestion: gray levels above its background, over time" }
     else {
@@ -3603,7 +4397,8 @@ def hoverAt = { int x, int y ->
     if (target == null || target.is(lastHover)) { if (target == null && lastHover != null) { lastHover = null; info.setText("<html><body style='width:300px'>&nbsp;</body></html>") }; return text }
     lastHover = target
     info.setText("<html><body style='width:300px'>" + text + "</body></html>")
-    trace.show(steps.traceOf(target, cells), cap, steps.found ? steps.p0 : 0, steps.found ? steps.p1 : 0)
+    if (steps.blind) trace.show(null, "Traces are hidden while choosing cells blind", 0, 0)   // a trace would show the response
+    else { reveal(); trace.show(steps.traceOf(target, cells), cap, steps.found ? steps.p0 : 0, steps.found ? steps.p1 : 0) }
     return text
 }
 def findCellposePython = { ->
@@ -3710,10 +4505,13 @@ def runSetup = { boolean ask, Closure detectionUpdate = null ->
 }
 
 def forceFresh = false     // set when "Suggest cells again" is pressed: do not reuse saved outlines
-def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, s, d -> }) ->
+// comparison (the sensitivity check): [picture, dir, into] runs Cellpose on that picture into that folder, grades the outlines
+// with the response, and puts them in "into" instead of the suggestions. Nothing is shown and nothing is accepted.
+def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, s, d -> }), Map comparison = null ->
     task.report(0, "Checking Cellpose", "Finding the installed Python environment.")
     def py = findCellposePython()
     if (py == null && cellposeBusy) return "Cellpose is still being set up; try again when it says it is found"
+    if (py == null && comparison != null) return "Cellpose was not found"
     if (py == null && !testGui) {
         def choices = ["Set up Cellpose now", "I already have it: show where", "Cancel"] as Object[]
         int ans = javax.swing.JOptionPane.showOptionDialog(frame, "Cellpose was not found on this computer.\n\n" + SETUP_TEXT, "Cellpose is needed for suggestions", javax.swing.JOptionPane.DEFAULT_OPTION, javax.swing.JOptionPane.QUESTION_MESSAGE, null, choices, choices[0])
@@ -3738,125 +4536,212 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
     }
     if (py == null) return "Cellpose was not found"
     task.report(5, "Preparing the detection image", "Checking whether saved outlines can be reused.")
-    def dir = new File(outDir, "automatic_outlines"); dir.mkdirs()
-    def tif = new File(dir, base + "_for_automatic_outlines.tif")
-    def zip = new File(dir, base + "_for_automatic_outlines_rois.zip")
-    def optFile = new File(dir, "cellpose_options_used.txt")
-    def pending = new File(dir, "cellpose_run_incomplete.txt")
-    def pic = steps.outlinePicture()
-    task.imageSize = pic.getWidth() + " x " + pic.getHeight() + " pixels"
-    def opts = []; def cmd = []
-    boolean reuse = false
-    if (!forceFresh && !pending.exists() && tif.isFile() && zip.isFile() && zip.length() > 0) {
-        ImagePlus saved = null
-        try { saved = IJ.openImage(tif.getPath()); reuse = CalciumSteps.samePicture(saved, pic) }
-        catch (Throwable ignore) { }
-        finally { if (saved != null) saved.close() }
-    }
-    String how
-    if (reuse) {
-        task.source = "Saved outlines reused (no new Cellpose run)"
-        how = "the outlines made earlier for this recording were used again" + (optFile.exists() ? "" : " (made by an earlier version of the plugin)")
-        cmd = ["(no new run; earlier settings: " + (optFile.exists() ? optFile.text.trim() : "full size") + ")"]
-        def previousLog = new File(dir, "cellpose_output.txt")
-        if (previousLog.isFile()) task.logFile = previousLog
-        task.report(84, "Reusing saved cell outlines", "The detection image matches this recording; a new Cellpose run is not needed.")
-    } else {
-        task.source = "New detection"
-        task.checkCancelled()
-        // A failed/cancelled attempt may leave a partial ZIP. Never treat it as a reusable result.
-        pending.text = "Detection has not completed successfully. Do not reuse its outlines.\n"
-        def removeOldZip = { -> if (zip.exists() && !zip.delete()) throw new IOException("Cannot replace " + zip.getPath()) }
-        removeOldZip()
-        if (optFile.exists() && !optFile.delete()) throw new IOException("Cannot replace " + optFile.getPath())
-        if (!IJ.saveAsTiff(pic, tif.getPath())) throw new IOException("Could not save the detection image")
-        long started = System.nanoTime()
-        def key = "calcium.steps.cellpose_gpu." + Integer.toHexString(py.hashCode())
-        String known = Prefs.get(key, "")
-        if (System.getProperty("calcium.steps.pretend_no_gpu") != null) known = "CPU"
-        if (known == "") {
-            task.report(8, "Checking CPU / graphics support", "Checking whether this Cellpose installation can use a graphics processor.")
-            // A script file avoids Windows command-line quoting differences for Python -c.
-            def probe = new File(dir, "cellpose_device_check.py")
-            probe.text = "import torch\nprint('CHIP=GPU' if (torch.cuda.is_available() or (hasattr(torch.backends, 'mps') and torch.backends.mps.is_available())) else 'CHIP=CPU')\n"
-            try {
-                def probeLog = new File(dir, "cellpose_device_check.txt")
-                int probeCode = task.run([py, "-u", probe.getAbsolutePath()], dir, probeLog)
-                String answer = probeLog.getText("UTF-8")
-                if (probeCode == 0) known = answer.contains("CHIP=GPU") ? "GPU" : answer.contains("CHIP=CPU") ? "CPU" : ""
-                if (known != "") Prefs.set(key, known)
-            } catch (java.util.concurrent.CancellationException cancelled) { throw cancelled }
-            catch (Exception ignored) { } // Keep the uploaded version's GPU-first behaviour if the check is inconclusive.
+    boolean blindRun = comparison == null && steps.blind == true
+    def dir = comparison != null ? (File) comparison.dir : new File(outDir, blindRun ? "automatic_outlines_blind" : "automatic_outlines"); dir.mkdirs()
+    // Blind: Cellpose runs on two pictures, 0 to BLIND_CAP and 0 to BLIND_CAP_HIGH gray levels, each in its own folder, and the
+    // outlines are combined (CalciumSteps.blindOutlinesToAdd). Otherwise one picture, in dir.
+    def runs = blindRun ? (0..1).collect { int i ->
+            double cap = i == 0 ? CalciumSteps.BLIND_CAP : CalciumSteps.BLIND_CAP_HIGH; String lv = CalciumSteps.levels(cap)
+            [label: "picture " + (i + 1) + " (0-" + lv + " gray levels)", part: "Blind picture " + (i + 1) + " of 2 (0-" + lv + " gray levels)", shown: "0 to " + lv,
+             dir: new File(dir, "picture_" + (i + 1) + "_shown_0_to_" + lv + "_gray_levels"), pic: steps.blindOutlinePicture(cap)] }
+        : [[label: "", part: "", shown: "", dir: dir, pic: comparison != null ? (ImagePlus) comparison.picture : steps.outlinePicture()]]
+    String pictureNote = blindRun ? steps.blindBasis() + ". Pictures for Cellpose: " + steps.blindRecipe() + "; no response channel. Folders: " + runs.collect { ((File) it.dir).getName() }.join(", ") + ".\n" : ""
+    if (blindRun) new File(dir, "detection_picture.txt").setText(pictureNote, "UTF-8")
+    // One Cellpose run on one picture, in that picture's folder. Saved outlines are reused when the saved picture matches.
+    // Gives [zip, how, cmd, pending], or [error] when Cellpose made no outlines.
+    def detect = { Map run ->
+        File d = (File) run.dir; d.mkdirs()
+        ImagePlus pic = (ImagePlus) run.pic
+        String part = run.part ? run.part + "; " : ""
+        task.settings = run.part; task.device = ""; task.downloading = false
+        def tif = new File(d, base + "_for_automatic_outlines.tif")
+        def zip = new File(d, base + "_for_automatic_outlines_rois.zip")
+        def optFile = new File(d, "cellpose_options_used.txt")
+        def pending = new File(d, "cellpose_run_incomplete.txt")
+        task.imageSize = pic.getWidth() + " x " + pic.getHeight() + " pixels"
+        def opts = []; def cmd = []
+        boolean reuse = false
+        if (!(forceFresh && comparison == null) && !pending.exists() && tif.isFile() && zip.isFile() && zip.length() > 0) {
+            ImagePlus saved = null
+            try { saved = IJ.openImage(tif.getPath()); reuse = CalciumSteps.samePicture(saved, pic) }
+            catch (Throwable ignore) { }
+            finally { if (saved != null) saved.close() }
         }
-        task.checkCancelled()
-        task.device = known
-        boolean gpu = known != "CPU"
-        task.settings = "Attempt 1 of 2; " + (gpu ? "full-size detection" : "faster CPU setting (diameter 60)")
-        opts = ["--pretrained_model", "cpsam_v2", "--use_gpu"] + (gpu ? [] : ["--diameter", "60"]) + ["--save_rois", "--no_npy", "--cellprob_threshold", "-2", "--flow_threshold", "0.8", "--verbose"]
-        cmd = [py, "-u", "-m", "cellpose", "--image_path", tif.getPath()] + opts
-        task.report(10, "Starting Cellpose (attempt 1 of 2)", gpu ? "Using full-size detection. First use may download the model." : "CPU detection uses the faster diameter-60 setting from this version; it may still take several minutes.")
-        int code = task.run(cmd, dir, new File(dir, "cellpose_output.txt"))
-        if (code != 0 || !zip.isFile() || zip.length() == 0) {
-            task.checkCancelled(); removeOldZip()
-            task.downloading = false; task.device = "CPU"
-            task.settings = "Attempt 2 of 2; default model, full-size detection"
-            task.report(task.percent, "Retrying Cellpose on the CPU (attempt 2 of 2)", "The first attempt did not produce outlines. Trying this version's default model and full-size image.")
-            opts = ["--save_rois", "--no_npy", "--cellprob_threshold", "-2", "--flow_threshold", "0.8", "--verbose"]
-            cmd = [py, "-u", "-m", "cellpose", "--image_path", tif.getPath()] + opts
-            code = task.run(cmd, dir, new File(dir, "cellpose_output_second_try.txt"))
-        }
-        task.checkCancelled()
-        if (code != 0 || !zip.isFile() || zip.length() == 0) return "Cellpose made no outlines (exit code " + code + "). Open the detection log: " + task.logFile.getPath()
-        optFile.text = opts.join(" ")
-        how = "Cellpose took " + (long) ((System.nanoTime() - started) / 1000000000L) + " s" + (task.device ? " (" + task.device + ")" : "") +
-            (opts.contains("--diameter") ? "; used the faster CPU diameter-60 setting" : "; used full-size detection")
-    }
-    task.report(85, "Reading the cell outlines", "Opening the outlines and checking their measurements.")
-    def got = []; int hidden = 0
-    def zf = new java.util.zip.ZipFile(zip)
-    try {
-        def entries = zf.entries().toList().findAll { !it.isDirectory() && it.getName().endsWith(".roi") }.sort { it.getName() }
-        entries.eachWithIndex { e, i ->
+        String how
+        if (reuse) {
+            task.source = "Saved outlines reused (no new Cellpose run)"
+            how = "the outlines made earlier for this recording were used again" + (optFile.exists() ? "" : " (made by an earlier version of the plugin)")
+            cmd = ["(no new run; earlier settings: " + (optFile.exists() ? optFile.text.trim() : "full size") + ")"]
+            def previousLog = new File(d, "cellpose_output.txt")
+            if (previousLog.isFile()) task.logFile = previousLog
+            task.report(84, "Reusing saved cell outlines", "The detection image matches this recording; a new Cellpose run is not needed.")
+        } else {
+            task.source = "New detection"
             task.checkCancelled()
-            def r = new ij.io.RoiDecoder(zf.getInputStream(e).withCloseable { it.bytes }, e.getName()).getRoi()
-            if (r != null && r.isArea()) {
-                double[] ev = steps.grade(r)
-                if (ev[0] >= 4) hidden++
-                else { def cen = r.getContourCentroid(); got << [roi:r, grade:(int) ev[0], ev:ev, cx:(int) cen[0], cy:(int) cen[1], edge:steps.nearEdge(r)] }
+            // A failed/cancelled attempt may leave a partial ZIP. Never treat it as a reusable result.
+            pending.text = "Detection has not completed successfully. Do not reuse its outlines.\n"
+            def removeOldZip = { -> if (zip.exists() && !zip.delete()) throw new IOException("Cannot replace " + zip.getPath()) }
+            removeOldZip()
+            if (optFile.exists() && !optFile.delete()) throw new IOException("Cannot replace " + optFile.getPath())
+            if (!IJ.saveAsTiff(pic, tif.getPath())) throw new IOException("Could not save the detection image")
+            long started = System.nanoTime()
+            def key = "calcium.steps.cellpose_gpu." + Integer.toHexString(py.hashCode())
+            String known = Prefs.get(key, "")
+            if (System.getProperty("calcium.steps.pretend_no_gpu") != null) known = "CPU"
+            if (known == "") {
+                task.report(8, "Checking CPU / graphics support", "Checking whether this Cellpose installation can use a graphics processor.")
+                // A script file avoids Windows command-line quoting differences for Python -c.
+                def probe = new File(d, "cellpose_device_check.py")
+                probe.text = "import torch\nprint('CHIP=GPU' if (torch.cuda.is_available() or (hasattr(torch.backends, 'mps') and torch.backends.mps.is_available())) else 'CHIP=CPU')\n"
+                try {
+                    def probeLog = new File(d, "cellpose_device_check.txt")
+                    int probeCode = task.run([py, "-u", probe.getAbsolutePath()], d, probeLog)
+                    String answer = probeLog.getText("UTF-8")
+                    if (probeCode == 0) known = answer.contains("CHIP=GPU") ? "GPU" : answer.contains("CHIP=CPU") ? "CPU" : ""
+                    if (known != "") Prefs.set(key, known)
+                } catch (java.util.concurrent.CancellationException cancelled) { throw cancelled }
+                catch (Exception ignored) { } // Keep the uploaded version's GPU-first behaviour if the check is inconclusive.
             }
-            task.report(85 + (int) (12 * (i + 1) / entries.size()), "Checking the suggested cells", "Checked " + (i + 1) + " of " + entries.size() + " outlines.")
+            task.checkCancelled()
+            task.device = known
+            boolean gpu = known != "CPU"
+            task.settings = part + "Attempt 1 of 2; " + (gpu ? "full-size detection" : "faster CPU setting (diameter 60)")
+            opts = ["--pretrained_model", "cpsam_v2", "--use_gpu"] + (gpu ? [] : ["--diameter", "60"]) + ["--save_rois", "--no_npy", "--cellprob_threshold", "-2", "--flow_threshold", "0.8", "--verbose"]
+            cmd = [py, "-u", "-m", "cellpose", "--image_path", tif.getPath()] + opts
+            task.report(10, "Starting Cellpose (attempt 1 of 2)", (run.label ? "Blind " + run.label + ". " : "") + (gpu ? "Using full-size detection. First use may download the model." : "CPU detection uses the faster diameter-60 setting from this version; it may still take several minutes."))
+            int code = task.run(cmd, d, new File(d, "cellpose_output.txt"))
+            if (code != 0 || !zip.isFile() || zip.length() == 0) {
+                task.checkCancelled(); removeOldZip()
+                task.downloading = false; task.device = "CPU"
+                task.settings = part + "Attempt 2 of 2; default model, full-size detection"
+                task.report(task.lastAsked, "Retrying Cellpose on the CPU (attempt 2 of 2)", "The first attempt did not produce outlines. Trying this version's default model and full-size image.")
+                opts = ["--save_rois", "--no_npy", "--cellprob_threshold", "-2", "--flow_threshold", "0.8", "--verbose"]
+                cmd = [py, "-u", "-m", "cellpose", "--image_path", tif.getPath()] + opts
+                code = task.run(cmd, d, new File(d, "cellpose_output_second_try.txt"))
+            }
+            task.checkCancelled()
+            if (code != 0 || !zip.isFile() || zip.length() == 0) return [error: "Cellpose made no outlines" + (run.label ? " on blind " + run.label : "") + " (exit code " + code + "). Open the detection log: " + task.logFile.getPath()]
+            optFile.text = opts.join(" ")
+            how = "Cellpose took " + (long) ((System.nanoTime() - started) / 1000000000L) + " s" + (task.device ? " (" + task.device + ")" : "") +
+                (opts.contains("--diameter") ? "; used the faster CPU diameter-60 setting" : "; used full-size detection")
         }
-    } finally { zf.close() }
+        return [zip: zip, how: how, cmd: cmd, pending: pending]
+    }
+    def results = []
+    try {
+        for (int i = 0; i < runs.size(); i++) {
+            if (runs.size() > 1) { task.partFrom = 42 * i; task.partShare = 0.5 }   // two runs: 0-42 % and 42-84 % of the bar
+            def done = detect(runs[i])
+            if (done.error) return done.error
+            results << done
+        }
+    } finally { task.partFrom = 0; task.partShare = 1 }
+    String how = runs.size() == 1 ? results[0].how : (0..<runs.size()).collect { runs[it].label + ": " + results[it].how }.join("; ")
+    String cmdText = runs.size() == 1 ? results[0].cmd.join(" ") : (0..<runs.size()).collect { runs[it].label + ": " + results[it].cmd.join(" ") }.join("; ")
+    task.report(85, "Reading the cell outlines", "Opening the outlines and checking their measurements.")
+    def readOutlines = { File z ->
+        def list = []
+        def zf = new java.util.zip.ZipFile(z)
+        try {
+            zf.entries().toList().findAll { !it.isDirectory() && it.getName().endsWith(".roi") }.sort { it.getName() }.each { e ->
+                task.checkCancelled()
+                def r = new ij.io.RoiDecoder(zf.getInputStream(e).withCloseable { it.bytes }, e.getName()).getRoi()
+                if (r != null && r.isArea()) list << r
+            }
+        } finally { zf.close() }
+        return list
+    }
+    def outlines = readOutlines((File) results[0].zip).collect { [roi: it, from: 0] }
+    def gradeOne = { r -> comparison != null ? steps.grade(r, false) : steps.grade(r) }
+    String mergeNote = ""
+    if (blindRun) {
+        // Only an outline of picture 1 that will be shown may stand in for an outline of picture 2. One that is too small or too
+        // large for a cell, or a thin strip along another outline, is never shown and must not hide a good outline (seen 20 Nov
+        // 2026 on P2 Run2: one 6445-pixel outline hid six cells of picture 2, and an 11-pixel speck hid one of 1731 pixels).
+        outlines.each { it.ev = gradeOne(it.roi) }
+        def first = outlines.collect { it.roi }, second = readOutlines((File) results[1].zip)
+        def shownFirst = outlines.findAll { it.ev[0] < 4 && !(CalciumSteps.tooThin(it.roi) && CalciumSteps.alongAnother(it.roi, first)) }.collect { it.roi }
+        def add = CalciumSteps.blindOutlinesToAdd(shownFirst, second, ((ImagePlus) runs[0].pic).getWidth())
+        add.each { int j -> outlines << [roi: second[j], from: 1] }
+        int unshown = first.size() - shownFirst.size()
+        mergeNote = "all " + first.size() + " outlines from " + runs[0].label + " kept; " + add.size() + " of " + second.size() + " from " + runs[1].label +
+            " added (the other " + (second.size() - add.size()) + " share at least " + (int) Math.round(CalciumSteps.BLIND_MERGE_OVERLAP * 100) + " % of the smaller outline's area with an outline from picture 1" +
+            (unshown > 0 ? "; " + unshown + " outlines of picture 1 that are not shown, for their size or as a strip on another outline, were not counted" : "") + ")"
+        new File(dir, "detection_picture.txt").setText(pictureNote + "Combined: " + mergeNote + ".\n", "UTF-8")
+    }
+    def got = []; int hidden = 0, strips = 0, thinKept = 0
+    List everyOutline = outlines.collect { it.roi }
+    outlines.eachWithIndex { o, i ->
+        task.checkCancelled()
+        def r = o.roi
+        double[] ev = o.ev != null ? (double[]) o.ev : gradeOne(r)
+        boolean thin = ev[0] < 4 && CalciumSteps.tooThin(r)
+        if (ev[0] >= 4) hidden++
+        else if (thin && CalciumSteps.alongAnother(r, everyOutline)) strips++   // the rim of a cell that has its own outline
+        else {
+            // a thin outline standing alone stays, as "unsure": it is never accepted without a click
+            int grade = (int) ev[0]; if (thin) { thinKept++; grade = Math.max(grade, 2); ev[0] = grade }
+            def cen = r.getContourCentroid(); got << [roi:r, grade:grade, ev:ev, cx:(int) cen[0], cy:(int) cen[1], edge:steps.nearEdge(r), blind:blindRun, picture:runs[o.from].shown, thin:thin]
+        }
+        task.report(85 + (int) (12 * (i + 1) / outlines.size()), "Checking the suggested cells", "Checked " + (i + 1) + " of " + outlines.size() + " outlines.")
+    }
     task.report(98, "Saving the suggestion measurements", "Saving the evidence behind each outline's grade.")
-    def csv = new StringBuilder("suggestion,grade,area_pixels,mean_brightness,share_very_bright,brighter_than_surroundings,rise_inside,rise_around,touches_edge,x,y\n")
-    got.eachWithIndex { p, i -> csv.append(String.format(Locale.US, "%d,%s,%.0f,%.2f,%.3f,%.2f,%.2f,%.2f,%s,%d,%d\n", i + 1, GRADE_TEXT[p.grade], p.ev[1], p.ev[2], p.ev[3], p.ev[4], p.ev[5], p.ev[6], p.ev[7] > 0 ? "yes" : "no", p.cx, p.cy)) }
+    def csv = new StringBuilder("suggestion,grade,area_pixels,mean_brightness,share_very_bright,brighter_than_surroundings,rise_inside,rise_around,touches_edge,x,y" + (blindRun ? ",found_on_picture_gray_levels" : "") + "\n")
+    got.eachWithIndex { p, i -> csv.append(String.format(Locale.US, "%d,%s,%.0f,%.2f,%.3f,%.2f,%.2f,%.2f,%s,%d,%d", i + 1, GRADE_TEXT[p.grade], p.ev[1], p.ev[2], p.ev[3], p.ev[4], p.ev[5], p.ev[6], p.ev[7] > 0 ? "yes" : "no", p.cx, p.cy) + (blindRun ? "," + p.picture : "") + "\n") }
     new File(dir, base + "_suggestions_with_evidence.csv").text = csv.toString()
-    steps.say("Automatic outlines (suggestions only): Cellpose, command: " + cmd.join(" ") + " (" + how + "). " + got.size() + " outlines shown: " + got.count { it.grade == 0 } + " respond on their own, " + got.count { it.grade == 1 } + " likely cells, " + got.count { it.grade == 2 } + " unsure, " + got.count { it.grade == 3 } + " very bright; " + hidden + " left out for their size; " + got.count { it.edge } + " lie within " + CalciumSteps.EDGE_MARGIN + " pixels of the picture's edge" + (edgeBox.isSelected() ? " and are not shown (box ticked)" : "") + ". Grades are measured (brightness, share of very bright pixels, contrast, rise after the stimulus inside against around). Only the outlines the user accepted became cells.")
+    if (blindRun) {   // the combined suggestions, named as in the evidence table, so they can be opened in the ROI Manager
+        def zout = new java.util.zip.ZipOutputStream(new FileOutputStream(new File(dir, base + "_suggestions_rois.zip")))
+        try {
+            got.eachWithIndex { p, i ->
+                def copy = p.roi.clone(); copy.setName(String.format(Locale.US, "suggestion_%03d", i + 1))
+                zout.putNextEntry(new java.util.zip.ZipEntry(copy.getName() + ".roi")); zout.write(ij.io.RoiEncoder.saveAsByteArray(copy)); zout.closeEntry()
+            }
+        } finally { zout.close() }
+    }
+    def finishRecord = { -> results.each { File pending = (File) it.pending; if (pending.exists() && !pending.delete()) throw new IOException("Could not finish the detection record: " + pending.getPath()) } }
+    if (comparison != null) {
+        task.checkCancelled(); comparison.into.addAll(got); task.succeeded = true
+        finishRecord()
+        return got.size() + " response-assisted outlines; " + how
+    }
+    if (blindRun) steps.say("Automatic outlines are blind: Cellpose got two pictures of frames " + steps.blindFirst + "-" + steps.blindLast + " only (" + steps.blindRecipe() + "), saved as " + ((File) results[0].zip).getName().replace("_rois.zip", ".tif") + " in " + dir.getName() + "/" + runs.collect { ((File) it.dir).getName() }.join(" and " + dir.getName() + "/") + "; " + mergeNote + ". The outlines were graded on the pre-stimulus picture without the response.")
+    steps.say("Automatic outlines (suggestions only): Cellpose, command: " + cmdText + " (" + how + "). " + got.size() + " outlines shown: " + got.count { it.grade == 0 } + " respond on their own, " + got.count { it.grade == 1 } + " likely cells, " + got.count { it.grade == 2 } + " unsure, " + got.count { it.grade == 3 } + " very bright; " + hidden + " left out for their size; " + strips + " thin strips along another outline's edge left out, " + thinKept + " thin outlines kept as unsure (narrower than " + (int) CalciumSteps.THIN_WIDTH + " pixels on average, or roundness under " + CalciumSteps.THIN_ROUNDNESS + "); " + got.count { it.edge } + " lie within " + CalciumSteps.EDGE_MARGIN + " pixels of the picture's edge" + (edgeBox.isSelected() ? " and are not shown (box ticked)" : "") + ". Grades are measured (brightness, share of very bright pixels, contrast" + (blindRun ? "; the response is not used" : ", rise after the stimulus inside against around") + "). Only the outlines the user accepted became cells.")
     task.checkCancelled()
     javax.swing.SwingUtilities.invokeAndWait { proposals.clear(); proposals.addAll(got) }
-    if (pending.exists() && !pending.delete()) throw new IOException("Could not finish the detection record: " + pending.getPath())
+    finishRecord()
     task.succeeded = true
-    return got.size() + " suggestions; " + how
+    if (!blindRun) return got.size() + " suggestions; " + how
+    task.settings = "Two pictures of the frames before the stimulus (0-" + CalciumSteps.levels(CalciumSteps.BLIND_CAP) + " and 0-" + CalciumSteps.levels(CalciumSteps.BLIND_CAP_HIGH) + " gray levels)"
+    def took = results.collect { (it.how =~ /^Cellpose took (\d+) s/) }.collect { it.find() ? it.group(1) : null }
+    String shortHow = took.every { it != null } ? "Cellpose took " + took.join(" s and ") + " s" + (task.device ? " (" + task.device + ")" : "") :
+        results.every { it.how.startsWith("the outlines made earlier") } ? "the outlines made earlier for this recording were used again" : how
+    return got.size() + " suggestions from two pictures; " + shortHow
 }
 
 
 def detectionRunner = new CalciumDetectionRunner()
 suggestBtn.addActionListener({ e ->
-    forceFresh = !proposals.isEmpty()
+    // "again" asks for a new Cellpose run only when the outlines on screen came from the same kind of picture as now
+    forceFresh = proposals.any { (it.blind == true) == (steps.blind == true) }
+    detecting = true
     detectionRunner.start(suggestBtn, detectionProgress,
         { task -> suggest(task) },
         { String message ->
+            detecting = false
+            if (hiddenKinds.removeAll(['g0', 'g1', 'g2', 'g3'])) paintLegend()      // new suggestions are never made invisible by an old legend click
             suggestBtn.setText(proposals.isEmpty() ? "Suggest cells automatically" : "Suggest cells again")
-            info.setText("<html><body style='width:300px'>Suggestions: " + CalciumOutlineProgress.escape(message) + "</body></html>")
+            // a finished run is already reported under the button; only a problem is repeated here, where the eye is
+            info.setText("<html><body style='width:300px'>" + (message ==~ /\d+ suggestions.*/ ? "&nbsp;" : "Suggestions: " + CalciumOutlineProgress.escape(message)) + "</body></html>")
             if (!cellposeBusy) showCellposeState(null)
             refresh(true)
         },
         { -> frame.refreshContents() })
+    try { refresh(true) } catch (Throwable ignore) { }       // only so the Next line says to wait; the worker is already started
 } as java.awt.event.ActionListener)
 acceptAllBtn.addActionListener({ e ->
     int nL = unusedProposals(cellRois()).count { it.grade <= 1 } as int
     if (nL == 0) return
-    int ans = javax.swing.JOptionPane.showConfirmDialog(frame, "Accept all " + nL + " outlines graded \"responds\" or \"likely a cell\"?\n\nIn tests about 8 in 10 of these were real cells, so about 2 in 10 are not.\nLook through them afterwards and remove the wrong ones.", "Accept all likely ones", javax.swing.JOptionPane.OK_CANCEL_OPTION)
+    int ans = javax.swing.JOptionPane.showConfirmDialog(frame, "Accept all " + nL + " outlines graded " + (steps.blind ? "" : "\"responds\" or ") + "\"likely a cell\"?\n\nIn tests about 8 in 10 of these were real cells, so about 2 in 10 are not.\nLook through them afterwards and remove the wrong ones.", "Accept all likely ones", javax.swing.JOptionPane.OK_CANCEL_OPTION)
     if (ans == javax.swing.JOptionPane.OK_OPTION) acceptAll()
 } as java.awt.event.ActionListener)
 def updateEditHint = { String message -> editHint.setText("<html><body style='width:300px'>" + message + "</body></html>") }
@@ -3945,10 +4830,29 @@ changeBtn.addActionListener({ e ->
 } as java.awt.event.ActionListener)
 openBtn.addActionListener({ e -> try { java.awt.Desktop.getDesktop().open(outDir) } catch (Throwable t) { IJ.log("Results folder: " + outDir.getPath()) } } as java.awt.event.ActionListener)
 frame.addWindowListener(new java.awt.event.WindowAdapter() { void windowClosing(java.awt.event.WindowEvent e) { timer.stop(); detectionProgress.close() } })
+// Sensitivity check after blind selection: response-assisted detection once, compared with the blind suggestions. Returns the
+// comparison and its report, or a message saying why it did not run. Its outlines are never added to the cells or measured.
+def runSensitivity = { Roi[] cells, String prefix, Closure tell ->
+    if (!steps.found) return [text: 'Sensitivity check not run: no response was found, so there is no response-assisted picture to compare with.']
+    def assisted = [], blindSuggestions = []
+    javax.swing.SwingUtilities.invokeAndWait { blindSuggestions.addAll(proposals.findAll { it.blind }) }
+    def task = new CalciumOutlineTask(progress: { p, s, d -> tell('Sensitivity check: ' + s.toLowerCase() + '…') })
+    String how
+    try { how = suggest(task, [picture: steps.responseOutlinePicture(), dir: new File(outDir, 'automatic_outlines'), into: assisted]) }
+    catch (Throwable t) { return [text: 'Sensitivity check failed: ' + t] }
+    if (!task.succeeded) return [text: 'Sensitivity check not completed: ' + how]
+    def m = CalciumSensitivity.compare(assisted, blindSuggestions, cells, edgeBox.isSelected())
+    CalciumSensitivity.save(m, prefix)
+    String text = CalciumSensitivity.report(m, how)
+    steps.say(text + ' Files: ' + new File(prefix + 'sensitivity_check.csv').getName() + ' (one row per response-assisted outline) and ' + new File(prefix + 'sensitivity_check_missed_RoiSet.zip').getName() + ' (the missed outlines that could be cells, to open in the ROI Manager).')
+    new File(prefix + 'what_was_done.txt').setText(steps.log.join('\n') + '\n', 'UTF-8')
+    [m: m, text: text]
+}
 go.addActionListener({ e ->
     def sp = splitCells(); Roi[] cells = (Roi[]) sp.cells; Roi[] edgeCells = (Roi[]) sp.edge
-    final String measuredSelectionBasis=selectionBasis
+    final String measuredSelectionBasis=basisFor(sp.all as Roi[])
     final boolean measuredExcludeEdges=edgeBox.isSelected()
+    final boolean checkSensitivity = steps.blind && sensBox.isSelected()
     steps.alsoAvoid = edgeCells
     steps.edgeNote = edgeBox.isSelected() ? "Cells at the picture's edge: outlines within " + CalciumSteps.EDGE_MARGIN + " pixels of the border are left out, because their background can only be taken from the inner, better-lit side (" + edgeCells.length + " outlines in the ROI Manager left out; they are not in the tables or the saved outlines)." : "Cells at the picture's edge were NOT left out (box unticked); the summary table marks them."
     if (cells.length == 0) { result.setText("<html><body style='width:300px'>There are no cells yet. Choose cells in step 2 first.</body></html>"); return }
@@ -3964,25 +4868,50 @@ go.addActionListener({ e ->
                 if (saveMovie.isSelected()) IJ.saveAsTiff(corrected, outDir.getPath() + File.separator + base + "_background_corrected_movie.tif")
             }
             result.setText("<html><body style='width:300px'>Measuring " + cells.length + " cells on " + steps.n + " frames...</body></html>")
-            steps.log.removeAll{it.startsWith('Cell selection basis:')};steps.say('Cell selection basis: '+measuredSelectionBasis+'. Accepted ROI registry includes premeasurement exclusions.')
+            steps.log.removeAll{it.startsWith('Cell selection basis:') || it.startsWith('Sensitivity check') || it.startsWith('Chosen blind or later:')};steps.say('Cell selection basis: '+measuredSelectionBasis+'. Accepted ROI registry includes premeasurement exclusions.')
+            Map chosenBlind = null
+            if (steps.blindLast > 0 && (steps.blind || blindCellKeys != null)) {
+                chosenBlind = [:]
+                cells.eachWithIndex { Roi c, int i -> chosenBlind[names[i]] = blindCellKeys != null ? blindCellKeys.contains(cellKey(c)) : !notBlindKeys.contains(cellKey(c)) }
+                int nBlind = chosenBlind.values().count { it } as int
+                CalciumCsv.write(new File(outDir, base + '_cells_chosen_blind_or_after_response.csv'), [['cell', 'chosen']] + names.collect { [it, chosenBlind[it] ? 'blind (frames ' + steps.blindFirst + '-' + steps.blindLast + ')' : 'after the response was shown'] })
+                steps.say('Chosen blind or later: ' + nBlind + ' of the ' + cells.length + ' cells were chosen blind on frames ' + steps.blindFirst + '-' + steps.blindLast + ' and are unchanged since; ' + (cells.length - nBlind) + ' were added or reshaped after the response was shown. Step 4 gives % responding for each group; only the blind group is free of selection on the response. List: ' + base + '_cells_chosen_blind_or_after_response.csv')
+            }
             def summary = steps.measureAndSave(cells, names, outDir.getPath() + File.separator + base + "_")
             if (corrected != null && !testGui) { corrected.show(); corrected.setSlice(Math.min(steps.n, steps.found ? steps.p0 + 5 : 1)); corrected.setDisplayRange(0, CalciumSteps.SHOW_MAX); corrected.updateAndDraw() }
             IJ.log(summary); IJ.log("Saved in: " + outDir.getPath()); IJ.log("Step 4 uses full-precision unlifted fluorescence: " + base + "_gray_values_background_corrected_native.csv")
             File registryFile=new File(outDir,base+'_roi_registry.csv')
-            CalciumCsv.write(registryFile,CalciumMeasurement.registry(sp.all as Roi[],cells,steps.lastBackgroundPixels,steps,measuredSelectionBasis))
+            CalciumCsv.write(registryFile,CalciumMeasurement.registry(sp.all as Roi[],cells,steps.lastBackgroundPixels,steps,measuredSelectionBasis,
+                chosenBlind==null?null:chosenBlind.collectEntries{id,blindly->[id,blindly?steps.blindBasis():'Added after the response or all frames were shown (blind frames '+steps.blindFirst+'-'+steps.blindLast+')']}))
             File acceptedRoisFile=new File(outDir,base+'_accepted_rois.zip');CalciumMeasurement.writeRois(acceptedRoisFile,sp.all as Roi[])
             double interval = imp.getCalibration().frameInterval
             String unit = imp.getCalibration().getTimeUnit().toLowerCase(Locale.ROOT)
             if (unit in ['ms','msec','millisecond']) interval /= 1000d
             else if (unit in ['min','minute']) interval *= 60d
             else if (!(unit in ['sec','s','second'])) interval = Double.NaN
+            Map handed = CalciumAnalysisSettings.framesFromFiji(steps)
+            final Map fromFiji = handed
+            String stimulusFrom = 'fiji'
+            int usual = CalciumAnalysisSettings.lastStimulusFrame()
+            if (usual >= 1 && usual < steps.n - 1) {
+                handed = [first: Math.max(1, usual - 19), last: usual, chosen: handed.chosen, note: 'The stimulus is set after frame ' + usual + ', as in your last analysis. Check it, then run.']
+                stimulusFrom = 'last-recording'
+            }
             final Map measured = [csv:new File(outDir,base + "_gray_values_background_corrected_native.csv"),folder:outDir,
-                measurementId:UUID.randomUUID().toString(),recording:base,rois:cells.collect{(Roi)it.clone()} as Roi[],names:names,frames:steps.n,picture:steps.colourPic,movie:imp,
-                hz:interval > 0 ? 1d/interval : Double.NaN,baselineStart:steps.found?steps.b0:1,baselineEnd:steps.found?steps.b1:Math.min(20,steps.n-1),key:measuredKey(sp.all as Roi[])+'#edge='+measuredExcludeEdges+'#selection='+measuredSelectionBasis,
+                measurementId:UUID.randomUUID().toString(),recording:base,rois:cells.collect{(Roi)it.clone()} as Roi[],names:names,frames:steps.n,picture:steps.colourPic,backgroundPicture:steps.backgroundPic,motion:motionForPage(handed.chosen),movie:imp,
+                hz:interval > 0 ? 1d/interval : Double.NaN,baselineStart:handed.first,baselineEnd:handed.last,framesNote:handed.note,fijiFrames:handed.chosen,stimulusFrom:stimulusFrom,fijiBaselineStart:fromFiji.first,fijiBaselineEnd:fromFiji.last,chosenBlind:chosenBlind,key:measuredKey(sp.all as Roi[])+'#edge='+measuredExcludeEdges+'#selection='+measuredSelectionBasis,
                 registry:registryFile,registryHash:CalciumInstaller.digest(registryFile.bytes),selectionBasis:measuredSelectionBasis,
                 acceptedRois:acceptedRoisFile,acceptedRoisHash:CalciumInstaller.digest(acceptedRoisFile.bytes)]
             measured.inputHash=CalciumInstaller.digest(measured.csv.bytes)
-            def html = "<b>Done.</b> " + cells.length + " cells measured on " + steps.n + " frames.<br>" +
+            String sensitivityHtml = ""
+            if (checkSensitivity) {
+                def check = runSensitivity(cells, outDir.getPath() + File.separator + base + "_", { String s -> javax.swing.SwingUtilities.invokeLater { result.setText("<html><body style='width:300px'>" + CalciumOutlineProgress.escape(s) + "</body></html>") } })
+                def m = check.m
+                sensitivityHtml = m != null ? "Sensitivity check: the blind detection also found <b>" + m.found + " of " + m.cellLike + "</b> response-assisted outlines that could be cells (" + CalciumSensitivity.pct((int) m.found, (int) m.cellLike) + "); " + (m.cellLike - m.found) + " missed. Details in what_was_done.txt.<br>" :
+                    "<font color='#b05000'>" + CalciumOutlineProgress.escape((String) check.text) + "</font><br>"
+                IJ.log((String) check.text)
+            }
+            def html = "<b>Done.</b> " + cells.length + " cells measured on " + steps.n + " frames.<br>" + sensitivityHtml +
                 "Legacy 5-SD screening rise: <b>" + steps.lastClear + " of " + cells.length + "</b>. Protocol responder counts are in Step 4.<br>" +
                 (edgeCells.length > 0 ? edgeCells.length + " outlines at the picture's edge were left out (dashed).<br>" : "") +
                 (steps.lastDim > 0 ? "<font color='#b05000'><b>" + steps.lastDim + " cells are not brighter than their background at rest.</b> Review their quality status in Step 4.</font><br>" : "") +
@@ -3991,7 +4920,7 @@ go.addActionListener({ e ->
         } catch (Throwable t) { go.setEnabled(true); go.setText("Measure and save"); result.setText("<html><body style='width:300px'>Could not measure: " + t + "</body></html>"); IJ.log("Calcium imaging plugin: " + t) }
     }
 } as java.awt.event.ActionListener)
-if (testGui) { binding.setVariable("hooks", [viewAllBtn: viewAllBtn, viewBaselineBtn: viewBaselineBtn, viewResponseBtn: viewResponseBtn, selectionNote: selectionNote, selectionBasis: { -> selectionBasis }, changeBtn: changeBtn, changeRecording: changeRecording, continueBtn: continueBtn, backToCellsBtn: backToCellsBtn, backToMeasureBtn: backToMeasureBtn, cards: [s1, s2, s3, s4], recordingNote: recordingNote, detectionProgress: detectionProgress, suggestBtn: suggestBtn, edgeBox: edgeBox, addBtn: addBtn, setForceFresh: { boolean v -> forceFresh = v }, setupCellpose: setupCellpose, findCellposePython: findCellposePython, setupBtn: setupBtn, setupRow: setupRow, cpLabel: cpLabel, showCellposeState: showCellposeState, setupText: SETUP_TEXT, saveMovie: saveMovie, makeMovie: makeMovie, rm: rm, refresh: refresh, go: go, status: status, steps: steps, outDir: outDir, showBg: showBg, frame: frame, suggest: suggest, acceptAt: acceptAt, acceptAll: acceptAll, hoverAt: hoverAt, proposals: proposals, result: result, info: info, removeSelected: removeSelected, undoLast: undoLast, root: root]); refresh(true); return }
+if (testGui) { binding.setVariable("hooks", [nextLine: nextLine, addRespondersBtn: addRespondersBtn, acceptAllBtn: acceptAllBtn, autoSuggestAsked: { -> autoSuggestAsked }, legendClicked: { String k, boolean o -> legendClicked.call(k, o) }, hiddenKinds: hiddenKinds, cellRois: cellRois, sensBox: sensBox, basisFor: basisFor, responseSeen: { -> responseSeen }, reveal: { -> reveal() }, runSensitivity: runSensitivity, trace: trace, respondsLegend: respondsLegend, viewAllBtn: viewAllBtn, viewBaselineBtn: viewBaselineBtn, viewResponseBtn: viewResponseBtn, selectionNote: selectionNote, selectionBasis: { -> selectionBasis }, changeBtn: changeBtn, changeRecording: changeRecording, continueBtn: continueBtn, backToCellsBtn: backToCellsBtn, backToMeasureBtn: backToMeasureBtn, cards: [s1, s2, s3, s4], recordingNote: recordingNote, detectionProgress: detectionProgress, suggestBtn: suggestBtn, edgeBox: edgeBox, addBtn: addBtn, setForceFresh: { boolean v -> forceFresh = v }, setupCellpose: setupCellpose, findCellposePython: findCellposePython, setupBtn: setupBtn, setupRow: setupRow, cpLabel: cpLabel, showCellposeState: showCellposeState, setupText: SETUP_TEXT, saveMovie: saveMovie, makeMovie: makeMovie, rm: rm, refresh: refresh, go: go, status: status, steps: steps, outDir: outDir, showBg: showBg, frame: frame, suggest: suggest, acceptAt: acceptAt, acceptAll: acceptAll, hoverAt: hoverAt, proposals: proposals, result: result, info: info, removeSelected: removeSelected, undoLast: undoLast, root: root]); refresh(true); return }
 frame.setVisible(true)
 timer.start()
 refresh(true)

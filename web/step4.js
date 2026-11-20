@@ -6,12 +6,14 @@
   const CALL = { responded: '#177465', not: '#925223', other: '#8A94A0' };
   const ON_PICTURE = { responded: '#3ddbb5', not: '#ffa24a', other: '#aeb8c2' };
   const GROUPS = ['All cells', 'Responded', 'Did not respond', 'Excluded', 'Unscorable', 'Needs quality review'];
+  /** The colour overview and the background areas are still pictures; every other view is a frame of the recording. */
+  const still = () => S.view === 'picture' || S.view === 'background';
   const kind = (call) => call === 'Responded' ? 'responded' : call === 'Did not respond' ? 'not' : 'other';
   const inGroup = (call, group, name) => group === 0 || (group === 1 && call === 'Responded') || (group === 2 && call === 'Did not respond') ||
     (group === 3 && call === 'Excluded') || (group === 4 && call === 'Unscorable') || (group === 5 && qualityFor(name).length > 0 && (!S.qualityFlag || qualityFor(name).includes(S.qualityFlag)));
-  const S = { info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'raw', viewChosen: false,
-    every: true, outlines: true, order: 'call', palette: 'signed', range: 'robust', tall: false, timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false };
-  const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, hover: null, geom: null, scrubbing: false, drawn: [] };
+  const S = { unlinked: new Set(), validationShown: null, exportScale: null, imported: null, info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'raw', viewChosen: false,
+    every: false, plotMode: 'mean', signal: 'dff', outlines: true, outlineWidth: 1, order: 'call', palette: 'plasma', range: 'robust', tall: false, timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false };
+  const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, y: {}, hover: null, geom: null, scrubbing: false, drawn: [], series: [] };
   const Pic = { base: null, shown: null, zoom: 1, panX: 0, panY: 0, drag: null, moved: false, shownFrame: null, error: null };
   // Movie frames: compressed images are kept for the session (about 40 MB for 300 full-size frames, much less at display size),
   // decoded ones only near the playhead. Keys carry the server's frame version, which changes with the baseline behind
@@ -79,7 +81,101 @@
     if (box.value === box.dataset.shown) return box._exact;
     const text = box.value.trim(); if (optional && text === '') return null;
     const value = text === '' ? NaN : Number(text);
-    return Number.isFinite(value) ? value / box._scale : text;
+    if (!Number.isFinite(value)) return text;
+    // A typed time that reads the same as a frame's time is that frame: 113.091 means the frame stored as 113.09100770950317,
+    // so a retyped value never differs from an untouched one by a hidden fraction.
+    if (TIME_KEYS.includes(box.dataset.key)) { const shown = fmt(value); for (const t of editedTimes() || []) if (fmt(t) === shown) return t; }
+    return value / box._scale;
+  }
+  const TIME_KEYS = ['Baseline_start_s', 'Baseline_end_s', 'Stimulus_onset_s', 'Start_s', 'End_s'];
+  const FIELD_TITLES = { Baseline_start_s: 'baseline start', Baseline_end_s: 'baseline end', Stimulus_onset_s: 'stimulus time', Start_s: 'response window start', End_s: 'response window end',
+    Floor_local_fraction: 'minimum rise', SD_multiplier: 'baseline SD multiplier', Min_duration_s: 'minimum duration', Consecutive_samples: 'consecutive samples', Max_gap_s: 'maximum gap',
+    Min_baseline_samples: 'minimum baseline samples', Noise_floor_local_fraction: 'noise floor', Expected_interval_s: 'expected interval' };
+  const seconds = (v) => fmt(v) + ' s';
+  /** Frame times of the settings being edited: from the frame rate, or the timestamps as the plugin read them. Null when unknown. */
+  function draftTimes(timestamps, hz) {
+    const n = S.info ? S.info.frames : 0; if (!n) return null;
+    if (!timestamps) { const rate = hz === null || hz === '' || typeof hz === 'boolean' ? NaN : Number(hz); return Number.isFinite(rate) && rate > 0 ? Array.from({ length: n }, (_, i) => i / rate) : null; }
+    if (!S.results) { const t = S.state && S.state.frameTimes; return t && t.length >= n ? t : null; }
+    const applied = S.results.appliedDraft && S.results.appliedDraft.timestamps, t = S.results.frameTimes || S.results.time;
+    return applied && JSON.stringify(applied) === JSON.stringify(timestamps) && t && t.length >= n ? t : null;
+  }
+  const editedTimes = () => (S.draft && $('sampling_hz') ? draftTimes(S.draft.timestamps, readInput($('sampling_hz'), false)) : null);
+  /** Which frames a window uses, by the engine's own rule: baseline start ≤ t < baseline end, and scoring start ≤ t ≤ scoring end. */
+  function windowFrames(row, times) {
+    const n = S.info ? S.info.frames : 0; if (!n || !times || times.length < n) return null;
+    const num = (v) => (v === null || v === '' || typeof v === 'boolean' ? NaN : Number(v));
+    const b0 = num(row.Baseline_start_s), b1 = num(row.Baseline_end_s), on = num(row.Stimulus_onset_s), s0 = num(row.Start_s), s1 = num(row.End_s);
+    const tol = 8 * Number.EPSILON * Math.max(1, ...[b0, b1, s0, s1].filter(Number.isFinite).map(Math.abs));
+    const span = (test) => { let first = 0, last = 0, count = 0; for (let i = 0; i < n; i++) if (test(times[i])) { if (!first) first = i + 1; last = i + 1; count++; } return { first, last, count }; };
+    let before = 0, at = false; if (Number.isFinite(on)) for (let i = 0; i < n; i++) { if (times[i] < on - tol) before = i + 1; else { at = Math.abs(times[i] - on) <= tol; break; } }
+    return { n, times, stimulus: Number.isFinite(on) ? { before, at } : null,
+      baseline: Number.isFinite(b0) && Number.isFinite(b1) ? span((t) => t >= b0 - tol && t < b1 - tol) : null,
+      scoring: Number.isFinite(s0) && Number.isFinite(s1) ? span((t) => t >= s0 - tol && t <= s1 + tol) : null };
+  }
+  /** The timing is entered in frames: one fact, "the stimulus was added after frame N". F₀ frames, the baseline and the response
+   *  window follow from it until a row is set separately. The seconds the engine needs are taken from the recording's own frame
+   *  times, never from a typed round number: the stimulus is the time of the first frame after it; a baseline runs up to, not
+   *  including, the frame after its last frame; the response window runs from its first frame to its last, both included.
+   *  The hidden boxes named window-<i>-<key> hold those seconds exactly as before, so the protocol file is unchanged. */
+  // F₀, and a baseline of its own: the last 20 frames before the stimulus, or all of them when there are fewer; frames in which the
+  // field moved are left out when at least 3 frames remain after them
+  const frameRule = (N) => { let a = Math.max(1, N - 19); const moved = movedWithin(a, N); if (moved.count && N - moved.after + 1 >= 3) a = moved.after; return [a, N]; };
+  const wholeIn = (box) => { const text = box ? String(box.value).trim() : '', v = Number(text); return text !== '' && Number.isInteger(v) ? v : NaN; };
+  const frameBox = (id, index) => $(id + '-' + index);
+  function applyFrames(index) {
+    const times = editedTimes(), n = S.info ? S.info.frames : 0, i = String(index), get = (id) => frameBox(id, i), legacy = Number($('protocol-mode').value) === 1;
+    if (!times || !get('stim-frame')) return;
+    const put = (key, value) => exactInput($('window-' + i + '-' + key), value);
+    const N = wholeIn(get('stim-frame')), okN = N >= 1 && N < n;
+    if (i === '0' && okN && $('f0-cell').dataset.linked === '1') { const f = frameRule(N); exactInput($('baseline_start'), f[0]); exactInput($('baseline_end'), f[1]); }
+    if (okN && get('base-cell').dataset.linked === '1') {
+      const own = [wholeIn($('baseline_start')), wholeIn($('baseline_end'))], f = i === '0' && own[0] >= 1 && own[1] >= own[0] && own[0] <= N ? [own[0], Math.min(own[1], N)] : frameRule(N);
+      get('base-from').value = f[0]; get('base-to').value = f[1];
+    }
+    if (okN && get('resp-cell').dataset.linked === '1') { get('resp-from').value = N + 1; get('resp-to').value = n; }
+    if (legacy && okN) { get('base-to').value = N; get('resp-from').value = N + 1; }
+    const a = wholeIn(get('base-from')), b = wholeIn(get('base-to')), c = wholeIn(get('resp-from')), d = String(get('resp-to').value).trim() === '' ? n : wholeIn(get('resp-to'));
+    const at = (frame) => (frame >= 1 && frame <= n ? times[frame - 1] : null);
+    put('Stimulus_onset_s', okN ? times[N] : null);
+    put('Baseline_start_s', at(a)); put('Baseline_end_s', b >= 1 && b < n ? times[b] : null);
+    put('Start_s', at(c)); put('End_s', at(d));
+  }
+  /** Frames in which the field was displaced (found by the plugin when the recording was opened). */
+  const movedRuns = () => (S.info && S.info.motion && S.info.motion.moved > 0 ? S.info.motion.runs : []);
+  const movedText = () => 'frames ' + movedRuns().map((r) => (r[0] === r[1] ? r[0] : r[0] + '–' + r[1])).join(' and ');
+  const isMoved = (frame) => movedRuns().some((r) => frame >= r[0] && frame <= r[1]);
+  /** How many frames of a..b moved, and the first frame after the last of them inside a..b (0 when none moved). */
+  function movedWithin(a, b) { let count = 0, last = 0; for (let f = a; f <= b; f++) if (isMoved(f)) { count++; last = f; } return { count, after: count ? last + 1 : 0 }; }
+  function applyAllFrames() { for (const section of document.querySelectorAll('.window-editor')) applyFrames(section.dataset.index); }
+  /** Fills the frame boxes from the seconds of a loaded window, by the engine's own rule, and decides which rows follow the stimulus. */
+  function showFrames(index, row) {
+    const i = String(index), get = (id) => frameBox(id, i), used = windowFrames(row, editedTimes()), n = S.info.frames;
+    const N = used && used.stimulus ? used.stimulus.before : NaN, okN = N >= 1 && N < n, has = (s) => s && s.count > 0;
+    get('stim-frame').closest('.window-editor').dataset.framesShown = used ? '1' : '';   // with recorded timestamps the frame times arrive a moment later
+    get('stim-frame').value = Number.isFinite(N) ? N : '';
+    get('base-from').value = used && has(used.baseline) ? used.baseline.first : ''; get('base-to').value = used && has(used.baseline) ? used.baseline.last : '';
+    get('resp-from').value = used && has(used.scoring) ? used.scoring.first : ''; get('resp-to').value = used && has(used.scoring) ? used.scoring.last : '';
+    const rule = okN ? frameRule(N) : null, same = (pair, a, b) => !!pair && pair[0] === a && pair[1] === b, last = used ? used.times[n - 1] : NaN, end = Number(row.End_s);
+    const f0 = [wholeIn($('baseline_start')), wholeIn($('baseline_end'))];
+    const set = (cellId, key, follows) => { const cell = i === '0' && cellId === 'f0-cell' ? $('f0-cell') : get(cellId); cell.dataset.linked = follows && !S.unlinked.has(key) ? '1' : ''; };
+    if (i === '0') set('f0-cell', 'f0', !okN || same(rule, f0[0], f0[1]));
+    const baseRule = okN ? (i === '0' && f0[0] >= 1 && f0[1] >= f0[0] && f0[0] <= N ? [f0[0], Math.min(f0[1], N)] : rule) : null;
+    set('base-cell', 'base-cell-' + i, !okN || !has(used.baseline) && row.Baseline_start_s == null || has(used.baseline) && same(baseRule, used.baseline.first, used.baseline.last));
+    set('resp-cell', 'resp-cell-' + i, !okN || !has(used.scoring) && row.Start_s == null || has(used.scoring) && used.scoring.first === N + 1 && used.scoring.last === n && !(Number.isFinite(end) && end > last + 1e-9));
+  }
+  /** What each row that follows the stimulus says, and the same windows in seconds on one line. */
+  function paintFrames(index) {
+    const i = String(index), get = (id) => frameBox(id, i), times = editedTimes(), n = S.info.frames; if (!get('stim-frame')) return;
+    const pair = (from, to) => { const a = wholeIn(from), b = wholeIn(to); return Number.isFinite(a) && Number.isFinite(b) ? [a, b] : null; }, text = (p) => (p ? p[0] + '–' + p[1] : 'not set');
+    const f0 = pair($('baseline_start'), $('baseline_end')), base = pair(get('base-from'), get('base-to')), resp = pair(get('resp-from'), get('resp-to')), N = wholeIn(get('stim-frame'));
+    const chip = (cell, words, hint) => { const button = cell.querySelector('.link-toggle'); button.textContent = words; button.title = hint + ' Click to set it yourself.'; };
+    if (i === '0') chip($('f0-cell'), text(f0), 'Follows the stimulus: the frames before it, or the last 20 of a long wait.');
+    chip(get('base-cell'), i === '0' && base && f0 && base[0] === f0[0] && base[1] === f0[1] ? 'same as F₀' : text(base), 'Follows the stimulus.');
+    chip(get('resp-cell'), resp ? resp[0] + '–' + resp[1] + (resp[1] === n ? ' (end)' : '') : 'not set', 'Follows the stimulus: from the first frame after it to the last frame.');
+    const s = (frame) => (times && frame >= 1 && frame <= n ? fmt(+times[frame - 1].toFixed(2)) : '?');
+    $('frames-preview-' + i).textContent = !times ? 'Enter the frame rate to set the timing.' : !(N >= 1 && N < n) ? '' :
+      'In seconds: baseline ' + (base ? s(base[0]) + '–' + s(base[1]) : '?') + ' · stimulus ' + s(N + 1) + ' · response ' + (resp ? s(resp[0]) + '–' + s(resp[1]) : '?');
   }
   const FILES = ['timestamps', 'sensitivity', 'negative_control'];
   const NUMBERS = ['Baseline_start_s', 'Baseline_end_s', 'Stimulus_onset_s', 'Start_s', 'End_s', 'Floor_local_fraction', 'SD_multiplier', 'Min_duration_s', 'Consecutive_samples', 'Max_gap_s', 'Min_baseline_samples', 'Noise_floor_local_fraction', 'Expected_interval_s'];
@@ -99,6 +195,7 @@
   }
   function renderWindows() {
     // The positive-control tick box is moved between the two windows; keep references, because a detached element cannot be found by id.
+    S.validationShown = null;
     const container = $('windows-editor'), keep = [S.controlLabel || (S.controlLabel = $('control').closest('label')), S.controlHelp || (S.controlHelp = $('control-help'))]; keep.forEach((e) => e.remove()); container.innerHTML = '';
     const legacy = Number($('protocol-mode').value) === 1;
     S.draft.protocol.windows.forEach((row, index) => {
@@ -106,24 +203,46 @@
       const heading = document.createElement('h3'); heading.textContent = index === 0 ? 'Primary stimulus' : 'Positive control'; section.appendChild(heading);
       const add = (target, key, title, opts) => { const label = windowInput(index, key, title, opts); target.appendChild(label); const box = label.lastChild;
         if (box.tagName === 'SELECT' || key === 'Stimulus') box.value = w[key] == null ? '' : String(w[key]); else exactInput(box, w[key], opts && opts.scale); return box; };
-      add(section, 'Stimulus', 'Name'); const onsetBox = add(section, 'Stimulus_onset_s', 'Stimulus added at (s)');
-      const fromFrame = document.createElement('button'); fromFrame.type = 'button'; fromFrame.className = 'ghost small from-frame'; fromFrame.textContent = 'Use frame on screen'; fromFrame.disabled = onsetBox.disabled;
-      fromFrame.title = 'Set this to the time of the movie frame shown now. Scrub the movie to the frame where the stimulus arrives first.';
-      fromFrame.addEventListener('click', () => { const t = frameTimes()[S.frame - 1]; if (!finite(t)) return; exactInput(onsetBox, t); onsetBox.dispatchEvent(new Event('input', { bubbles: true })); onsetBox.dispatchEvent(new Event('change', { bubbles: true })); });
-      onsetBox.closest('label').after(fromFrame);
-      add(section, 'Baseline_start_s', 'Response baseline from (s)'); add(section, 'Baseline_end_s', 'Response baseline to (s)');
-      add(section, 'Start_s', 'Score response from (s)'); add(section, 'End_s', 'Score response to (s)');
-      const summary = document.createElement('p'); summary.className = 'rule-summary'; summary.id = 'rule-summary-' + index; section.appendChild(summary);
-      const details = document.createElement('details'); const summaryTitle = document.createElement('summary'); summaryTitle.textContent = 'Adjust the response rule'; details.appendChild(summaryTitle);
+      const frames = (id, label) => { const box = document.createElement('input'); box.id = id; box.inputMode = 'numeric'; box.dataset.frames = '1'; box.dataset.window = index; box.setAttribute('aria-label', label); return box; };
+      const line = (title, hint) => { const r = document.createElement('div'); r.className = 'row'; const name = document.createElement('span'); name.textContent = title; name.title = hint || ''; r.appendChild(name); section.appendChild(r); return r; };
+      // A row that follows the stimulus shows its frames as a dashed chip. A click shows two boxes instead; "auto" puts it back.
+      const derived = (title, hint, cellId, key, first, last) => {
+        const r = line(title, hint), cell = document.createElement('span'); cell.className = 'cell derived'; cell.id = cellId; cell.dataset.linked = '1'; r.appendChild(cell);
+        const chip = document.createElement('button'); chip.type = 'button'; chip.className = 'link-toggle'; cell.appendChild(chip);
+        const pair = document.createElement('span'); pair.className = 'pair'; const to = document.createElement('i'); to.textContent = 'to'; pair.append(first, to, last);
+        const back = document.createElement('button'); back.type = 'button'; back.className = 'relink'; back.textContent = 'auto'; back.title = 'Follow the stimulus again'; pair.appendChild(back); cell.appendChild(pair);
+        chip.addEventListener('click', () => { S.unlinked.add(key); cell.dataset.linked = ''; first.focus(); first.select(); });
+        back.addEventListener('click', () => { S.unlinked.delete(key); cell.dataset.linked = '1'; applyFrames(index); draftChanged(); });
+      };
+      const holder = document.createElement('span'); holder.className = 'with-button'; line('Stimulus added after frame', 'The last frame before the stimulus was added. The rows below follow it.').appendChild(holder);
+      const stimBox = frames('stim-frame-' + index, 'Stimulus added after frame'); holder.appendChild(stimBox);
+      const fromFrame = document.createElement('button'); fromFrame.type = 'button'; fromFrame.className = 'small from-frame'; fromFrame.textContent = 'Use frame';
+      fromFrame.addEventListener('click', () => { stimBox.value = S.frame; applyFrames(index); draftChanged(); });
+      holder.appendChild(fromFrame);
+      const suggestion = document.createElement('p'); suggestion.className = 'fine suggestion'; suggestion.id = 'suggestion-' + index; suggestion.hidden = true; section.appendChild(suggestion);
+      if (index === 0) {
+        const first = frames('baseline_start', 'First F₀ frame'), last = frames('baseline_end', 'Last F₀ frame'); exactInput(first, S.draft.values.baseline_start); exactInput(last, S.draft.values.baseline_end);
+        derived('F₀ frames', 'These frames set the zero of ΔF/F₀', 'f0-cell', 'f0', first, last);
+      }
+      derived('Baseline', 'The frames before the stimulus that set the noise level a response must exceed', 'base-cell-' + index, 'base-cell-' + index, frames('base-from-' + index, 'First baseline frame'), frames('base-to-' + index, 'Last baseline frame'));
+      derived('Response window', 'The frames in which a response is looked for', 'resp-cell-' + index, 'resp-cell-' + index, frames('resp-from-' + index, 'First frame of the response window'), frames('resp-to-' + index, 'Last frame of the response window'));
+      if (index === 0 && S.info && S.info.fijiFrames) { const chosen = document.createElement('p'); chosen.className = 'fine fiji-frames'; chosen.id = 'fiji-frames'; chosen.textContent = 'Cells chosen in Fiji on frames ' + S.info.fijiFrames.first + '–' + S.info.fijiFrames.last + '.'; section.appendChild(chosen); }
+      // the same timing in seconds, exactly as the engine gets it: filled from the frames, not shown
+      const exact = document.createElement('div'); exact.hidden = true; exact.className = 'exact'; for (const key of TIME_KEYS) add(exact, key, key); section.appendChild(exact);
+      const preview = document.createElement('p'); preview.className = 'frames-preview'; preview.id = 'frames-preview-' + index; section.appendChild(preview);
+      const details = document.createElement('details'); details.className = 'rule'; const summaryTitle = document.createElement('summary'); summaryTitle.title = 'The response rule. Click to adjust it.';
+      const summary = document.createElement('span'); summary.className = 'rule-summary'; summary.id = 'rule-summary-' + index; summaryTitle.appendChild(summary); details.appendChild(summaryTitle);
       add(details, 'Floor_local_fraction', 'Minimum rise (%)', { scale: 100 }); add(details, 'SD_multiplier', 'Baseline SD multiplier');
       add(details, 'Duration_mode', 'Persistence measured in', { choices: [['seconds', 'Seconds'], ['samples', 'Consecutive samples']] });
       add(details, 'Min_duration_s', 'Minimum duration (s)'); add(details, 'Consecutive_samples', 'Consecutive samples');
-      add(details, 'Min_baseline_samples', 'Minimum baseline samples'); add(details, 'Max_gap_s', 'Maximum gap (s; blank = auto)');
-      add(details, 'Expected_interval_s', 'Expected interval (s; blank = auto)'); add(details, 'Noise_floor_local_fraction', 'Noise floor (%)', { scale: 100 });
-      section.appendChild(details); container.appendChild(section);
+      add(details, 'Min_baseline_samples', 'Minimum baseline samples'); add(details, 'Max_gap_s', 'Maximum gap (s)').placeholder = 'auto';
+      add(details, 'Expected_interval_s', 'Expected interval (s)').placeholder = 'auto'; add(details, 'Noise_floor_local_fraction', 'Noise floor (%)', { scale: 100 });
+      add(details, 'Stimulus', 'Name in the output');
+      section.appendChild(details); container.appendChild(section); showFrames(index, w);
       if (index === 0) keep.forEach((e) => container.appendChild(e));
     });
     if (!S.draft.protocol.windows.length) keep.forEach((e) => container.appendChild(e));
+    frameButtons();
     $('control').checked = S.draft.protocol.windows.length > 1;
     $('control-help').hidden = !$('control').checked;
     updateProtocolControls();
@@ -137,11 +256,40 @@
       const i = section.dataset.index, box = (key) => $('window-' + i + '-' + key), mode = box('Duration_mode').value;
       for (const field of section.querySelectorAll('input,select')) {
         const key = field.dataset.key;
-        field.disabled = busy || (legacy && (['Baseline_end_s', 'Stimulus_onset_s', 'Duration_mode', 'Min_duration_s', 'Min_baseline_samples', 'Noise_floor_local_fraction', 'Expected_interval_s'].includes(key) || (i === '1' && key === 'Stimulus'))) || (!legacy && ((key === 'Min_duration_s' && mode !== 'seconds') || (key === 'Consecutive_samples' && mode !== 'samples')));
+        field.disabled = busy || (legacy && (['Baseline_end_s', 'Start_s', 'Duration_mode', 'Min_duration_s', 'Min_baseline_samples', 'Noise_floor_local_fraction', 'Expected_interval_s'].includes(key) || (i === '1' && key === 'Stimulus'))) || (!legacy && ((key === 'Min_duration_s' && mode !== 'seconds') || (key === 'Consecutive_samples' && mode !== 'samples')));
       }
-      $('rule-summary-' + i).textContent = 'Rise ≥ ' + box('Floor_local_fraction').value + '% and ≥ ' + box('SD_multiplier').value + ' × baseline SD, for ' + (mode === 'seconds' ? box('Min_duration_s').value + ' s.' : box('Consecutive_samples').value + ' consecutive samples.') + (legacy ? ' Legacy rule.' : '');
+      for (const button of section.querySelectorAll('button')) button.disabled = busy || button.dataset.fixed === '1';
+      const row = {}; for (const key of TIME_KEYS) row[key] = readInput(box(key), false);
+      if (!section.dataset.framesShown && editedTimes()) showFrames(i, row);
+      const used = windowFrames(row, editedTimes());
+      for (const id of ['base-to', 'resp-from']) frameBox(id, i).disabled = busy || legacy;
+      paintFrames(i);
+      // where the starting stimulus frame came from, until it is changed
+      const note = $('suggestion-' + i), first = S.initialDraft && S.initialDraft.protocol.windows[i], from = S.info && S.info.stimulusFrom;
+      const untouched = i === '0' && !S.results && !!first && typeof row.Stimulus_onset_s === 'number' && Number(first.Stimulus_onset_s) === row.Stimulus_onset_s;
+      const words = !untouched ? '' : from === 'last-session' ? 'From your last session on this recording.' : from === 'last-recording' ? 'Same as your last recording.' : from === 'fiji' ? 'From the frames used in Fiji. Set it to when the stimulus was added.' : 'A suggestion, not a measured time.';
+      if (note.dataset.shown !== words) {
+        note.dataset.shown = words; note.hidden = !words; note.replaceChildren(words);
+        if (words && from === 'last-session' && S.info.fijiDraft) { const use = document.createElement('button'); use.type = 'button'; use.className = 'ghost small repair'; use.textContent = 'Use Fiji’s values';
+          use.addEventListener('click', () => { S.unlinked.clear(); S.initialDraft = clone(S.info.fijiDraft); S.info.stimulusFrom = 'fiji'; fillDraft(S.info.fijiDraft); $('confirmed').checked = false; draftChanged(); }); note.append(' ', use); }
+      }
+      if (i === '0') shadeTimeline(used);
+      $('rule-summary-' + i).textContent = 'Rule: rise ≥ ' + box('Floor_local_fraction').value + '% and ≥ ' + box('SD_multiplier').value + ' × SD, for ' + (mode === 'seconds' ? box('Min_duration_s').value + ' s' : box('Consecutive_samples').value + ' samples') + (legacy ? ' (legacy)' : '');
     }
-    $('rule-help').textContent = legacy ? 'Legacy reproduction: the baseline ends at the response start; the optional control is KCl. Sample counts depend on the acquisition rate.' : 'Starter settings are provisional. Check them against your controls before using responder percentages.';
+    $('rule-help').textContent = legacy ? 'Legacy rule: the baseline ends at the response start; the control is KCl. Sample counts depend on the frame rate.' : 'Starting values. Check against your controls.';
+  }
+  /** Under the frame slider: grey for the noise baseline, a mark for the stimulus, orange for the scored frames of the primary stimulus. */
+  function shadeTimeline(used) {
+    const strip = $('time-windows'); if (!strip) return; strip.replaceChildren(); if (!used || used.n < 2) return;
+    const at = (frame) => (frame - 1) / (used.n - 1) * 100, piece = (className, from, to, title) => { const e = document.createElement('i'); e.className = className; e.style.left = at(from) + '%'; e.style.width = Math.max(0.4, at(to) - at(from)) + '%'; e.title = title; strip.appendChild(e); };
+    if (used.baseline && used.baseline.count) piece('baseline', used.baseline.first, used.baseline.last, 'Baseline');
+    if (used.scoring && used.scoring.count) piece('scoring', used.scoring.first, used.scoring.last, 'Response window');
+    if (used.stimulus && used.stimulus.before < used.n) { const e = document.createElement('i'); e.className = 'stimulus'; e.style.left = at(used.stimulus.at ? used.stimulus.before + 1 : Math.max(1, used.stimulus.before + 0.5)) + '%'; e.title = 'Stimulus added'; strip.appendChild(e); }
+  }
+  const frameTime = () => (S.info ? (editedTimes() || frameTimes())[S.frame - 1] : NaN);   // of the frame on screen, in the time base being edited
+  function frameButtons() {
+    const t = frameTime();
+    for (const button of document.querySelectorAll('.from-frame')) { button.textContent = S.info ? 'Use frame ' + S.frame : 'Use frame'; button.title = 'Set it to the movie frame on screen' + (finite(t) ? ' (frame ' + S.frame + ', ' + fmt(+t.toFixed(2)) + ' s)' : '') + '.'; }
   }
   function collectDraft() {
     const draft = clone(S.draft), p = draft.protocol, legacy = Number($('protocol-mode').value) === 1;
@@ -168,7 +316,7 @@
   }
   function fillDraft(draft) {
     S.draft = clone(draft);
-    for (const key of ['sampling_hz', 'baseline_start', 'baseline_end']) exactInput($(key), draft.values[key]);
+    exactInput($('sampling_hz'), draft.values.sampling_hz);   // the F₀ frame boxes are made with the primary stimulus's rows
     for (const key of ['condition', 'biological_unit']) $(key).value = draft.values[key] || '';
     $('protocol-mode').value = draft.protocol.schema_version;
     $('protocol-name').value = draft.protocol.name; $('protocol-validation').value = draft.protocol.validation_status === 'legacy_unvalidated' ? 'user_defined' : draft.protocol.validation_status;
@@ -179,54 +327,107 @@
   function fileNote(key) { const file = S.draft[key]; $(key + '-name').textContent = file ? file.name : 'No file selected'; $(key + '-clear').hidden = !file; }
   // Draft validation reports errors without changing settings, saved calls or the applied movie clock.
   function validateDraft(draft) {
-    const errors = [], warnings = [], fields = new Set(), add = (field, message) => { errors.push(message); if (field) fields.add(field); };
+    const errors = [], listed = [], warnings = [], repairs = new Map(), inline = [], fields = new Set(), add = (field, message) => { errors.push(message); listed.push(message); if (field) fields.add(field); };
+    // Two time fields that disagree: both are marked, and one message sits beside the field to change, with the repair.
+    const conflict = (mark, beside, message, repair) => { errors.push(message); mark.forEach((f) => fields.add(f)); inline.push({ beside, message, repair }); };
+    const warn = (message, repair) => { warnings.push(message); if (repair) repairs.set(message, repair); };
+    const times = draftTimes(draft.timestamps, draft.values.sampling_hz);
     const numeric = (v) => v !== null && v !== '' && typeof v !== 'boolean' && Number.isFinite(Number(v));
     const value = draft.values, n = S.info.frames;
     if (!draft.timestamps && (!numeric(value.sampling_hz) || Number(value.sampling_hz) <= 0)) add('sampling_hz', 'Frame rate must be a positive number, or supply valid timestamps.');
-    if (!numeric(value.baseline_start) || !Number.isInteger(Number(value.baseline_start)) || Number(value.baseline_start) < 1) add('baseline_start', 'First baseline frame must be a whole number from 1.');
-    if (!numeric(value.baseline_end) || !Number.isInteger(Number(value.baseline_end)) || Number(value.baseline_end) < Number(value.baseline_start) || Number(value.baseline_end) >= n) add('baseline_end', 'Last baseline frame must follow the first and be before frame ' + n + '.');
+    if (!numeric(value.baseline_start) || !Number.isInteger(Number(value.baseline_start)) || Number(value.baseline_start) < 1) add('baseline_start', 'F₀: the first frame must be a whole number from 1.');
+    if (!numeric(value.baseline_end) || !Number.isInteger(Number(value.baseline_end)) || Number(value.baseline_end) < Number(value.baseline_start) || Number(value.baseline_end) >= n) add('baseline_end', 'F₀: the last frame must follow the first and be before frame ' + n + '.');
     const legacy = draft.protocol.schema_version === 1, names = new Set();
     draft.protocol.windows.forEach((original, index) => {
       const row = expandWindow(original, legacy), prefix = 'window-' + index + '-', label = index ? 'Control: ' : 'Stimulus: ';
       const required = NUMBERS.filter((key) => !['Max_gap_s', 'Expected_interval_s'].includes(key));
-      for (const key of required) if (!numeric(row[key])) add(prefix + key, label + key.replace(/_/g, ' ') + ' needs a number.');
+      const box = (key) => $(prefix + key), v = (key) => Number(row[key]), has = (key) => numeric(row[key]), fr = (id) => frameBox(id, index);
+      for (const key of required) if (!has(key) && !TIME_KEYS.includes(key)) add(prefix + key, label + FIELD_TITLES[key] + ' needs a number.');
       const name = String(row.Stimulus || '').trim().toLowerCase();
       if (!name || names.has(name)) add(prefix + 'Stimulus', label + 'use a nonempty, distinct name.'); names.add(name);
-      if (numeric(row.Baseline_start_s) && Number(row.Baseline_start_s) < 0) add(prefix + 'Baseline_start_s', label + 'baseline cannot start before 0 s.');
-      for (const [left, right, strict, message] of [
-        ['Baseline_start_s', 'Baseline_end_s', true, 'baseline end must follow baseline start.'],
-        ['Baseline_end_s', 'Stimulus_onset_s', false, 'baseline must finish at or before stimulus addition.'],
-        ['Stimulus_onset_s', 'Start_s', false, 'scoring cannot start before stimulus addition.'],
-        ['Start_s', 'End_s', true, 'response end must follow response start.']]) {
-        if (numeric(row[left]) && numeric(row[right]) && (strict ? Number(row[right]) <= Number(row[left]) : Number(row[right]) < Number(row[left]))) add(prefix + right, label + message);
+      const used = windowFrames(row, times), last = used ? used.times[used.n - 1] : NaN, N = wholeIn(fr('stim-frame')), okN = N >= 1 && N < n;
+      const relink = (cellId) => () => { S.unlinked.delete(cellId === 'f0-cell' ? 'f0' : cellId + '-' + index); (cellId === 'f0-cell' ? $('f0-cell') : fr(cellId)).dataset.linked = '1'; applyFrames(index); draftChanged(); };
+      const setFrames = (changes) => () => { for (const [id, frame] of changes) fr(id).value = frame; applyFrames(index); draftChanged(); };
+      const ids = (...names) => names.map((id) => id + '-' + index);
+      if (!times || !fr('stim-frame')) { /* no frame times: the frame rate message says so */ }
+      else if (!okN) conflict(ids('stim-frame'), 'stim-frame-' + index, label + (String(fr('stim-frame').value).trim() === '' ? 'enter the frame after which it was added.' : 'the stimulus must come after a frame from 1 to ' + (n - 1) + '.'));
+      else {
+        const a = wholeIn(fr('base-from')), b = wholeIn(fr('base-to')), c = wholeIn(fr('resp-from')), d = String(fr('resp-to').value).trim() === '' ? n : wholeIn(fr('resp-to')), rule = frameRule(N);
+        if (!(a >= 1 && b >= a)) conflict(ids('base-from', 'base-to'), 'base-from-' + index, label + 'the baseline needs a first and a last frame.', { text: 'Use ' + rule[0] + '–' + rule[1], run: relink('base-cell') });
+        else if (b > N) conflict(ids('base-to'), 'base-to-' + index, label + (Math.max(a, N + 1) === b ? 'baseline frame ' + b + ' comes' : 'baseline frames ' + Math.max(a, N + 1) + '–' + b + ' come') + ' after the stimulus.', a > N ? { text: 'Use ' + rule[0] + '–' + rule[1], run: relink('base-cell') } : { text: 'Use ' + a + '–' + N, run: setFrames([['base-to', N]]) });
+        else if (has('Min_baseline_samples') && used && used.baseline && used.baseline.count < v('Min_baseline_samples')) {
+          // for the primary stimulus this leaves every cell without a call, so the run is stopped; for the control it only loses the control
+          const words = label + 'the baseline holds ' + plural(used.baseline.count, 'frame') + ' but at least ' + v('Min_baseline_samples') + ' are needed. No cell would get a call.', fix = N >= v('Min_baseline_samples') ? { text: 'Use ' + rule[0] + '–' + rule[1], run: relink('base-cell') } : null;
+          if (index) warn(words, fix); else conflict(ids('base-from', 'base-to'), 'base-from-' + index, words, fix);
+        }
+        if (!(c >= 1 && d >= c && d <= n)) conflict(ids('resp-from', 'resp-to'), 'resp-from-' + index, label + 'the response window needs a first and a last frame, up to ' + n + '.', { text: 'Use ' + (N + 1) + '–' + n, run: relink('resp-cell') });
+        else if (c <= N) conflict(ids('resp-from'), 'resp-from-' + index, label + 'the response window starts at frame ' + c + ', before the stimulus.', { text: 'Start at ' + (N + 1), run: setFrames([['resp-from', N + 1]]) });
+        else if (has('End_s') && v('End_s') > last + 1e-9) {   // a loaded setting that runs past the recording
+          if (legacy) warn(label + 'the response window ends after the last frame. Cells may get no call.', { text: 'End at frame ' + n, run: setFrames([['resp-to', n]]) });
+          else conflict(ids('resp-to'), 'resp-to-' + index, label + 'the response window ends after the last frame (' + seconds(+last.toFixed(2)) + '). No cell would get a call.', { text: 'End at frame ' + n, run: setFrames([['resp-to', n]]) });
+        }
+        // A field that sits a few pixels from where the cells were chosen: said once, as the plugin words it (no repair: nothing is wrong with the frames chosen)
+        if (!index && S.info.motion && S.info.motionNote && !S.info.motion.moved && S.info.motion.slight > 0) warn(S.info.motionNote + ' The outlines are slightly off the cells there.');
+        if (!index && S.info.motion && S.info.motion.moved && S.info.motion.smeared) warn('The cells were chosen on frames ' + S.info.motion.smeared[0] + '–' + S.info.motion.smeared[1] + ', which include the movement, so their picture is smeared.');
+        if (!index && movedRuns().length) {
+          // The field moved: in those frames the outlines are not on the same cells. Baselines should leave them out.
+          const f0 = [Number(value.baseline_start), Number(value.baseline_end)], size = 'The field moved (about ' + S.info.motion.largest + ' px) during ' + movedText() + '. ';
+          const inF0 = Number.isInteger(f0[0]) && Number.isInteger(f0[1]) ? movedWithin(f0[0], f0[1]) : { count: 0 }, inBase = movedWithin(a, b), inResp = movedWithin(c, d);
+          const sameAsF0 = a === f0[0] && b === f0[1];
+          if (inF0.count) warn(size + 'F₀ frames ' + f0[0] + '–' + f0[1] + ' include ' + plural(inF0.count, 'moved frame') + '.', inF0.after <= f0[1] ? { text: 'Use ' + inF0.after + '–' + f0[1], run: () => { S.unlinked.add('f0'); $('f0-cell').dataset.linked = ''; exactInput($('baseline_start'), inF0.after); applyFrames(index); draftChanged(); } } : null);
+          if (inBase.count && !(sameAsF0 && inF0.count && fr('base-cell').dataset.linked === '1')) warn(size + 'Baseline frames ' + a + '–' + b + ' include ' + plural(inBase.count, 'moved frame') + '.', inBase.after <= b ? { text: 'Use ' + inBase.after + '–' + b, run: () => { S.unlinked.add('base-cell-' + index); fr('base-cell').dataset.linked = ''; fr('base-from').value = inBase.after; applyFrames(index); draftChanged(); } } : null);
+          if (inResp.count) warn(size + 'The response window includes ' + plural(inResp.count, 'moved frame') + ': values there are not of the same cells.');
+        }
+        if (!index) {
+          // F₀ frames after the stimulus, and cells that were chosen on frames after it
+          const f0 = [Number(value.baseline_start), Number(value.baseline_end)], chosen = S.info.fijiFrames;
+          if (Number.isInteger(f0[0]) && Number.isInteger(f0[1]) && f0[1] >= f0[0] && f0[1] > N)
+            warn((Math.max(f0[0], N + 1) === f0[1] ? 'F₀ frame ' + f0[1] + ' comes' : 'F₀ frames ' + Math.max(f0[0], N + 1) + '–' + f0[1] + ' come') + ' after the stimulus.', { text: 'Use ' + rule[0] + '–' + rule[1], run: relink('f0-cell') });
+          if (chosen && chosen.last > N)
+            warn('Cells were chosen on frames ' + chosen.first + '–' + chosen.last + '. Frames ' + Math.max(chosen.first, N + 1) + '–' + chosen.last + ' are after the stimulus, so these cells were not chosen blind to it.');
+        }
       }
       for (const key of ['Floor_local_fraction', 'SD_multiplier', 'Noise_floor_local_fraction']) if (numeric(row[key]) && Number(row[key]) < 0) add(prefix + key, label + 'thresholds cannot be negative.');
       if (numeric(row.Floor_local_fraction) && numeric(row.SD_multiplier) && Number(row.Floor_local_fraction) === 0 && Number(row.SD_multiplier) === 0) add(prefix + 'Floor_local_fraction', label + 'specify an amplitude or noise threshold.');
       if (legacy && numeric(row.Floor_local_fraction) && Number(row.Floor_local_fraction) <= 0) add(prefix + 'Floor_local_fraction', label + 'legacy mode requires a positive minimum rise.');
       if (numeric(row.Min_duration_s) && Number(row.Min_duration_s) <= 0) add(prefix + 'Min_duration_s', label + 'duration must be positive.');
-      for (const [key, minimum] of [['Consecutive_samples', 1], ['Min_baseline_samples', 2]]) if (numeric(row[key]) && (!Number.isInteger(Number(row[key])) || Number(row[key]) < minimum)) add(prefix + key, label + key.replace(/_/g, ' ') + ' must be a whole number ≥ ' + minimum + '.');
-      for (const key of ['Max_gap_s', 'Expected_interval_s']) if (row[key] !== null && row[key] !== '' && (!numeric(row[key]) || Number(row[key]) <= 0)) add(prefix + key, label + key.replace(/_/g, ' ') + ' must be positive or blank.');
+      for (const [key, minimum] of [['Consecutive_samples', 1], ['Min_baseline_samples', 2]]) if (numeric(row[key]) && (!Number.isInteger(Number(row[key])) || Number(row[key]) < minimum)) add(prefix + key, label + FIELD_TITLES[key] + ' must be a whole number ≥ ' + minimum + '.');
+      for (const key of ['Max_gap_s', 'Expected_interval_s']) if (row[key] !== null && row[key] !== '' && (!numeric(row[key]) || Number(row[key]) <= 0)) add(prefix + key, label + FIELD_TITLES[key] + ' must be positive or blank.');
       if (!draft.timestamps && numeric(value.sampling_hz) && Number(value.sampling_hz) > 0) {
-        const interval = 1 / Number(value.sampling_hz), end = (n - 1) * interval;
-        if (numeric(row.Start_s) && Number(row.Start_s) >= end) add(prefix + 'Start_s', label + 'response must start before the recording ends at ' + fmt(end) + ' s.');
-        if (numeric(row.End_s) && Number(row.End_s) > end) warnings.push(label + 'response end exceeds this recording; complete-window rules may mark cells unscorable.');
-        if (!legacy && row.Duration_mode === 'seconds' && numeric(row.Min_duration_s) && Number(row.Min_duration_s) < interval) warnings.push(label + 'minimum duration (' + row.Min_duration_s + ' s) is shorter than the frame interval (' + fmt(interval) + ' s). Timing is coarsely resolved.');
-        if (!index && numeric(row.Stimulus_onset_s) && numeric(value.baseline_end) && (Number(value.baseline_end) - 1) * interval >= Number(row.Stimulus_onset_s)) warnings.push('The trace F₀ baseline includes the stimulus onset or later frames. Review the resting baseline.');
+        const interval = 1 / Number(value.sampling_hz);
+        if (!legacy && row.Duration_mode === 'seconds' && numeric(row.Min_duration_s) && Number(row.Min_duration_s) < interval) warn(label + 'minimum duration (' + row.Min_duration_s + ' s) is shorter than the frame interval (' + fmt(interval) + ' s). Timing is coarsely resolved.');
       }
     });
     if (!String(draft.protocol.name || '').trim()) add('protocol-name', 'Enter a protocol name.');
     if (draft.protocol.field_overrides !== null && !Array.isArray(draft.protocol.field_overrides)) add('field-overrides', 'Field overrides must be a valid JSON array.');
     const signature = JSON.stringify(draft);
     if (signature === S.draftAck && S.state && S.state.validation) {
-      errors.push(...S.state.validation.errors); warnings.push(...S.state.validation.warnings);
+      // One message per problem: the plugin's general checks are shown only for what this page did not already explain.
+      if (!errors.length) for (const message of S.state.validation.errors) { errors.push(message); listed.push(message); }
+      const mine = [/F₀ baseline includes/, /response end exceeds/, /holds \d+ samples?/, /^Check acquisition timing/];
+      for (const message of S.state.validation.warnings) if (!times || !mine.some((p) => p.test(message))) warnings.push(message);
     }
     for (const box of document.querySelectorAll('#side [aria-invalid]')) box.removeAttribute('aria-invalid');
     for (const id of fields) if ($(id)) $(id).setAttribute('aria-invalid', 'true');
-    const box = $('validation'); box.hidden = !errors.length && !warnings.length; box.replaceChildren();
-    for (const [messages, className] of [[errors, ''], [warnings, 'warning']]) if (messages.length) {
-      const list = document.createElement('ul'); list.className = className;
-      for (const message of new Set(messages)) { const li = document.createElement('li'); li.textContent = message; list.appendChild(li); }
-      box.appendChild(list);
+    // Rebuilt only when what is shown changes, so a button is never replaced under the mouse by a routine refresh.
+    const shown = JSON.stringify([listed, warnings, inline.map((e) => [e.beside, e.message, e.repair && e.repair.text]), Array.from(repairs.values()).map((r) => r.text)]);
+    if (shown !== S.validationShown) {
+      S.validationShown = shown;
+      const action = (repair) => { const button = document.createElement('button'); button.type = 'button'; button.className = 'ghost small repair'; button.textContent = repair.text; button.addEventListener('click', repair.run); return button; };
+      for (const old of document.querySelectorAll('#side .field-error')) old.remove();
+      for (const entry of inline) {
+        const field = $(entry.beside); if (!field) continue;
+        const after = field.closest('.row') || field;
+        const note = document.createElement('div'); note.className = 'field-error'; note.setAttribute('role', 'alert'); const text = document.createElement('span'); text.textContent = entry.message; note.appendChild(text);
+        if (entry.repair) note.appendChild(action(entry.repair)); after.after(note);
+      }
+      const box = $('validation'); box.hidden = !listed.length && !warnings.length; box.replaceChildren();
+      for (const [messages, className] of [[listed, ''], [warnings, 'warning']]) if (messages.length) {
+        const list = document.createElement('ul'); list.className = className;
+        const once = new Map(); for (const message of messages) once.set(String(message).split('. ')[0], message);
+        for (const message of once.values()) { const li = document.createElement('li'); li.textContent = message; if (repairs.has(message)) { li.append(' '); li.appendChild(action(repairs.get(message))); } list.appendChild(li); }
+        box.appendChild(list);
+      }
     }
     return { errors, warnings };
   }
@@ -239,8 +440,6 @@
     const q = S.quality[name] || {}, row = callRow(name), flags = new Set();
     for (const text of [q.QC_flags, row.QC_flags]) for (const flag of String(text || '').split(/[;|,]/)) if (flag.trim() && !RECORDING_FLAGS.has(flag.trim())) flags.add(flag.trim());
     if ((S.results.traces[name] || []).some((v) => finite(v) && v < -1)) flags.add('TRACE_BELOW_MINUS_ONE');
-    const metric = S.metrics[name] || {}, peak = number(metric.Peak_dFF0), noise = number(metric.Baseline_SD);
-    if (finite(peak) && finite(noise) && peak > 0 && 0.1 * peak < noise && finite(number(metric.Rise_Time))) flags.add('RISE_START_BELOW_BASELINE_SD');
     return Array.from(flags);
   }
   // Set on every cell by the engine whenever the window has the matching Window_warning: a property of the protocol and frame
@@ -254,6 +453,13 @@
     RISE_START_BELOW_BASELINE_SD: 'The legacy 10% rise level is below baseline SD; the rise-time estimate is sensitive to baseline noise'
   };
   const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
+  /** How many cells of the selected window got a call (responded or did not). Zero means the run finished without a single call. */
+  const called = () => { const c = S.results ? ((S.results.countsByWindow || {})[S.window] || S.results.counts || {}) : {}; const v = number(c.Evaluable); return isFinite(v) ? v : 0; };
+  /** Why cells are unscorable, in the engine's words: the reason most of them share. */
+  function unscorableReason() {
+    const seen = new Map(); for (const name of S.info.names) { const row = callRow(name); if (row.Status === 'Unscorable' && row.Reason) seen.set(row.Reason, (seen.get(row.Reason) || 0) + 1); }
+    let best = ''; for (const [reason, n] of seen) if (!best || n > seen.get(best)) best = reason; return best;
+  }
   const flagText = (flag) => FLAG_TEXT[flag] || flag.replace(/_/g, ' ');
   function showQuality() {
     if (!S.results) return;
@@ -262,13 +468,13 @@
       for (const flag of flags) { const item = counts.get(flag) || { total: 0, responders: 0 }; item.total++; if (callOf(name) === 'Responded') item.responders++; counts.set(flag, item); }
     }
     const notices = [], window = selectedCall(), baseline = S.results.baselineFrames;
-    if (baseline && S.results.time[baseline[1] - 1] >= number(window.Stimulus_onset_s || window.Start_s)) notices.push('The saved trace F₀ baseline includes the stimulus onset or later frames. These results keep their original settings; review timing before rerunning.');
+    if (baseline && S.results.time[baseline[1] - 1] > number(window.Stimulus_onset_s || window.Start_s) + 1e-9) notices.push('F₀ frames ' + baseline[0] + '–' + baseline[1] + ' of these results include frames after the stimulus.');
     if (window.Window_warning) notices.push(window.Window_warning);
     if (!window.Window_warning && S.info.names.some((name) => { const q = S.quality[name] || {}, row = callRow(name); return [q.QC_flags, row.QC_flags].some((t) => String(t || '').includes('DURATION_BELOW_SAMPLE_INTERVAL')); }))
       notices.push('Applies to the whole recording: ' + FLAG_TEXT.DURATION_BELOW_SAMPLE_INTERVAL + '.');
     if (S.qualityFlag && !counts.has(S.qualityFlag)) S.qualityFlag = null;
     $('quality-review').hidden = !affected && !notices.length;
-    summary.textContent = affected ? 'Quality review: ' + plural(affected, 'cell') + ' flagged, including ' + plural(responders, 'responder') : 'Review the applied timing';
+    summary.textContent = affected ? 'Quality review: ' + plural(affected, 'cell') + ' flagged' + (called() ? ', including ' + plural(responders, 'responder') : '') : 'Review the applied timing';
     list.replaceChildren();
     for (const [flag, count] of counts) {
       // each flag is a filter of its own, so a small group (for example the cells whose ΔF/F₀ falls below −1) can be isolated
@@ -280,9 +486,42 @@
     for (const message of new Set(notices)) { const li = document.createElement('li'); li.textContent = message; list.appendChild(li); }
     $('quality-filter').disabled = !affected;
   }
+  /** Mean, SD, SEM and number of cells of every numeric metric: for all cells, by response call, and by how the cells were
+   *  chosen when that was recorded. The summary SimpleCa shows; worked out here from the saved per-cell tables. */
+  function metricSummary() {
+    const r = S.results, tags = r.chosenBlind || null, primary = (r.windows || []).find((w) => w.role === 'Stimulus') || (r.windows || [])[0];
+    const called = (primary && r.callsByWindow && r.callsByWindow[primary.key]) || r.calls || {}, status = (n) => (called[n] || {}).Status;
+    const groups = [['All cells', () => true], ['Responded', (n) => status(n) === 'Responded'], ['Did not respond', (n) => status(n) === 'Did not respond']];
+    if (tags) groups.push(['Chosen blind', (n) => tags[n] === true], ['Added after the response', (n) => tags[n] === false]);
+    const skip = new Set(['Reference_value', 'Baseline_SD_input', 'Baseline_samples', 'Normalization_minimum_reference', 'Baseline_start_s', 'Baseline_end_s', 'Stimulus_onset_s', 'Start_s', 'End_s', 'Window_AUC_start_s', 'Window_AUC_end_s', 'Run_samples', 'Eligible']);
+    const long = [['Metric', 'Group', 'Mean', 'SD', 'SEM', 'N_cells']], wide = [];
+    for (const key of ['metrics', 'windowMetrics']) {
+      const data = r.tables[key]; if (!data || !data.rows.length) continue;
+      const cell = data.header.indexOf('Cell'), role = data.header.indexOf('Role'); if (cell < 0) continue;
+      const rows = data.rows.filter((row) => role < 0 || row[role] === 'Stimulus');
+      data.header.forEach((name, c) => {
+        if (c === cell || skip.has(name)) return;
+        const values = rows.map((row) => [row[cell], row[c]]).filter((pair) => pair[1] !== '' && pair[1] != null && pair[1] !== 'NA');
+        if (!values.length || !values.every((pair) => isFinite(Number(pair[1])))) return;
+        const label = name + (key === 'windowMetrics' ? ' (response window)' : ''), line = [label];
+        for (const [group, belongs] of groups) {
+          const xs = values.filter((pair) => belongs(pair[0])).map((pair) => Number(pair[1])), k = xs.length;
+          const mean = k ? xs.reduce((a, b) => a + b, 0) / k : NaN, sd = k > 1 ? Math.sqrt(xs.reduce((a, b) => a + (b - mean) * (b - mean), 0) / (k - 1)) : NaN, sem = k > 1 ? sd / Math.sqrt(k) : NaN;
+          long.push([label, group, k ? mean : '', k > 1 ? sd : '', k > 1 ? sem : '', k]);
+          line.push(k ? (+mean.toPrecision(4)) + (k > 1 ? ' ± ' + (+sem.toPrecision(3)) : '') + '  (n = ' + k + ')' : '–');
+        }
+        wide.push(line);
+      });
+    }
+    return { wide: { header: ['Metric'].concat(groups.map((g) => g[0] + ': mean ± SEM (n)')), rows: wide }, long };
+  }
+  const csvText = (rows) => rows.map((row) => row.map((v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(',')).join('\n') + '\n';
+  /** The table on the Metrics tab as CSV rows: the summary in long form (one row per metric and group), any other table as saved. */
+  function metricRows() { const key = $('metrics-table').value; if (key === 'summary') return metricSummary().long; const data = S.results.tables[key] || { header: [], rows: [] }; return [data.header].concat(data.rows); }
   function showMetricTable() {
     const key = $('metrics-table').value;
-    $('metric-help').textContent = key === 'metrics' ? 'Legacy metrics: AUC is the signed net integral over the whole recording; negative drift can make it negative. Peak time is a recording timestamp. Rise time is the 10–90% crossing interval after the display baseline and can be noise-sensitive. For stimulus-specific values, choose Response-window metrics (including Peak_latency_s and Window_AUC_fraction_s).' : key === 'windowMetrics' ? 'Stimulus-window metrics use the local prestimulus reference. Peak_latency_s is relative to stimulus onset; Window_AUC_fraction_s covers the declared response window.' : '';
+    if (key === 'summary') { $('metric-help').textContent = 'Mean ± SEM (n) of each metric. The saved file also has the SD.'; table('table-metrics', metricSummary().wide); return; }
+    $('metric-help').textContent = key === 'metrics' ? 'Legacy metrics: AUC is the signed net integral over the whole recording; negative drift can make it negative. Peak time is a recording timestamp. Rise time is the 10–90% crossing interval after the display baseline and can be noise-sensitive. For stimulus-specific values, choose Response-window metrics (including Peak_latency_s and Window_AUC_fraction_s).' : key === 'windowMetrics' ? 'Response-window metrics use the baseline before the stimulus. Peak_latency_s is measured from the stimulus (the first frame after it), to the nearest frame; Window_AUC_fraction_s covers the response window.' : '';
     table('table-metrics', S.results.tables[key]);
   }
 
@@ -311,12 +550,19 @@
   function hasPending() { return !!S.results && (!!(S.state && S.state.settingsPending) || JSON.stringify(collectDraft()) !== S.draftAck); }
   async function start() {
     S.info = await api('session');
+    $('save-picture-folder').disabled = $('save-picture').disabled = !(S.info.hasPicture || S.info.hasMovie); $('save-frames').disabled = !S.info.hasMovie;
+    const prefs = S.info.prefs || {}; for (const key of Object.keys(Layout.apply)) if (prefs[key]) Layout.apply[key](prefs[key]);
+    for (const key of ['format', 'size', 'compression']) if (prefs['step4.' + key]) Save[key] = prefs['step4.' + key]; if (prefs['step4.dpi']) Save.dpi = Number(prefs['step4.dpi']);
+    if (prefs['step4.outline']) { S.outlineWidth = Number(prefs['step4.outline']) || 1; $('outline-width').value = prefs['step4.outline']; }
+    if (prefs['step4.every']) { try { window.localStorage.setItem('step4.every', prefs['step4.every']); } catch (blocked) { } }
+    if (prefs['step4.help']) { const on = prefs['step4.help'] === '1'; document.body.classList.toggle('show-help', on); $('toggle-help').textContent = on ? 'Hide explanations' : 'Show explanations'; }
     $('recording').textContent = S.info.recording; $('recording').title = S.info.recording;
     document.title = S.info.names.length + ' cells · SimpleCa²⁺ · ' + S.info.recording + ' · ' + S.info.key.slice(0, 6); $('version').textContent = 'Calcium imaging plugin ' + S.info.pluginVersion;
     S.initialDraft = clone(S.info.draft);
     S.revision = Math.max(0, Number(S.info.draftRevision) || 0); fillDraft(S.info.draft); S.draftAck = JSON.stringify(collectDraft());
     $('time').max = Math.max(1, S.info.frames);
-    for (const option of Array.from($('view').options)) if ((option.value === 'picture' && !S.info.hasPicture) || (option.value !== 'picture' && !S.info.hasMovie)) option.remove();
+    for (const option of Array.from($('view').options)) if ((option.value === 'picture' && !S.info.hasPicture) || (option.value === 'background' && !S.info.hasBackground) || (!['picture', 'background'].includes(option.value) && !S.info.hasMovie)) option.remove();
+    if (S.info.hasBackground) { const areas = new Image(); areas.onload = () => { Pic.background = areas; if (S.view === 'background') requestFrame(); }; areas.src = 'api/background'; }
     S.view = S.info.hasMovie ? 'raw' : 'picture'; $('view').value = S.view;
     S.paths = S.info.rois.map((points) => { const p = new Path2D(); points.forEach((q, i) => i ? p.lineTo(q[0], q[1]) : p.moveTo(q[0], q[1])); p.closePath(); return p; });
     S.bounds = S.info.rois.map((points) => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const q of points) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); } return { x0, y0, x1, y1 }; });
@@ -338,7 +584,8 @@
   }
   function showState() {
     const state = S.state; if (!state) return;
-    const engine = $('engine'); engine.textContent = state.engineReady ? 'Analysis engine ready' : 'First run: set up analysis engine'; engine.className = 'pill ' + (state.engineReady ? 'good' : 'warn');
+    const engine = $('engine'); engine.textContent = state.engineReady ? 'Analysis engine ready' : 'First run: set up analysis engine'; engine.className = 'pill ' + (state.engineReady ? 'good' : 'warn'); engine.hidden = !!state.engineReady;
+    if (S.reapplyFrames && editedTimes() && JSON.stringify(collectDraft()) === S.draftAck) { S.reapplyFrames = false; const before = JSON.stringify(collectDraft()); applyAllFrames(); if (JSON.stringify(collectDraft()) !== before) { draftChanged(); return; } }
     const validation = validateDraft(collectDraft());
     $('analyze').disabled = state.busy || S.saving || !state.engineReady || validation.errors.length > 0 || JSON.stringify(collectDraft()) !== S.draftAck || S.closed; $('cancel').disabled = !state.busy; $('log').disabled = !state.logAvailable;
     $('setup').hidden = state.engineReady; $('setup').disabled = state.busy; $('setup').classList.toggle('primary', !state.engineReady);
@@ -354,11 +601,22 @@
     const status = $('status');
     if (state.busy) { status.className = 'status'; status.textContent = (state.percent > 0 ? state.percent + '% · ' : '') + state.stage + ' · ' + state.elapsed + ' s elapsed'; }
     else if (S.note) { status.className = 'status bad'; status.textContent = S.note; }
-    else if (!S.results && !state.error && state.tone !== 'bad') { status.className = 'status'; status.textContent = state.engineReady ? 'Check the settings above, confirm the timing, then run. Movie playback works now.' : 'Movie playback is ready. Before the first analysis, choose “Set up analysis engine” below (requires internet).'; }
+    else if (S.imported && S.imported.revision === S.revision) { status.className = 'status good'; status.textContent = S.imported.text; }
+    else if (!S.results && !state.error && state.tone !== 'bad') { status.className = 'status'; status.textContent = state.engineReady ? (state.message && !/^Check acquisition timing/.test(state.message) ? state.message : 'Check the timing, tick the box, then run.') : 'First run: choose “Set up analysis engine” (needs internet).'; }
+    else if (S.results && state.tone === 'good' && !called()) { status.className = 'status warn'; status.textContent = 'Finished, but no cell got a call' + (unscorableReason() ? ': ' + unscorableReason().replace(/\.$/, '').toLowerCase() : '') + '.'; }
+    else if (S.results && state.tone === 'good' && state.folder) { status.className = 'status good'; status.textContent = 'Done.'; }
     else { status.className = 'status ' + (state.tone === 'good' ? 'good' : state.tone === 'bad' ? 'bad' : state.tone === 'warn' ? 'warn' : ''); status.textContent = state.message; }
-    $('open-folder').disabled = !state.folder; $('open-folder').hidden = !state.folder;
-    const pending = hasPending(), notice = $('applied-note'); notice.hidden = !S.results; notice.classList.toggle('pending', pending);
-    notice.textContent = pending ? 'Settings changed. The results, movie timing and exports still use the last completed analysis. Choose “Apply changes & reanalyze” to update them.' : 'Showing the completed analysis. Response calls and counts come from the saved results.';
+    status.title = state.message || '';
+    // what the tick box confirms, in the user's own numbers
+    { const d = collectDraft(), hz = Number(d.values.sampling_hz), first = d.protocol.windows[0], used = first ? windowFrames(expandWindow(first, d.protocol.schema_version === 1), editedTimes()) : null, st = used && used.stimulus;
+      $('confirm-text').textContent = 'Timing checked' + (d.timestamps || (isFinite(hz) && hz > 0) ? ': ' + (d.timestamps ? 'recorded timestamps' : fmt(+hz.toPrecision(4)) + (hz === 1 ? ' frame/s' : ' frames/s')) + (st ? ', stimulus ' + (st.before >= 1 && st.before < used.n ? 'after frame ' + st.before : 'outside the recording') : '') : '');
+      // the recording's own frame rate, when a different one is typed
+      const own = Number(S.info.recordedHz), note = $('rate-note'), differs = !d.timestamps && isFinite(own) && own > 0 && isFinite(hz) && hz > 0 && Math.abs(hz - own) > 1e-9 * own, text = differs ? 'The file says ' + fmt(+own.toPrecision(6)) + ' (' + fmt(+(1 / own).toPrecision(6)) + ' s per frame). ' : '';
+      if (note.dataset.shown !== text) { note.dataset.shown = text; note.hidden = !differs; note.replaceChildren(text);
+        if (differs) { const use = document.createElement('button'); use.type = 'button'; use.className = 'ghost small repair'; use.textContent = 'Use it'; use.addEventListener('click', () => { exactInput($('sampling_hz'), S.info.recordedHz); applyAllFrames(); draftChanged(); }); note.appendChild(use); } } }
+    $('open-folder').disabled = !state.folder; $('open-folder').hidden = !state.folder; $('open-folder').title = state.folder ? 'Open ' + String(state.folder).split(/[\\/]/).pop() : '';
+    const pending = hasPending(), notice = $('applied-note'); notice.hidden = !S.results || !pending; notice.classList.toggle('pending', pending);
+    notice.textContent = pending ? 'Settings changed. Everything shown is still the last completed analysis.' : '';
     $('workspace-title').textContent = S.results ? 'Review the responses' : 'Review the recording';
     $('review-stage').textContent = S.results ? (pending ? 'Changes pending' : 'Completed analysis') : 'Preview · no analysis yet';
     $('workflow-help').textContent = S.results ? 'Select a cell or response window. Use the same timeline for the movie and traces.' : 'Drag the frame slider or press Play. You can review the movie before running analysis.';
@@ -379,13 +637,19 @@
     if (!windows.some((w) => w.key === S.window)) S.window = windows[0].key; selector.value = S.window;
     document.body.classList.add('has-results');
     for (const id of ['result-tiles', 'plot-card', 'group-label', 'window-select-label', 'every-label', 'call-legend']) $(id).hidden = false;
+    $('window-select-label').hidden = !(S.results.windows && S.results.windows.length > 1);
     for (const tab of document.querySelectorAll('.tab')) tab.disabled = false;
     const tables = $('metrics-table'); tables.innerHTML = '';
     const titles = { metrics: 'Legacy whole-recording metrics', quality: 'Cell quality', registry: 'Registered cells', windowMetrics: 'Response-window metrics', replicates: 'Biological-replicate counts', groups: 'Condition counts', unassigned: 'Unassigned biological units', cohort: 'Cohort flow', recordingMetadata: 'Recording details', sensitivityCalls: 'Sensitivity: cell calls', sensitivityCounts: 'Sensitivity: responder counts', negativeControlCalls: 'Negative controls: cell calls', negativeControlCounts: 'Negative controls: responder counts' };
+    { const o = document.createElement('option'); o.value = 'summary'; o.textContent = 'Summary: mean ± SEM of each metric'; tables.appendChild(o); }
     for (const key of Object.keys(r.tables || {})) if (!['calls', 'counts'].includes(key) && r.tables[key].header.length) { const o = document.createElement('option'); o.value = key; o.textContent = titles[key] || key.replace(/_/g, ' '); tables.appendChild(o); }
-    if (r.tables.windowMetrics && r.tables.windowMetrics.rows.length) tables.value = 'windowMetrics'; else if (r.tables.metrics) tables.value = 'metrics'; showMetricTable();
+    tables.value = 'summary'; showMetricTable();
     table('table-calls', r.tables.calls); table('table-counts', r.tables.counts);
-    for (const id of ['save-plot', 'save-heatmap']) $(id).disabled = false;
+    for (const id of ['save-plot', 'save-heatmap', 'save-plot-folder', 'save-heatmap-folder', 'data-save', 'data-download', 'metrics-save', 'metrics-download']) $(id).disabled = false;
+    for (const id of ['plot-saved', 'heatmap-saved', 'data-saved', 'metrics-saved']) $(id).textContent = '';
+    if (!$('panel-data').hidden) showData();
+    for (const option of $('signal').options) option.disabled = option.value !== 'dff' && !hasTable(option.value);
+    if ($('signal').selectedOptions[0].disabled) { S.signal = Data.signal = 'dff'; $('signal').value = 'dff'; $('data-signal').value = 'dff'; }
     Plot.x0 = Plot.x1 = null; updateWindow(); setFrame(S.frame); showState();
   }
   /** The headline numbers for the selected response window (the primary stimulus or its control), from the saved counts. */
@@ -394,8 +658,17 @@
     const windows = r.windows && r.windows.length ? r.windows : [], chosen = windows.find((w) => w.key === S.window) || windows[0] || {};
     const counts = (r.countsByWindow && r.countsByWindow[S.window]) || r.counts || {}, whole = (key) => { const v = number(counts[key]); return isFinite(v) ? String(Math.round(v)) : '–'; }, percent = number(counts.Percent_responding);
     const label = escape(counts.Stimulus || chosen.stimulus || 'Stimulus') + (chosen.role === 'Control' ? ' (control)' : '');
-    $('tile-responding').innerHTML = '<b>' + (isFinite(percent) ? Math.round(percent) + '%' : '–') + '</b><span>' + label + ': ' + whole('Responded') + ' of ' + whole('Evaluable') + ' evaluable cells</span>';
+    const all = label + ': ' + whole('Responded') + ' of ' + whole('Evaluable') + ' evaluable cells', tags = r.chosenBlind, split = { blind: [0, 0], later: [0, 0] };
+    if (tags && chosen.role !== 'Control') for (const name of S.info.names) if (name in tags) { const status = callOf(name), part = split[tags[name] ? 'blind' : 'later']; if (status === 'Responded') { part[0]++; part[1]++; } else if (status === 'Did not respond') part[1]++; }
+    const share = (part) => part[1] ? Math.round(100 * part[0] / part[1]) + '%' : '–';
+    // cells chosen blind give the figure that does not depend on the response; it leads, with the others beside it
+    const reason = unscorableReason();
+    if (!called()) { $('tile-responding').innerHTML = '<b>–</b><span>' + label + ': no cell got a call' + (reason ? ' (' + escape(reason.replace(/\.$/, '').toLowerCase()) + ')' : '') + '</span>'; }
+    else $('tile-responding').innerHTML = tags && split.blind[1] && split.later[1]
+      ? '<b>' + share(split.blind) + '</b><span>of the cells chosen blind: ' + split.blind[0] + ' of ' + split.blind[1] + ' &nbsp;·&nbsp; added after the response was shown: ' + share(split.later) + ' (' + split.later[0] + ' of ' + split.later[1] + ') · all cells: ' + (isFinite(percent) ? Math.round(percent) + '%' : '–') + ' (' + whole('Responded') + ' of ' + whole('Evaluable') + ')</span>'
+      : '<b>' + (isFinite(percent) ? Math.round(percent) + '%' : '–') + '</b><span>' + all + '</span>';
     $('tile-registered').firstChild.textContent = whole('Registered'); $('tile-excluded').firstChild.textContent = whole('Excluded'); $('tile-unscorable').firstChild.textContent = whole('Unscorable');
+    for (const [id, key] of [['tile-excluded', 'Excluded'], ['tile-unscorable', 'Unscorable']]) $(id).classList.toggle('zero', whole(key) === '0');
   }
   function updateWindow() {
     showTiles();
@@ -435,7 +708,15 @@
     Plot.dirty = true; drawPlot(); drawPicture(); drawHeatmap(); legend();
   }
   const escape = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  function stepCell(by) { if (!S.listed.length) return; const i = S.listed.indexOf(S.cell); pick(S.listed[((i + by) % S.listed.length + S.listed.length) % S.listed.length]); }
+  /** The plot opens on the average alone and stays on what was chosen: picking a cell never changes what the plot shows.
+   *  A cell's own trace appears only under "One cell + average". */
+  function setPlotMode(mode) {
+    S.plotMode = mode;
+    for (const button of document.querySelectorAll('[data-plot]')) { const on = button.dataset.plot === mode; button.classList.toggle('on', on); button.setAttribute('aria-pressed', on ? 'true' : 'false'); }
+    Plot.dirty = true; drawPlot(); legend();
+  }
+  function chooseCell(name) { pick(name); }
+  function stepCell(by) { if (!S.listed.length) return; const i = S.listed.indexOf(S.cell); chooseCell(S.listed[((i + by) % S.listed.length + S.listed.length) % S.listed.length]); }
 
   // ---------------------------------------------------------------- one acquisition-frame cursor for the recording and saved traces
   function frameTimes() {
@@ -447,7 +728,7 @@
   function nearestFrame(t) { const time = frameTimes(); let best = 0, gap = Infinity; for (let i = 0; i < time.length; i++) { const d = Math.abs(time[i] - t); if (d < gap) { gap = d; best = i; } } return best + 1; }
   function updateTransport() {
     if (!S.info) return;
-    const available = S.info.frames > 1 && (S.info.hasMovie || !!S.results), staticView = S.view === 'picture';
+    const available = S.info.frames > 1 && (S.info.hasMovie || !!S.results), staticView = still();
     $('time').disabled = !available || (staticView && !S.results);
     $('play').disabled = !available || staticView;
     $('frame-back').disabled = $('time').disabled || S.frame <= 1;
@@ -455,8 +736,10 @@
     $('speed').disabled = $('play').disabled;
     const t = frameTimes()[S.frame - 1], provisional = !S.results && (!S.state || S.state.timingProvisional !== false);
     const label = (finite(t) ? (provisional ? '≈ ' : '') + t.toFixed(2) + ' s · ' : '') + 'Frame ' + S.frame + ' / ' + S.info.frames;
-    $('time-label').textContent = label; $('time').setAttribute('aria-valuetext', label);
-    $('playback-note').textContent = staticView ? 'Static colour overview — this image does not move. Choose “Recording” in View to play or scrub the movie.' : !S.info.hasMovie ? 'The recording is unavailable in this session. Reopen it in Fiji to view its frames.' : frameTimes().length ? (provisional ? 'Preview timing is provisional. Playback follows the displayed frame times; confirm timing before analysis.' : 'Playback follows the applied frame times. Drag the slider to pause and inspect a frame.') : 'Frame-by-frame preview. No valid time base is available; 1× plays 20 frames per second.';
+    $('time-label').textContent = label; $('time').setAttribute('aria-valuetext', label); frameButtons();
+    $('playback-note').textContent = S.view === 'background' ? 'Background areas: a still picture. Blue marks the pixels whose mean is taken off each cell.' : staticView ? 'Static colour overview — this image does not move. Choose “Recording” in View to play or scrub the movie.' : !S.info.hasMovie ? 'The recording is unavailable in this session. Reopen it in Fiji to view its frames.' : frameTimes().length ? (provisional ? 'Preview timing is provisional. Playback follows the displayed frame times; confirm timing before analysis.' : 'Playback follows the applied frame times. Drag the slider to pause and inspect a frame.') : 'Frame-by-frame preview. No valid time base is available; 1× plays 20 frames per second.';
+    $('playback-note').classList.toggle('help', !staticView && S.info.hasMovie && frameTimes().length > 0);
+    $('playback-note').classList.toggle('help', /^Playback follows the applied frame times/.test($('playback-note').textContent));
   }
   function setFrame(wanted, manual) {
     if (!S.info) return;
@@ -472,7 +755,7 @@
   }
   function play(on) {
     if (S.timer) cancelAnimationFrame(S.timer); S.timer = null; Plot.playhead = null; Clock.waitingSince = 0;
-    if (on && S.info && S.info.hasMovie && S.view !== 'picture' && S.info.frames > 1) {
+    if (on && S.info && S.info.hasMovie && !still() && S.info.frames > 1) {
       Buf.failed.clear();   // pressing Play retries frames that failed before
       if (S.frame >= S.info.frames) setFrame(1);
       const times = clockTimes(), gaps = times.slice(1).map((v, i) => v - times[i]).sort((a, b) => a - b), typical = gaps[Math.floor(gaps.length / 2)] || 0.05;
@@ -510,7 +793,7 @@
   function resetFrames(version) {
     for (const entry of Buf.bitmaps.values()) if (entry.bitmap !== Pic.shown && entry.bitmap.close) entry.bitmap.close();
     Buf.version = version; Buf.blobs.clear(); Buf.bitmaps.clear(); Buf.failed.clear(); Buf.bytes = 0;
-    if (S.info && S.info.hasMovie && S.view !== 'picture') requestFrame();
+    if (S.info && S.info.hasMovie && !still()) requestFrame();
   }
   /** Frames are fetched at the size they are drawn, or at full resolution when zoomed in or when that is nearly as large. */
   function frameWidth() {
@@ -549,7 +832,7 @@
   }
   /** Keeps the buffer filled: the frame on screen first, then about 3 s of playback ahead (a few frames when paused). */
   function pumpFrames() {
-    if (!S.info || !S.info.hasMovie || S.view === 'picture') return;
+    if (!S.info || !S.info.hasMovie || still()) return;
     const mode = S.view, w = frameWidth(), speed = Number($('speed').value), wanted = [S.frame];
     const ahead = S.timer ? Math.min(120, Math.ceil(3 * speed / Math.max(1e-6, (Clock.times[Math.min(Clock.times.length - 1, S.frame)] - Clock.times[S.frame - 1]) || 0.05) / Clock.step)) : 3;
     for (let k = nextFrame(S.frame), i = 0; k && i < ahead; k = nextFrame(k), i++) wanted.push(k);
@@ -568,11 +851,24 @@
     const far = Array.from(Buf.blobs.entries()).sort((a, b) => Math.abs(b[1].f - S.frame) - Math.abs(a[1].f - S.frame));
     for (const [key, entry] of far) { if (Buf.bytes <= MAX_BYTES * 0.8) break; Buf.blobs.delete(key); Buf.bytes -= entry.blob.size; }
   }
+  /** What the colours of the view on screen mean: [colour, words]. "As recorded" is plain gray values and has none. */
+  function viewColours() {
+    const rest = S.results ? S.results.baselineFrames : (S.state && S.state.rest), frames = rest ? ' (frames ' + rest[0] + '–' + rest[1] + ')' : '';
+    return S.view === 'background' ? [['#2896ff', 'pixels taken as the cells’ background']] : S.view === 'picture' ? [['#00e000', 'cells'], ['#ffe600', 'very bright (precipitate)'], ['#ff40ff', 'response']]
+      : S.view === 'magenta' ? [['#00e000', 'cells, background removed'], ['#ff40ff', 'rise above baseline' + frames]]
+      : S.view === 'change' ? [['#ffffff', 'brighter than baseline' + frames]] : S.view === 'flat' ? [['#ffffff', 'background removed']] : [];
+  }
+  function viewKey() {
+    const box = $('view-key'), shown = viewColours().map((c) => c.join('|')).join(';'); if (!box || box.dataset.shown === shown) return;
+    box.dataset.shown = shown; box.replaceChildren();
+    for (const [colour, words] of viewColours()) { const chip = document.createElement('span'); chip.className = 'chip'; const dot = document.createElement('i'); dot.className = 'fill'; dot.style.background = colour; chip.append(dot, words); box.appendChild(chip); }
+  }
   function frameNote() {
-    if (S.view === 'picture' || !S.info.hasMovie || !Pic.shownFrame || Pic.error) return;
+    if (still() || !S.info.hasMovie || !Pic.shownFrame || Pic.error) return;
     const f = Pic.shownFrame, rest = S.results ? S.results.baselineFrames : (S.state && S.state.rest), ordinal = (n) => n + (n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : n % 10 === 1 && n % 100 !== 11 ? 'st' : 'th');
-    $('picture-note').textContent = (S.view === 'change' ? 'Frame ' + f + ' − mean of baseline frames ' + (rest ? rest[0] + '–' + rest[1] : '(preview)') + ' · display smoothed' : 'Frame ' + f + ' · as recorded') +
-      (S.timer && Clock.step > 1 ? ' · playing every ' + ordinal(Clock.step) + ' frame' : '') + (S.timer && Clock.waitingSince && performance.now() - Clock.waitingSince > 250 ? ' · buffering' : '');
+    const frames = rest ? rest[0] + '–' + rest[1] : '(preview)';
+    $('picture-note').textContent = 'Frame ' + f + (isMoved(f) ? ' · the field is displaced in this frame (' + movedText() + ' moved)' : '') + (S.timer && Clock.step > 1 ? ' · playing every ' + ordinal(Clock.step) + ' frame' : '') + (S.timer && Clock.waitingSince && performance.now() - Clock.waitingSince > 250 ? ' · buffering' : '');
+    viewKey();
   }
   function showFrame(f, mode, bitmap) {
     if (S.view !== mode || S.frame !== f) return;
@@ -586,9 +882,9 @@
   }
   function requestFrame() {
     if (!(S.info.hasPicture || S.info.hasMovie)) return;
-    if (S.view === 'picture' || !S.info.hasMovie) {
-      Pic.shown = Pic.base; Pic.shownFrame = null;
-      $('picture-note').textContent = 'Static overview · not a movie frame'; movieMessage(Pic.base ? '' : 'Loading the static overview…'); drawPicture(); return;
+    if (still() || !S.info.hasMovie) {
+      const image = S.view === 'background' ? Pic.background : Pic.base; Pic.shown = image || Pic.base; Pic.shownFrame = null;
+      $('picture-note').textContent = ''; viewKey(); movieMessage(image ? '' : 'Loading the picture…'); drawPicture(); return;
     }
     const f = S.frame, mode = S.view, ready = bitmapFor(f, mode);
     if (ready) showFrame(f, mode, ready);
@@ -611,7 +907,7 @@
     const at = place(w, h); ctx.imageSmoothingEnabled = Pic.zoom <= 3; ctx.drawImage(image, at.x, at.y, S.info.width * at.z, S.info.height * at.z);
     const selected = S.cell ? S.info.names.indexOf(S.cell) : -1, known = !!S.results;
     ctx.save(); ctx.translate(at.x, at.y); ctx.scale(at.z, at.z); ctx.lineJoin = 'round';
-    const stroke = (path, colour, width, dash) => { ctx.setLineDash(dash ? [4 / at.z, 3 / at.z] : []); ctx.strokeStyle = colour; ctx.lineWidth = width / at.z; ctx.stroke(path); };
+    const stroke = (path, colour, width, dash) => { ctx.setLineDash(dash ? [4 / at.z, 3 / at.z] : []); ctx.strokeStyle = colour; ctx.lineWidth = width * S.outlineWidth / at.z; ctx.stroke(path); };
     if (S.outlines) S.paths.forEach((path, i) => {
       if (i === selected) return;
       const call = callOf(S.info.names[i]); if (known && !inGroup(call, S.group, S.info.names[i])) return;
@@ -667,30 +963,103 @@
     return levels;
   }
   // ---------------------------------------------------------------- the traces
-  function legend() {
-    const box = $('legend'), r = S.results; if (!r) { box.innerHTML = ''; return; }
-    const chip = (colour, text) => '<span class="chip"><i style="background:' + colour + '"></i>' + escape(text) + '</span>';
-    const parts = [chip('#0072B2', 'mean ± SEM')];
-    if (S.cell) parts.push(r.traces[S.cell] ? chip('#1F2933', shortName(S.cell)) : '<span class="chip" style="color:#9A5B00">' + escape(shortName(S.cell)) + ': no trace (see Metrics + quality)</span>');
-    if (S.every) {
-      const drawn = S.listed.filter((n) => r.traces[n]), yes = drawn.filter((n) => callOf(n) === 'Responded').length, no = drawn.filter((n) => callOf(n) === 'Did not respond').length;
-      if (yes) parts.push(chip(CALL.responded, 'responded (' + yes + ')')); if (no) parts.push(chip(CALL.not, 'did not respond (' + no + ')'));
-      if (drawn.length - yes - no) parts.push(chip(CALL.other, 'no call (' + (drawn.length - yes - no) + ')'));
+  /** ΔF/F₀ of the raw values (no background taken off), worked out here for display: each cell's raw trace against its own mean
+   *  over the F₀ frames of the analysis. The response calls do not use it. */
+  function rawDff() {
+    const r = S.results; if (!r || !r.raw || !Object.keys(r.raw).length) return null;
+    if (!r.rawdff) {
+      const frames = r.baselineFrames || [1, 1], out = {};
+      for (const name of Object.keys(r.raw)) {
+        const y = r.raw[name]; let sum = 0, k = 0; for (let i = frames[0] - 1; i < frames[1] && i < y.length; i++) if (finite(y[i])) { sum += y[i]; k++; }
+        const f0 = k ? sum / k : NaN; out[name] = y.map((v) => finite(v) && f0 > 0 ? (v - f0) / f0 : NaN);
+      }
+      r.rawdff = out;
     }
-    if (referenceLevels().length > 1) parts.push(chip('#177465', 'required rise · dashed'));
-    box.innerHTML = parts.join('');
+    return r.rawdff;
+  }
+  const hasTable = (key) => { if (key === 'rawdff') rawDff(); return !!(S.results && S.results[key] && Object.keys(S.results[key]).length); };
+  /** The traces the plot draws: ΔF/F₀ as the analysis saved it, or the measurement's gray values (background corrected, or raw). */
+  const shownTraces = () => S.signal !== 'dff' && hasTable(S.signal) ? S.results[S.signal] : S.results.traces;
+  const isDff = () => !(S.signal !== 'dff' && hasTable(S.signal));
+  const signalName = () => isDff() ? 'ΔF/F₀' : S.signal === 'raw' ? 'Raw gray value (not corrected)' : S.signal === 'rawdff' ? 'ΔF/F₀ of raw values (no background removed)' : 'Gray levels above background';
+  /** Mean and SEM of some cells' saved traces, frame by frame (a display summary; the tables are not changed). */
+  function groupMean(names) {
+    const r = S.results, T = shownTraces(), n = r.time.length, mean = new Array(n), sem = new Array(n), used = names.filter((name) => T[name]);
+    for (let i = 0; i < n; i++) {
+      let sum = 0, squares = 0, k = 0;
+      for (const name of used) { const v = T[name][i]; if (finite(v)) { sum += v; squares += v * v; k++; } }
+      mean[i] = k ? sum / k : NaN; sem[i] = k > 1 ? Math.sqrt(Math.max(0, (squares - sum * sum / k) / (k - 1)) / k) : NaN;
+    }
+    return { mean, sem, n: used.length };
+  }
+  /** The mean lines of the plot. "Selected cell and mean" and "Mean of the cells shown" with every cell shown use the mean the
+   *  analysis saved; a group of cells, or responders against non-responders, is averaged here from the saved traces. */
+  function plotSeries() {
+    const r = S.results; if (!r) return [];
+    if (S.plotMode === 'calls') {
+      const names = S.info.names.filter((n) => shownTraces()[n]);
+      return [['Responded', 'responded', CALL.responded], ['Did not respond', 'did not respond', CALL.not]].map(([status, text, colour]) => {
+        const g = groupMean(names.filter((n) => callOf(n) === status)); return { label: text + ' ± SEM (n = ' + g.n + ')', short: text, colour, mean: g.mean, sem: g.sem, n: g.n };
+      }).filter((s) => s.n > 0);
+    }
+    const all = isDff() ? { mean: r.mean, sem: r.sem, n: Object.keys(r.traces).length } : groupMean(S.info.names);
+    if (S.plotMode === 'mean') {
+      const g = S.group === 0 ? all : groupMean(S.listed), who = S.group === 0 ? 'all cells' : GROUPS[S.group].toLowerCase();
+      return [{ label: who + ' ± SEM (n = ' + g.n + ')', short: 'mean of ' + who, colour: '#0072B2', mean: g.mean, sem: g.sem, n: g.n }];
+    }
+    return [{ label: 'mean ± SEM', short: 'mean of all cells', colour: '#0072B2', mean: all.mean, sem: all.sem, n: all.n }];
+  }
+  const shade = (hex, alpha) => { const c = rgb(hex); return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + alpha + ')'; };
+  const plotKind = () => (S.plotMode === 'cell' ? 'traces' : S.plotMode === 'calls' ? 'responders_vs_nonresponders' : 'mean_trace' + (S.group ? '_' + GROUPS[S.group].toLowerCase().replace(/[^a-z0-9]+/g, '_') : '')) + (isDff() ? '' : S.signal === 'raw' ? '_raw_gray_values' : S.signal === 'rawdff' ? '_dFF0_of_raw' : '_gray_levels');
+  /** The numbers behind the plot as a table: time, each mean line with its SEM and number of cells, and the selected cell. */
+  function plotNumbers() {
+    const r = S.results, series = plotSeries(), own = S.plotMode === 'cell' && S.cell && shownTraces()[S.cell] ? shownTraces()[S.cell] : null;
+    const clean = (text) => String(text).replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const head = ['Time_s']; for (const s of series) head.push(clean(s.short), clean(s.short) + '_SEM', clean(s.short) + '_n_cells'); if (own) head.push(S.cell);
+    const rows = [head.join(',')];
+    for (let i = 0; i < r.time.length; i++) {
+      const row = [r.time[i]]; for (const s of series) row.push(finite(s.mean[i]) ? s.mean[i] : '', finite(s.sem[i]) ? s.sem[i] : '', s.n);
+      if (own) row.push(finite(own[i]) ? own[i] : ''); rows.push(row.join(','));
+    }
+    return rows.join('\n') + '\n';
+  }
+  /** What the plot's legend says, as a list: lines, bands and notes. The page shows it above the plot; a saved picture has it drawn in. */
+  function legendItems() {
+    const r = S.results; if (!r) return [];
+    const oneCell = S.plotMode === 'cell', items = plotSeries().map((s) => ({ kind: 'line', colour: s.colour, text: s.label }));
+    if (oneCell && S.cell) items.push(shownTraces()[S.cell] ? { kind: 'line', colour: '#1F2933', text: shortName(S.cell) } : { kind: 'note', colour: '#9A5B00', text: shortName(S.cell) + ': no ΔF/F₀ trace' + (hasTable('corrected') ? ': choose gray levels under Signal' : '') });
+    if (S.every) {
+      const drawn = S.listed.filter((n) => shownTraces()[n]), yes = drawn.filter((n) => callOf(n) === 'Responded').length, no = drawn.filter((n) => callOf(n) === 'Did not respond').length;
+      if (yes) items.push({ kind: 'line', colour: CALL.responded, text: 'responded (' + yes + ')' }); if (no) items.push({ kind: 'line', colour: CALL.not, text: 'did not respond (' + no + ')' });
+      if (drawn.length - yes - no) items.push({ kind: 'line', colour: CALL.other, text: 'no call (' + (drawn.length - yes - no) + ')' });
+    }
+    const spans = responseSpans(), real = (span) => span && finite(span[0]) && finite(span[1]);
+    if (real(spans.baseline)) items.push({ kind: 'band', colour: '#EDF0F4', text: 'baseline' }); if (real(spans.response)) items.push({ kind: 'band', colour: '#F5C97A', text: 'response window' });
+    if (oneCell && isDff()) {
+      if (real(spans.run)) items.push({ kind: 'band', colour: '#D5EEDD', text: 'response' });
+      for (const level of referenceLevels().slice(1)) items.push({ kind: 'line', colour: level.colour, text: level.name });
+    }
+    return items;
+  }
+  function legend() {
+    $('legend').innerHTML = legendItems().map((item) => item.kind === 'note' ? '<span class="chip" style="color:' + item.colour + '">' + escape(item.text) + '</span>'
+      : '<span class="chip"><i' + (item.kind === 'band' ? ' class="band"' : '') + ' style="background:' + item.colour + '"></i>' + escape(item.text) + '</span>').join('');
   }
   /** Everything except the time cursor and the hovered trace, drawn once and reused while the cursor moves. */
   function paintTraces(ctx, w, h) {
-    const r = S.results, time = r.time, L = 54, T = 10, W = Math.max(10, w - L - 14), H = Math.max(10, h - T - 38);
+    const r = S.results, shown = shownTraces(), time = r.time, L = 54, T = 10, W = Math.max(10, w - L - 14), H = Math.max(10, h - T - 38);
     const full0 = time[0], full1 = time[time.length - 1], x0 = Plot.x0 === null ? full0 : Plot.x0, x1 = Plot.x1 === null ? full1 : Plot.x1;
-    const drawn = S.every ? S.listed.filter((n) => r.traces[n]) : []; Plot.drawn = drawn;
-    const spans = responseSpans(), gapLimit = samplingSupport().gap, levels = referenceLevels();
-    const values = [0].concat(levels.map((l) => l.value)); r.mean.forEach((v, i) => { if (finite(v)) { values.push(v); if (finite(r.sem[i])) values.push(v - r.sem[i], v + r.sem[i]); } });
-    const own = S.cell ? r.traces[S.cell] : null; if (own) for (const v of own) if (finite(v)) values.push(v);
+    const drawn = S.every ? S.listed.filter((n) => shown[n]) : []; Plot.drawn = drawn;
+    const oneCell = S.plotMode === 'cell', series = plotSeries(); Plot.series = series;
+    const spans = responseSpans(), gapLimit = samplingSupport().gap, levels = oneCell && isDff() ? referenceLevels() : [];
+    if (!oneCell || !isDff()) spans.run = null;                                  // the qualifying run and the thresholds belong to one cell
+    const values = (isDff() || S.signal === 'rawdff' ? [0] : []).concat(levels.map((l) => l.value)); for (const s of series) s.mean.forEach((v, i) => { if (finite(v)) { values.push(v); if (finite(s.sem[i])) values.push(v - s.sem[i], v + s.sem[i]); } });
+    const own = oneCell && S.cell ? shown[S.cell] : null; if (own) for (const v of own) if (finite(v)) values.push(v);
     // with every cell drawn, the axis covers 99 % of all values (plus the mean and the selected cell); rarer extremes run off the edge
-    if (drawn.length) { const rows = drawn.map((n) => r.traces[n]); values.push(share(rows, 0.005, false), share(rows, 0.995, false)); }
+    if (drawn.length) { const rows = drawn.map((n) => shown[n]); values.push(share(rows, 0.005, false), share(rows, 0.995, false)); }
     let lo = Math.min.apply(null, values), hi = Math.max.apply(null, values); if (hi - lo < 0.001) hi = lo + 1; const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+    // limits typed under "Y axis" replace the automatic ones (either end alone, too); they belong to the signal on screen
+    const typed = Plot.y[S.signal] || {}; if (finite(typed.lo)) lo = typed.lo; if (finite(typed.hi)) hi = typed.hi; if (!(hi > lo)) hi = lo + Math.max(1e-6, Math.abs(lo) * 0.1);
     const X = (t) => L + (t - x0) / (x1 - x0) * W, Y = (v) => T + (hi - v) / (hi - lo) * H;
     Plot.geom = { L, T, W, H, x0, x1, lo, hi, full0, full1 };
     ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); ctx.font = '12px ' + getComputedStyle(document.body).fontFamily;
@@ -698,8 +1067,14 @@
     for (const [span, colour, name] of [[spans.baseline, '#EDF0F4', 'response baseline'], [spans.response, '#FFF4E3', 'response window'], [spans.run, '#D5EEDD', 'qualifying run']]) {
       if (!span || !finite(span[0]) || !finite(span[1])) continue;
       const a = Math.max(L, X(span[0])), b = Math.min(L + W, X(span[1])); if (b <= a) continue;
-      ctx.fillStyle = colour; ctx.fillRect(a, T, b - a, H);
-      if (ctx.measureText(name).width + 8 <= b - a) { ctx.fillStyle = '#65717D'; ctx.fillText(name, a + 4, T + 14); }
+      const strip = name === 'response window';
+      ctx.fillStyle = strip ? '#F5C97A' : colour; ctx.fillRect(a, T, b - a, strip ? 5 : H);
+      if (!strip && ctx.measureText(name).width + 8 <= b - a) { ctx.fillStyle = '#65717D'; ctx.fillText(name, a + 4, T + 14); }
+    }
+    const added = number(selectedCall().Stimulus_onset_s);
+    if (finite(added) && added >= x0 && added <= x1) {
+      const sx = Math.round(X(added)) + 0.5; ctx.strokeStyle = '#B45F06'; ctx.lineWidth = 1.4; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(sx, T); ctx.lineTo(sx, T + H); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = '#8A4B08'; ctx.textAlign = sx > L + W - 70 ? 'right' : 'left'; ctx.fillText('stimulus', sx + (sx > L + W - 70 ? -4 : 4), T + 20); ctx.textAlign = 'left';
     }
     ctx.restore();
     const ys = ticks(lo, hi, 5), xs = ticks(x0, x1, Math.max(2, Math.floor(W / 90)));
@@ -708,23 +1083,24 @@
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     for (const v of xs.values) { const x = Math.round(X(v)) + 0.5; ctx.strokeStyle = '#DEE4EA'; ctx.beginPath(); ctx.moveTo(x, T + H); ctx.lineTo(x, T + H + 4); ctx.stroke(); ctx.fillStyle = '#65717D'; ctx.fillText(tickText(v, xs.step), x, T + H + 7); }
     ctx.fillText('Time (s)', L + W / 2, h - 15);
-    ctx.save(); ctx.translate(13, T + H / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'middle'; ctx.fillText('ΔF/F₀', 0, 0); ctx.restore();
+    ctx.save(); ctx.translate(13, T + H / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'middle'; ctx.fillText(signalName(), 0, 0); ctx.restore();
     ctx.strokeStyle = '#C5CED8'; ctx.strokeRect(L + 0.5, T + 0.5, W, H);
     ctx.save(); ctx.beginPath(); ctx.rect(L, T, W + 1, H + 1); ctx.clip(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     const line = (y) => { ctx.beginPath(); let pen = false; for (let i = 0; i < time.length && i < y.length; i++) { if (finite(y[i])) { const px = X(time[i]), py = Y(y[i]); if (pen && time[i] - time[i - 1] <= gapLimit) ctx.lineTo(px, py); else ctx.moveTo(px, py); pen = true; } else pen = false; } ctx.stroke(); };
     if (drawn.length) {
       ctx.globalAlpha = drawn.length > 120 ? 0.22 : drawn.length > 40 ? 0.32 : 0.48; ctx.lineWidth = 0.9;
       // non-responders first, so the responders are not hidden under them
-      for (const responders of [false, true]) for (const name of drawn) { const call = callOf(name); if ((call === 'Responded') === responders) { ctx.strokeStyle = CALL[kind(call)]; line(r.traces[name]); } }
+      for (const responders of [false, true]) for (const name of drawn) { const call = callOf(name); if ((call === 'Responded') === responders) { ctx.strokeStyle = CALL[kind(call)]; line(shown[name]); } }
       ctx.globalAlpha = 1;
     }
-    ctx.fillStyle = drawn.length ? 'rgba(0,114,178,0.28)' : 'rgba(0,114,178,0.20)';
-    for (let i = 1; i < time.length; i++) if (time[i] - time[i - 1] <= gapLimit && [r.mean[i - 1], r.mean[i], r.sem[i - 1], r.sem[i]].every(finite)) {
-      ctx.beginPath(); ctx.moveTo(X(time[i - 1]), Y(r.mean[i - 1] - r.sem[i - 1])); ctx.lineTo(X(time[i]), Y(r.mean[i] - r.sem[i])); ctx.lineTo(X(time[i]), Y(r.mean[i] + r.sem[i])); ctx.lineTo(X(time[i - 1]), Y(r.mean[i - 1] + r.sem[i - 1])); ctx.closePath(); ctx.fill();
+    for (const s of series) {
+      ctx.fillStyle = shade(s.colour, drawn.length ? 0.28 : 0.20);
+      for (let i = 1; i < time.length; i++) if (time[i] - time[i - 1] <= gapLimit && [s.mean[i - 1], s.mean[i], s.sem[i - 1], s.sem[i]].every(finite)) {
+        ctx.beginPath(); ctx.moveTo(X(time[i - 1]), Y(s.mean[i - 1] - s.sem[i - 1])); ctx.lineTo(X(time[i]), Y(s.mean[i] - s.sem[i])); ctx.lineTo(X(time[i]), Y(s.mean[i] + s.sem[i])); ctx.lineTo(X(time[i - 1]), Y(s.mean[i - 1] + s.sem[i - 1])); ctx.closePath(); ctx.fill();
+      }
     }
     for (const level of levels) { ctx.strokeStyle = level.colour; ctx.lineWidth = level.name === 'required rise' ? 1.8 : 1; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(L, Y(level.value)); ctx.lineTo(L + W, Y(level.value)); ctx.stroke(); } ctx.setLineDash([]);
-    if (drawn.length) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 4.2; line(r.mean); }
-    ctx.strokeStyle = '#0072B2'; ctx.lineWidth = 2.4; line(r.mean);
+    for (const s of series) { if (drawn.length) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 4.2; line(s.mean); } ctx.strokeStyle = s.colour; ctx.lineWidth = 2.4; line(s.mean); }
     if (own) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 3.6; line(own); ctx.strokeStyle = '#1F2933'; ctx.lineWidth = 1.7; line(own); }
     ctx.restore();
   }
@@ -740,14 +1116,15 @@
     ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(Plot.layer, 0, 0); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const g = Plot.geom, time = r.time, X = (t) => g.L + (t - g.x0) / (g.x1 - g.x0) * g.W, Y = (v) => g.T + (g.hi - v) / (g.hi - g.lo) * g.H;
     ctx.save(); ctx.beginPath(); ctx.rect(g.L, g.T, g.W + 1, g.H + 1); ctx.clip();
-    if (Plot.hover && r.traces[Plot.hover] && Plot.hover !== S.cell) {
-      const y = r.traces[Plot.hover], gapLimit = samplingSupport().gap; ctx.strokeStyle = CALL[kind(callOf(Plot.hover))]; ctx.lineWidth = 2.2; ctx.lineJoin = 'round'; ctx.beginPath(); let pen = false;
+    if (Plot.hover && shownTraces()[Plot.hover] && Plot.hover !== S.cell) {
+      const y = shownTraces()[Plot.hover], gapLimit = samplingSupport().gap; ctx.strokeStyle = CALL[kind(callOf(Plot.hover))]; ctx.lineWidth = 2.2; ctx.lineJoin = 'round'; ctx.beginPath(); let pen = false;
       for (let i = 0; i < time.length; i++) { if (finite(y[i])) { if (pen && time[i] - time[i - 1] <= gapLimit) ctx.lineTo(X(time[i]), Y(y[i])); else ctx.moveTo(X(time[i]), Y(y[i])); pen = true; } else pen = false; } ctx.stroke();
     }
     const t = Plot.playhead != null ? Plot.playhead : S.frame <= time.length ? time[S.frame - 1] : NaN;   // glides with the playhead while playing
     if (isFinite(t) && t >= g.x0 && t <= g.x1) {
       const x = Math.round(X(t)) + 0.5; ctx.strokeStyle = 'rgba(31,41,51,0.8)'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(x, g.T); ctx.lineTo(x, g.T + g.H); ctx.stroke();
-      const own = S.cell ? r.traces[S.cell] : null; let text = t.toFixed(1) + ' s';
+      const own = S.plotMode === 'cell' && S.cell ? shownTraces()[S.cell] : null; let text = t.toFixed(1) + ' s';
+      if (S.plotMode !== 'cell') for (const s of Plot.series) if (finite(s.mean[S.frame - 1])) text += ' · ' + s.short + ' ' + s.mean[S.frame - 1].toFixed(3);
       if (own && finite(own[S.frame - 1])) { const y = Math.max(g.T, Math.min(g.T + g.H, Y(own[S.frame - 1]))); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, 5, 0, 7); ctx.fill(); ctx.fillStyle = '#1F2933'; ctx.beginPath(); ctx.arc(x, y, 3.2, 0, 7); ctx.fill(); text += ' · ' + shortName(S.cell) + ' ' + own[S.frame - 1].toFixed(3); }
       ctx.font = '12px ' + getComputedStyle(document.body).fontFamily; const tw = ctx.measureText(text).width + 10, bx = Math.max(g.L, Math.min(g.L + g.W - tw, x - tw / 2));
       ctx.fillStyle = '#1F2933'; ctx.beginPath(); ctx.roundRect(bx, g.T + g.H - 22, tw, 18, 6); ctx.fill(); ctx.fillStyle = '#fff'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.fillText(text, bx + 5, g.T + g.H - 13);
@@ -760,9 +1137,9 @@
     const box = $('plot').getBoundingClientRect(), mx = event.clientX - box.left, my = event.clientY - box.top;
     if (mx < g.L || mx > g.L + g.W || my < g.T || my > g.T + g.H) return null;
     const t = g.x0 + (mx - g.L) / g.W * (g.x1 - g.x0); let i = 0, gap = Infinity; for (let k = 0; k < r.time.length; k++) { const d = Math.abs(r.time[k] - t); if (d < gap) { gap = d; i = k; } }
-    const candidates = Plot.drawn.slice(); if (S.cell && r.traces[S.cell] && !candidates.includes(S.cell)) candidates.push(S.cell);
+    const candidates = Plot.drawn.slice(); if (S.cell && shownTraces()[S.cell] && !candidates.includes(S.cell)) candidates.push(S.cell);
     let best = null, near = 7;
-    for (const name of candidates) { const v = r.traces[name][i]; if (!finite(v)) continue; const d = Math.abs(g.T + (g.hi - v) / (g.hi - g.lo) * g.H - my); if (d < near) { near = d; best = name; } }
+    for (const name of candidates) { const v = shownTraces()[name][i]; if (!finite(v)) continue; const d = Math.abs(g.T + (g.hi - v) / (g.hi - g.lo) * g.H - my); if (d < near) { near = d; best = name; } }
     return { name: best, index: i, time: t, mx, my };
   }
 
@@ -807,6 +1184,10 @@
     const largest = share(have, 1, true), most = S.range === 'full' ? largest : share(have, 0.99, true);
     const step0 = ticks(0, most > 0 ? most : 1, 5).step, limit = Math.max(step0, Math.ceil(most / step0 - 1e-9) * step0);
     const colours = ramp(S.palette), missing = [229, 229, 229];
+    const callKey = [[CALL.responded, 'responded'], [CALL.not, 'did not respond'], [CALL.other, 'excluded or unscorable']];
+    $('heatmap-legend').innerHTML = '<span class="chip">ΔF/F₀ <i class="scale" style="background:linear-gradient(to right,' + PALETTES[S.palette].join(',') + ')"></i>' + (signed ? '−' + fmt(limit) + ' to ' + fmt(limit) : '0 to ' + fmt(limit) + ' (below 0: darkest colour)') + '</span>' +
+      '<span class="chip">strip beside the Cell axis:</span>' + callKey.map(([colour, text]) => '<span class="chip"><i class="band" style="background:' + colour + '"></i>' + text + '</span>').join('') +
+      '<span class="chip"><i class="band" style="background:#e5e5e5"></i>no ΔF/F₀ trace</span><span class="chip">◀ selected cell · dashed line: stimulus · top strip: baseline and response window</span>';
     const tall = S.tall, width = Math.max(320, box.clientWidth - 2), height = tall ? TOP + names.length * ROW + BOTTOM : Math.max(220, box.clientHeight - 2);
     box.classList.toggle('fit', !tall); canvas.style.width = width + 'px'; canvas.style.height = height + 'px';
     const { ctx, w, h } = fit(canvas), W = Math.max(10, w - LEFT - RIGHT), H = Math.max(10, h - TOP - BOTTOM), rowH = H / names.length;
@@ -835,6 +1216,8 @@
     if (finite(spans.response[0]) && spans.response[0] > time[0]) { const x = Math.round(X(spans.response[0])) + 0.5; ctx.strokeStyle = signed ? 'rgba(31,41,51,0.55)' : 'rgba(255,255,255,0.75)'; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(x, TOP); ctx.lineTo(x, TOP + H); ctx.stroke(); ctx.setLineDash([]); }
     // the response call of each row, and lines between the groups when the rows are sorted by call
     names.forEach((name, c) => { ctx.fillStyle = CALL[kind(callOf(name))]; ctx.fillRect(LEFT - 7, TOP + c * rowH, 4, Math.max(1, rowH - (rowH > 3 ? 0.5 : 0))); });
+    if (W > 760) { ctx.font = '11px ' + family; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; let kx = LEFT;   // the same key inside the picture, for saved files
+      for (const [colour, text] of callKey) { ctx.fillStyle = colour; ctx.fillRect(kx, h - 14, 10, 8); ctx.fillStyle = '#65717D'; ctx.fillText(text, kx + 14, h - 10); kx += 24 + ctx.measureText(text).width; } ctx.textBaseline = 'alphabetic'; }
     if (S.order === 'call') names.forEach((name, c) => { if (c > 0 && rank(name) !== rank(names[c - 1])) { ctx.fillStyle = '#fff'; ctx.fillRect(LEFT, TOP + c * rowH - 1, W, 2); } });
     const chosen = names.indexOf(S.cell);
     if (chosen >= 0) { const y = TOP + chosen * rowH;
@@ -876,6 +1259,8 @@
     let columns = data.header.map((name, index) => ({ name, index }));
     if (id === 'table-calls' && !$('all-call-columns').checked) columns = core.filter((name) => data.header.includes(name)).map((name) => ({ name, index: data.header.indexOf(name) }));
     columns = [...columns.filter((c) => c.name === 'Cell'), ...columns.filter((c) => c.name !== 'Cell')];
+    // the recording's name, the role and the stimulus repeat on every row of a one-window run: leave them out so the numbers fit
+    if (data.rows.length > 1) columns = columns.filter((c) => !['Field', 'Role', 'Stimulus'].includes(c.name) || new Set(data.rows.map((row) => row[c.index])).size > 1);
     const labels = { Time_to_Peak: 'Peak timestamp from recording start (s)', AUC: 'Whole-recording signed AUC', Rise_Time: 'Legacy 10–90% rise time (s)' };
     const cellColumn = data.header.indexOf('Cell'), numeric = data.header.map((_, c) => data.rows.some((row) => row[c] !== '' && row[c] !== undefined) && data.rows.every((row) => row[c] === '' || row[c] === undefined || isFinite(Number(row[c]))));
     const head = element.createTHead().insertRow(), body = element.createTBody(); let sorted = -1, direction = 1;
@@ -883,7 +1268,8 @@
       if (!rows.length) { const td = body.insertRow().insertCell(); td.colSpan = Math.max(1, columns.length); td.className = 'empty-table'; td.textContent = 'No rows were saved for this table.'; return; }
       for (const row of rows) { const tr = body.insertRow(); if (cellColumn >= 0) { tr.dataset.cell = row[cellColumn]; tr.classList.toggle('on', row[cellColumn] === S.cell); }
         for (const { name, index: c } of columns) { const value = row[c] == null ? '' : row[c], td = tr.insertCell();
-          if (numeric[c] && value !== '') { const v = Number(value); td.className = 'num'; td.textContent = Number.isInteger(v) ? String(v) : String(+v.toPrecision(4)); td.title = value; } else td.textContent = value;
+          if (numeric[c] && value !== '') { const v = Number(value); td.className = 'num'; td.textContent = Number.isInteger(v) ? String(v) : String(+v.toPrecision(4)); td.title = value; }
+          else if (name === 'Cell') { td.textContent = shortName(value); td.title = value; } else td.textContent = value;
           if (name === 'Cell') td.classList.add('cell-column');
         }
       }
@@ -891,14 +1277,37 @@
     columns.forEach(({ name, index: c }) => { const th = document.createElement('th'); th.textContent = labels[name] || name; th.title = 'Saved column: ' + name; if (name === 'Cell') th.classList.add('cell-column'); head.appendChild(th);
       th.addEventListener('click', () => { direction = sorted === c ? -direction : 1; sorted = c; for (const other of head.children) other.classList.remove('up', 'down'); th.classList.add(direction > 0 ? 'up' : 'down');
         fill(data.rows.slice().sort((a, b) => direction * (numeric[c] ? (Number(a[c] === '' ? NaN : a[c]) || 0) - (Number(b[c] === '' ? NaN : b[c]) || 0) : String(a[c]).localeCompare(String(b[c]))))); }); });
-    body.addEventListener('click', (event) => { const tr = event.target.closest('tr'); if (tr && tr.dataset.cell) pick(tr.dataset.cell); });
+    body.addEventListener('click', (event) => { const tr = event.target.closest('tr'); if (tr && tr.dataset.cell) chooseCell(tr.dataset.cell); });
     fill(data.rows);
   }
 
+  // ---------------------------------------------------------------- the processed data, cell by cell
+  const Data = { signal: 'dff', first: 0, page: 50 };
+  const dataTraces = () => Data.signal !== 'dff' && hasTable(Data.signal) ? S.results[Data.signal] : S.results.traces;
+  /** The whole table as CSV text: time, then one column per cell under its full ID. */
+  function dataCsv() {
+    const r = S.results, traces = dataTraces(), names = S.info.names.filter((n) => traces[n]);
+    const rows = [['Frame', 'Time_s'].concat(names).join(',')];
+    for (let i = 0; i < r.time.length; i++) rows.push([i + 1, r.time[i]].concat(names.map((n) => finite(traces[n][i]) ? traces[n][i] : '')).join(','));
+    return rows.join('\n') + '\n';
+  }
+  /** Fifty frames at a time on screen (the saved file has them all); cells are headed "Cell 1", with the ID in the tooltip. */
+  function showData() {
+    const r = S.results; if (!r) return;
+    for (const option of $('data-signal').options) option.disabled = option.value !== 'dff' && !hasTable(option.value);
+    if ($('data-signal').selectedOptions[0].disabled) { Data.signal = 'dff'; $('data-signal').value = 'dff'; }
+    const traces = dataTraces(), names = S.info.names.filter((n) => traces[n]), total = r.time.length;
+    Data.first = Math.max(0, Math.min(Data.first, Math.floor((total - 1) / Data.page) * Data.page)); const last = Math.min(total, Data.first + Data.page);
+    const rows = []; for (let i = Data.first; i < last; i++) rows.push([i + 1, r.time[i]].concat(names.map((n) => finite(traces[n][i]) ? traces[n][i] : '')));
+    table('table-data', { header: ['Frame', 'Time (s)'].concat(names.map(shortName)), rows });
+    $('data-range').textContent = 'Frames ' + (Data.first + 1) + '–' + last + ' of ' + total + ' · ' + names.length + ' cells';
+    $('data-back').disabled = Data.first === 0; $('data-forward').disabled = last >= total;
+  }
+  const dataKind = () => 'processed_data_' + (Data.signal === 'raw' && hasTable('raw') ? 'raw_gray_values' : Data.signal === 'rawdff' && hasTable('rawdff') ? 'dFF0_of_raw_values' : Data.signal === 'corrected' && hasTable('corrected') ? 'gray_levels_above_background' : 'dFF0');
   function showTab(name) {
-    for (const tab of document.querySelectorAll('.tab')) tab.classList.toggle('on', tab.dataset.tab === name);
+    for (const tab of document.querySelectorAll('.tab')) { tab.classList.toggle('on', tab.dataset.tab === name); tab.setAttribute('aria-selected', tab.dataset.tab === name ? 'true' : 'false'); }
     for (const panel of document.querySelectorAll('.panel')) panel.hidden = panel.id !== 'panel-' + name;
-    if (name === 'heatmap') drawHeatmap(); if (name === 'review') { Plot.dirty = true; drawPlot(); drawPicture(); }
+    if (name === 'heatmap') drawHeatmap(); if (name === 'review') { Plot.dirty = true; drawPlot(); drawPicture(); } if (name === 'data') showData();
     const on = document.querySelector('tbody tr.on'); if (on && name !== 'review' && name !== 'heatmap') on.scrollIntoView({ block: 'nearest' });
   }
   function download(blob, name) { const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 2000); }
@@ -907,25 +1316,217 @@
     const clean = (text) => String(text || '').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80);
     const now = new Date(), two = (n) => String(n).padStart(2, '0');
     const stamp = now.getFullYear() + two(now.getMonth() + 1) + two(now.getDate()) + '-' + two(now.getHours()) + two(now.getMinutes()) + two(now.getSeconds());
-    return [clean(S.info.recording), kind, kind === 'traces' && S.cell ? clean(S.cell) : '', stamp].filter(Boolean).join('_') + '.' + extension;
+    return [clean(S.info.recording), kind, /^traces/.test(kind) && S.cell ? (shortName(S.cell) === S.cell ? clean(S.cell) : clean(shortName(S.cell)) + '_' + clean(S.cell).slice(0, 13)) : '', stamp].filter(Boolean).join('_') + '.' + extension;
   }
   function exportMetadata() {
     return { schema: 'simpleca.view-export', schema_version: 1, recording: S.info.recording, plugin_version: S.info.pluginVersion,
       appliedFingerprint: S.results.appliedFingerprint || S.state.appliedFingerprint, appliedProtocol: S.results.appliedProtocol || S.results.protocol,
       manifest: S.results.manifest, settingsPending: hasPending(), displayed_window: S.window, cell: S.cell, group: GROUPS[S.group],
       frame: S.frame, time_s: frameTimes()[S.frame - 1], view: S.view, results_folder: S.results.folder || (S.state && S.state.folder) || null,
-      time_range: Plot.geom ? [Plot.geom.x0, Plot.geom.x1] : [Plot.x0, Plot.x1], time_zoomed: Plot.x0 !== null, palette: S.palette, range: S.range, order: S.order };
+      time_range: Plot.geom ? [Plot.geom.x0, Plot.geom.x1] : [Plot.x0, Plot.x1], time_zoomed: Plot.x0 !== null, palette: S.palette, range: S.range, order: S.order,
+      plot: S.plotMode, signal: S.results && isDff() ? 'dF/F0' : S.signal, y_axis: Plot.geom ? [Plot.geom.lo, Plot.geom.hi] : null, y_axis_typed: Plot.y[S.signal] || null, plotted: (Plot.series || []).map((s) => s.label), all_traces_drawn: S.every };
   }
-  function save(canvas, kind, redraw) {
-    // Capture provenance now, not after the asynchronous PNG encoder has finished.
-    const metadata = JSON.stringify(exportMetadata(), null, 2), name = exportName(kind, 'png');
-    // Draw once more at least 1600 pixels wide (and at least twice the screen's density), save that, then draw for the screen again.
-    S.exportScale = Math.min(6, Math.max(2, Math.ceil(1600 / Math.max(1, canvas.clientWidth)))); Plot.dirty = true; redraw();
-    const restore = () => { S.exportScale = null; Plot.dirty = true; redraw(); };
-    try { canvas.toBlob((blob) => { download(blob, name); download(new Blob([metadata], { type: 'application/json' }), name.replace(/\.png$/, '.metadata.json')); }, 'image/png'); }
-    finally { restore(); }
+  const Save = { format: 'png', size: '8x6', dpi: 300, compression: 'lzw' };
+  const inches = () => Save.size === 'screen' ? null : Save.size.split('x').map(Number);
+  /** The plot as a picture of the chosen size and resolution: its title and legend are drawn in, the time cursor is left out. */
+  function plotPicture() {
+    const screen = $('plot'), size = inches() || [screen.clientWidth / 96, screen.clientHeight / 96], w = Math.round(size[0] * 96), h = Math.round(size[1] * 96), k = Save.dpi / 96;
+    const canvas = document.createElement('canvas'); canvas.width = Math.round(size[0] * Save.dpi); canvas.height = Math.round(size[1] * Save.dpi);
+    const ctx = canvas.getContext('2d'), font = getComputedStyle(document.body).fontFamily; ctx.setTransform(k, 0, 0, k, 0, 0); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+    ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.fillStyle = '#1F2933'; ctx.font = '600 13px ' + font; ctx.fillText(S.info.recording, 12, 16);
+    ctx.font = '12px ' + font; let x = 12, y = 38;
+    for (const item of legendItems()) {
+      const width = (item.kind === 'note' ? 0 : 24) + ctx.measureText(item.text).width + 16; if (x + width > w - 8 && x > 12) { x = 12; y += 18; }
+      if (item.kind === 'line') { ctx.fillStyle = item.colour; ctx.fillRect(x, y - 1.5, 18, 3); }
+      else if (item.kind === 'band') { ctx.fillStyle = item.colour; ctx.fillRect(x, y - 5, 14, 10); ctx.strokeStyle = '#C5CED8'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y - 4.5, 14, 10); }
+      ctx.fillStyle = item.kind === 'note' ? item.colour : '#3E4C59'; ctx.fillText(item.text, x + (item.kind === 'note' ? 0 : 24), y); x += width;
+    }
+    const head = y + 14; ctx.translate(0, head); paintTraces(ctx, w, h - head);
+    Plot.dirty = true; drawPlot();   // the page's own plot is measured again for the screen
+    return canvas.toDataURL('image/png');
+  }
+  /** A saved picture or frame is as wide as Options says (inches × dpi), up to 4 times its recorded pixels; its shape is the recording's. */
+  const pictureScale = () => { const size = inches(), iw = S.info.width || 1; return size ? Math.max(0.25, Math.min(4, size[0] * Save.dpi / iw)) : (Save.dpi >= 600 ? 3 : Save.dpi >= 300 ? 2 : 1); };
+  /** The heatmap at the chosen width and resolution; its shape stays as on screen. */
+  function heatmapPicture() {
+    const canvas = $('heatmap'), size = inches(); S.exportScale = size ? size[0] * Save.dpi / Math.max(1, canvas.clientWidth) : Save.dpi / 96; drawHeatmap();
+    try { return canvas.toDataURL('image/png'); } finally { S.exportScale = null; drawHeatmap(); }
+  }
+  const pictureOptions = () => ({ format: Save.format, dpi: Save.dpi, compression: Save.compression });
+  const viewMetadata = () => ({ schema: 'simpleca.view-export', schema_version: 1, recording: S.info.recording, plugin_version: S.info.pluginVersion, view: S.view, frame: S.frame, outlines: S.outlines });
+  /** What the colours of the picture mean in the view on screen, then what the outlines mean. Each: [colour, text, is an outline]. */
+  function pictureKey() {
+    const colours = viewColours().length ? viewColours() : [['#ffffff', 'as recorded']];
+    const lines = !S.outlines ? [] : S.results ? [[ON_PICTURE.responded, 'responded', true], [ON_PICTURE.not, 'did not respond', true], [ON_PICTURE.other, 'excluded or unscorable', true]] : [['#ffffff', 'your cells', true]];
+    return colours.concat(lines);
+  }
+  /** The whole picture in the view on screen (a movie frame is fetched at full size), with the outlines shown on the page and a
+   *  key to the colours underneath. One ordinary colour picture. */
+  const VIEW_NAMES = { picture: 'colour overview', raw: 'as recorded', flat: 'background removed', magenta: 'response in magenta', change: 'change from baseline' };
+  async function viewPicture(frame, labelled) {
+    const f = frame || S.frame; let image = S.view === 'background' ? Pic.background : Pic.base;
+    if (!still()) { const reply = await fetch('api/frame?f=' + f + '&mode=' + S.view + '&v=' + encodeURIComponent(Buf.version || ''), { cache: 'no-store' }); if (!reply.ok) throw new Error('Frame ' + f + ' could not be read.'); image = await createImageBitmap(await reply.blob()); }
+    if (!image) throw new Error('The picture is not loaded yet.');
+    const iw = S.info.width, ih = S.info.height, scale = pictureScale(), key = labelled ? [] : pictureKey(), font = getComputedStyle(document.body).fontFamily;
+    const unit = Math.max(1, iw / 1388), size = Math.round(20 * unit), gap = Math.round(30 * unit), measure = document.createElement('canvas').getContext('2d'); measure.font = size + 'px ' + font;
+    const places = []; let x = 14 * unit, row = 0; for (const item of key) { const width = size * 1.4 + measure.measureText(item[1]).width + size * 1.4; if (x + width > iw - 8 && x > 14 * unit) { x = 14 * unit; row++; } places.push([x, row]); x += width; }
+    const keyHeight = labelled ? 0 : Math.round((row + 1) * gap + gap * 1.5), canvas = document.createElement('canvas'); canvas.width = Math.round(iw * scale); canvas.height = Math.round((ih + keyHeight) * scale);
+    const ctx = canvas.getContext('2d'); ctx.scale(scale, scale); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, iw, ih + keyHeight); ctx.drawImage(image, 0, 0, iw, ih);
+    const known = !!S.results; ctx.lineJoin = 'round';
+    if (S.outlines) S.paths.forEach((path, i) => {
+      const call = callOf(S.info.names[i]); if (known && !inGroup(call, S.group, S.info.names[i])) return; const which = kind(call);
+      ctx.setLineDash([]); ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.lineWidth = 3.2 * unit * S.outlineWidth; ctx.stroke(path);
+      ctx.setLineDash(known && which === 'other' ? [5 * unit, 4 * unit] : []); ctx.strokeStyle = known ? ON_PICTURE[which] : '#ffffff'; ctx.lineWidth = 1.8 * unit * S.outlineWidth; ctx.stroke(path);
+    });
+    ctx.setLineDash([]); ctx.font = size + 'px ' + font; ctx.textBaseline = 'middle';
+    key.forEach((item, i) => { const kx = places[i][0], ky = ih + gap * 0.9 + places[i][1] * gap;
+      if (item[2]) { ctx.strokeStyle = item[0]; ctx.lineWidth = 2 * unit; ctx.strokeRect(kx, ky - size * 0.45, size * 0.9, size * 0.9); } else { ctx.fillStyle = item[0]; ctx.fillRect(kx, ky - size * 0.45, size * 0.9, size * 0.9); }
+      ctx.fillStyle = '#fff'; ctx.fillText(item[1], kx + size * 1.4, ky); });
+    if (labelled) {   // a frame of a set: its number, time and view in the corner
+      const time = frameTimes()[f - 1], text = 'Frame ' + f + (finite(time) ? ' · ' + time.toFixed(1) + ' s' : '') + ' · ' + (VIEW_NAMES[S.view] || S.view);
+      ctx.font = '600 ' + Math.round(size * 1.1) + 'px ' + font; const tw = ctx.measureText(text).width;
+      ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(10 * unit, 10 * unit, tw + 20 * unit, size * 1.9); ctx.fillStyle = '#fff'; ctx.fillText(text, 20 * unit, 10 * unit + size * 0.98);
+    } else { ctx.fillStyle = '#AEB8C2'; ctx.font = Math.round(size * 0.8) + 'px ' + font; ctx.fillText(S.info.recording, 14 * unit, ih + keyHeight - gap * 0.55); }
+    return canvas.toDataURL('image/png');
+  }
+  const viewKind = () => 'picture_' + ({ picture: 'colour_overview', background: 'background_areas', raw: 'as_recorded', flat: 'background_removed', magenta: 'response_in_magenta', change: 'change_from_baseline' }[S.view] || S.view) + (still() ? '' : '_frame' + S.frame);
+  const badSave = (error) => /fetch/i.test(error.message) ? 'Fiji is not connected. Keep Fiji open, or reopen the analysis from Fiji.' : error.message;
+  /** Download through the browser: the same file Save writes (format, size, resolution), plus how it was made. */
+  async function save(picture, kind, noteId) {
+    const note = $(noteId); note.className = 'save-note'; note.textContent = 'Preparing…';
+    try {
+      const metadata = JSON.stringify(Object.assign(S.results ? exportMetadata() : viewMetadata(), { picture: Object.assign({ size: Save.size }, pictureOptions()) }), null, 2), png = await picture();
+      const reply = await api('convert', Object.assign({ png }, pictureOptions())), name = exportName(kind, reply.extension);
+      const bytes = Uint8Array.from(atob(reply.base64), (c) => c.charCodeAt(0));
+      download(new Blob([bytes], { type: reply.extension === 'tif' ? 'image/tiff' : 'image/png' }), name);
+      download(new Blob([metadata], { type: 'application/json' }), name.replace(/\.(png|tif)$/, '.metadata.json')); note.textContent = '';
+    } catch (error) { note.className = 'save-note bad'; note.textContent = 'Not downloaded: ' + badSave(error); }
+  }
+  /** Saves the picture, the numbers behind it and how it was made into the "plots" folder beside the measurement tables,
+   *  and says where. Nothing goes through the browser's Downloads folder. */
+  async function saveToFolder(picture, kind, noteId, csv) {
+    const note = $(noteId); note.className = 'save-note'; note.textContent = 'Saving…';
+    try {
+      const metadata = Object.assign(S.results ? exportMetadata() : viewMetadata(), { picture: Object.assign({ size: Save.size }, pictureOptions()) }), name = exportName(kind, 'png').replace(/\.png$/, '');
+      const reply = await api('export', Object.assign({ name, png: await picture(), csv: csv || null, metadata }, pictureOptions()));
+      note.textContent = 'Saved ' + reply.saved[0] + (csv ? ' + CSV' : '') + ' ';
+      const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open folder';
+      open.addEventListener('click', () => api('open', { what: 'plots' }).catch((error) => { note.className = 'save-note bad'; note.textContent = error.message; }));
+      note.appendChild(open);
+    } catch (error) { note.className = 'save-note bad'; note.textContent = 'Not saved: ' + badSave(error); }
+  }
+  const stored = (key) => { try { return window.localStorage.getItem(key); } catch (blocked) { return null; } };
+  // The page's address is new every time it opens, so the browser's own storage would forget; Fiji keeps these too.
+  const store = (key, value) => { try { if (value === null) window.localStorage.removeItem(key); else window.localStorage.setItem(key, value); } catch (blocked) { } api('prefs', { key, value }).catch(() => { }); };
+  const Layout = { apply: {} };
+  /** A draggable edge: "read" turns the pointer position into a size, "apply" sets it (null resets). The size is remembered. */
+  function dragEdge(handle, read, apply, key) {
+    Layout.apply[key] = apply; const saved = stored(key); if (saved) apply(saved);
+    handle.addEventListener('pointerdown', (event) => {
+      event.preventDefault(); try { handle.setPointerCapture(event.pointerId); } catch (unsupported) { } handle.classList.add('on'); document.body.classList.add('dragging');
+      const move = (e) => { const value = read(e); if (value) { apply(value); store(key, value); redraw(); } };
+      const done = () => { handle.classList.remove('on'); document.body.classList.remove('dragging'); handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', done); handle.removeEventListener('pointercancel', done); redraw(); };
+      handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', done); handle.addEventListener('pointercancel', done);
+    });
+    handle.addEventListener('dblclick', () => { apply(null); store(key, null); redraw(); });
   }
   function wire() {
+    const helpOn = stored('step4.help') === '1'; document.body.classList.toggle('show-help', helpOn); $('toggle-help').textContent = helpOn ? 'Hide explanations' : 'Show explanations';
+    $('toggle-help').addEventListener('click', () => { const on = document.body.classList.toggle('show-help'); store('step4.help', on ? '1' : '0'); $('toggle-help').textContent = on ? 'Hide explanations' : 'Show explanations'; redraw(); });
+    dragEdge($('resize-side'), (e) => Math.round(Math.max(260, Math.min(window.innerWidth * 0.6, e.clientX - $('side').getBoundingClientRect().left - 8))) + 'px',
+      (value) => { if (value) document.documentElement.style.setProperty('--side-w', value); else document.documentElement.style.removeProperty('--side-w'); }, 'step4.side');
+    dragEdge($('resize-height'), (e) => Math.round(Math.max(240, Math.min(1600, e.clientY - document.querySelector('.split').getBoundingClientRect().top - 6))) + 'px',
+      (value) => { const split = document.querySelector('.split'); split.classList.toggle('sized', !!value); if (value) split.style.setProperty('--split-h', value); else split.style.removeProperty('--split-h'); }, 'step4.height');
+    dragEdge($('resize-split'), (e) => { const box = document.querySelector('.split').getBoundingClientRect(); return Math.max(20, Math.min(80, (e.clientX - box.left - 7) / box.width * 100)).toFixed(1) + '%'; },
+      (value) => { const split = document.querySelector('.split'); if (value) split.style.setProperty('--pic-w', value); else split.style.removeProperty('--pic-w'); }, 'step4.split');
+    for (const button of document.querySelectorAll('[data-plot]')) button.addEventListener('click', () => setPlotMode(button.dataset.plot));
+    const showY = () => { const now = Plot.y[S.signal] || {}; $('y-min').value = finite(now.lo) ? now.lo : ''; $('y-max').value = finite(now.hi) ? now.hi : ''; };
+    for (const [id, end] of [['y-min', 'lo'], ['y-max', 'hi']]) $(id).addEventListener('input', () => {
+      const text = $(id).value.trim(), value = Number(text), now = Plot.y[S.signal] || (Plot.y[S.signal] = {});
+      now[end] = text !== '' && isFinite(value) ? value : null; Plot.dirty = true; drawPlot();
+    });
+    $('y-auto').addEventListener('click', () => { delete Plot.y[S.signal]; showY(); Plot.dirty = true; drawPlot(); });
+    const setSignal = (value) => { S.signal = Data.signal = value; $('signal').value = value; $('data-signal').value = value; showY(); Plot.dirty = true; drawPlot(); legend(); if (S.results && !$('panel-data').hidden) showData(); };
+    $('signal').addEventListener('change', () => setSignal($('signal').value));
+    $('save-plot-folder').addEventListener('click', () => saveToFolder(plotPicture, plotKind(), 'plot-saved', plotNumbers()));
+    $('save-heatmap-folder').addEventListener('click', () => saveToFolder(heatmapPicture, 'heatmap', 'heatmap-saved'));
+    $('save-picture-folder').addEventListener('click', () => saveToFolder(viewPicture, viewKind(), 'picture-saved'));
+    $('save-picture').addEventListener('click', () => save(viewPicture, viewKind(), 'picture-saved'));
+    $('outline-width').addEventListener('change', () => { S.outlineWidth = Number($('outline-width').value) || 1; store('step4.outline', $('outline-width').value); drawPicture(); });
+    // every Nth frame of the view on screen, each its own labelled picture, in a folder of their own
+    const framesPanel = $('frames-options'), framesEvery = () => Math.round(Number($('frames-every').value));
+    const framesCount = () => { const every = framesEvery(), ok = every >= 1 && every <= S.info.frames; $('frames-go').disabled = !ok;
+      $('frames-count').textContent = ok ? plural(Math.ceil(S.info.frames / every), 'picture') + ', ' + (Save.format === 'tiff' ? 'TIFF ' + Save.compression.toUpperCase() : 'PNG') + ', ' + Save.dpi + ' dpi.' : 'A whole number from 1 to ' + S.info.frames + '.'; };
+    $('frames-every').addEventListener('input', framesCount); $('frames-cancel').addEventListener('click', () => { framesPanel.hidden = true; });
+    $('frames-every').addEventListener('keydown', (event) => { if (event.key === 'Enter' && !$('frames-go').disabled) $('frames-go').click(); if (event.key === 'Escape') framesPanel.hidden = true; });
+    $('save-frames').addEventListener('click', (event) => {
+      const note = $('picture-saved'); note.className = 'save-note';
+      if (still()) { note.className = 'save-note bad'; note.textContent = 'Choose a recording view first: this view is one still picture.'; return; }
+      if (!framesPanel.hidden) { framesPanel.hidden = true; return; }
+      $('frames-every').value = stored('step4.every') || '50'; $('frames-every').max = S.info.frames; framesCount(); framesPanel.hidden = false;
+      const box = $('save-frames').getBoundingClientRect(); framesPanel.style.left = Math.max(8, Math.min(window.innerWidth - 316, box.right - 300)) + 'px'; framesPanel.style.top = ''; framesPanel.style.bottom = '';
+      if (box.top > window.innerHeight / 2) framesPanel.style.bottom = (window.innerHeight - box.top + 6) + 'px'; else framesPanel.style.top = (box.bottom + 6) + 'px';
+      $('frames-every').focus(); $('frames-every').select(); event.stopPropagation();
+    });
+    document.addEventListener('click', (event) => { if (!framesPanel.hidden && !framesPanel.contains(event.target) && event.target.id !== 'save-frames') framesPanel.hidden = true; });
+    // every Nth frame of the view on screen, each its own labelled picture, in a folder of their own
+    $('frames-go').addEventListener('click', async () => {
+      const note = $('picture-saved'), every = framesEvery(); note.className = 'save-note'; framesPanel.hidden = true;
+      store('step4.every', String(every));
+      const frames = []; for (let f = 1; f <= S.info.frames; f += every) frames.push(f);
+      const stamp = exportName('x', 'png').match(/(\d{8}-\d{6})\.png$/)[1], folder = 'frames_' + viewKind().replace(/^picture_/, '').replace(/_frame\d+$/, '') + '_every_' + every + '_' + stamp, width = String(S.info.frames).length;
+      $('save-frames').disabled = true;
+      try {
+        let reply = null;
+        for (let i = 0; i < frames.length; i++) {
+          note.textContent = 'Saving frame ' + frames[i] + ' (' + (i + 1) + ' of ' + frames.length + ')…';
+          reply = await api('export', Object.assign({ folder, name: 'frame_' + String(frames[i]).padStart(width, '0'), png: await viewPicture(frames[i], true) }, pictureOptions()));
+        }
+        await api('export', { folder, name: 'about_these_frames', metadata: Object.assign(viewMetadata(), { frames, every, outlines_shown: S.outlines, outline_colours: S.results ? { responded: ON_PICTURE.responded, did_not_respond: ON_PICTURE.not, excluded_or_unscorable: ON_PICTURE.other } : { your_cells: '#ffffff' }, picture: pictureOptions() }) });
+        note.textContent = 'Saved ' + frames.length + ' frames in plots/' + reply.folderName + ' ';
+        const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open plots folder'; open.addEventListener('click', () => api('open', { what: 'plots' }).catch(() => { })); note.appendChild(open);
+      } catch (error) { note.className = 'save-note bad'; note.textContent = 'Stopped: ' + badSave(error); }
+      finally { $('save-frames').disabled = false; }
+    });
+    // how pictures are saved: format, size, resolution, TIFF compression (kept with Fiji's preferences)
+    const saveBoxes = { format: 'save-format', size: 'save-size', dpi: 'save-dpi', compression: 'save-compression' };
+    const showSaveOptions = () => {
+      for (const key of Object.keys(saveBoxes)) $(saveBoxes[key]).value = String(Save[key]);
+      $('save-compression-label').hidden = Save.format !== 'tiff';
+      const size = inches(), wide = S.info ? Math.round(S.info.width * pictureScale()) : 0;
+      $('save-pixels').textContent = (size ? 'Plot ' + Math.round(size[0] * Save.dpi) + ' × ' + Math.round(size[1] * Save.dpi) + ' px.' : 'Plot as on screen, at ' + Save.dpi + ' dpi.') + (wide ? ' Pictures and frames ' + wide + ' px wide' + (size && wide < Math.round(size[0] * Save.dpi) ? ' (4× the recording, the most it allows).' : '.') : '');
+    };
+    for (const key of Object.keys(saveBoxes)) $(saveBoxes[key]).addEventListener('change', () => { Save[key] = key === 'dpi' ? Number($(saveBoxes[key]).value) : $(saveBoxes[key]).value; store('step4.' + key, String(Save[key])); showSaveOptions(); });
+    for (const button of document.querySelectorAll('.save-options-toggle')) button.addEventListener('click', (event) => {
+      const panel = $('save-options'), open = panel.hidden || panel.dataset.by !== String(Array.from(document.querySelectorAll('.save-options-toggle')).indexOf(button));
+      panel.hidden = !open; if (!open) return;
+      panel.dataset.by = String(Array.from(document.querySelectorAll('.save-options-toggle')).indexOf(button)); showSaveOptions();
+      const box = button.getBoundingClientRect(); panel.style.left = Math.max(8, Math.min(window.innerWidth - 316, box.right - 300)) + 'px'; panel.style.top = ''; panel.style.bottom = '';
+      if (box.top > window.innerHeight / 2) panel.style.bottom = (window.innerHeight - box.top + 6) + 'px'; else panel.style.top = (box.bottom + 6) + 'px';
+      event.stopPropagation();
+    });
+    document.addEventListener('click', (event) => { const panel = $('save-options'); if (!panel.hidden && !panel.contains(event.target) && !event.target.classList.contains('save-options-toggle')) panel.hidden = true; });
+    const metricsName = () => exportName($('metrics-table').value === 'summary' ? 'metrics_summary' : 'table_' + $('metrics-table').value, 'csv');
+    $('metrics-download').addEventListener('click', () => download(new Blob([csvText(metricRows())], { type: 'text/csv' }), metricsName()));
+    $('metrics-save').addEventListener('click', async () => {
+      const note = $('metrics-saved'); note.className = 'save-note'; note.textContent = 'Saving…';
+      try {
+        const reply = await api('export', { name: metricsName().replace(/\.csv$/, ''), csv: csvText(metricRows()) });
+        note.textContent = 'Saved in ' + reply.folderName + ': ' + reply.saved[0] + ' ';
+        const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open folder'; open.addEventListener('click', () => api('open', { what: 'plots' }).catch(() => { })); note.appendChild(open);
+      } catch (error) { note.className = 'save-note bad'; note.textContent = 'Not saved: ' + (/fetch/i.test(error.message) ? 'Fiji is not connected.' : error.message); }
+    });
+    $('data-signal').addEventListener('change', () => setSignal($('data-signal').value));
+    $('data-back').addEventListener('click', () => { Data.first -= Data.page; showData(); }); $('data-forward').addEventListener('click', () => { Data.first += Data.page; showData(); });
+    $('data-download').addEventListener('click', () => download(new Blob([dataCsv()], { type: 'text/csv' }), exportName(dataKind(), 'csv')));
+    $('data-save').addEventListener('click', async () => {
+      const note = $('data-saved'); note.className = 'save-note'; note.textContent = 'Saving…';
+      try {
+        const reply = await api('export', { name: exportName(dataKind(), 'csv').replace(/\.csv$/, ''), csv: dataCsv(), metadata: exportMetadata() });
+        note.textContent = 'Saved in ' + reply.folderName + ': ' + reply.saved[0] + ' ';
+        const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open folder'; open.addEventListener('click', () => api('open', { what: 'plots' }).catch(() => { })); note.appendChild(open);
+      } catch (error) { note.className = 'save-note bad'; note.textContent = 'Not saved: ' + error.message; }
+    });
     for (const tab of document.querySelectorAll('.tab')) tab.addEventListener('click', () => showTab(tab.dataset.tab));
     for (const tile of document.querySelectorAll('.tile')) tile.addEventListener('click', () => {
       if (!S.results) return;
@@ -938,7 +1539,7 @@
       const box = event.target;
       if (!S.draft || box.type === 'file' || ['confirmed', 'control', 'protocol-mode'].includes(box.id)) return;
       if (box.dataset.shown !== undefined) box.classList.toggle('changed', box.value !== box.dataset.shown);
-      if ($('protocol-mode').value === '1' && box.dataset.key === 'Start_s') for (const key of ['Baseline_end_s', 'Stimulus_onset_s']) exactInput($('window-' + box.dataset.window + '-' + key), readInput(box, false));
+      if (box.dataset.frames) applyFrames(box.dataset.window); else if (box.id === 'sampling_hz') applyAllFrames();   // seconds always come from the frames
       draftChanged();
     });
     $('control').addEventListener('change', () => {
@@ -970,15 +1571,18 @@
     for (const key of FILES) {
       $(key + '-file').addEventListener('change', async () => {
         const file = $(key + '-file').files[0]; if (!file) return;
-        try { if (file.size > 8 * 1024 * 1024) throw new Error('Choose a CSV smaller than 8 MB.'); const content = await file.text(); S.draft[key] = { name: file.name, content }; fileNote(key); draftChanged(); }
+        try { if (file.size > 8 * 1024 * 1024) throw new Error('Choose a CSV smaller than 8 MB.'); const content = await file.text(); S.draft[key] = { name: file.name, content }; fileNote(key); if (key === 'timestamps') S.reapplyFrames = true; draftChanged(); }
         catch (error) { draftError(error); }
       });
-      $(key + '-clear').addEventListener('click', () => { S.draft[key] = null; $(key + '-file').value = ''; fileNote(key); draftChanged(); });
+      $(key + '-clear').addEventListener('click', () => { S.draft[key] = null; $(key + '-file').value = ''; fileNote(key); if (key === 'timestamps') S.reapplyFrames = true; draftChanged(); });
     }
     $('protocol-import').addEventListener('change', async () => {
       const file = $('protocol-import').files[0]; if (!file) return;
       try { let parsed; try { parsed = JSON.parse(await file.text()); } catch (bad) { throw new Error(file.name + ' is not a valid JSON file (' + bad.message + '). Choose a protocol exported from SimpleCa²⁺ or this page.'); }
-        const result = await api('protocol', { protocol: parsed }); const draft = collectDraft(); draft.protocol = result.protocol; S.protocolDrafts = {}; S.note = null; fillDraft(draft); $('confirmed').checked = false; draftChanged(); }
+        const timingOf = (protocol) => JSON.stringify([(protocol.windows || []).map((w) => [w.Role].concat(TIME_KEYS.map((k) => (w[k] == null || w[k] === '' ? null : Number(w[k]))))), protocol.field_overrides || null]);
+        const result = await api('protocol', { protocol: parsed }); const draft = collectDraft(), before = timingOf(draft.protocol); draft.protocol = result.protocol; S.protocolDrafts = {}; S.note = null; S.unlinked.clear(); fillDraft(draft);
+        const changed = timingOf(collectDraft().protocol) !== before; if (changed) $('confirmed').checked = false; draftChanged();
+        S.imported = { revision: S.revision, text: 'Imported “' + (result.protocol.name || file.name) + '”. ' + (changed ? 'Its timing replaced yours: check it, then tick the box.' : 'The timing is unchanged.') }; showState(); }
       catch (error) { draftError(error); }
       finally { $('protocol-import').value = ''; }
     });
@@ -988,7 +1592,7 @@
     });
     $('analyze').addEventListener('click', async () => {
       if (validateDraft(collectDraft()).errors.length) { $('validation').scrollIntoView({ block: 'nearest' }); return; }
-      if (!$('confirmed').checked) { S.note = 'Confirm the frame rate or timestamps, baseline and stimulus timing using the checkbox above.'; showState(); $('confirmed').focus(); return; }
+      if (!$('confirmed').checked) { S.note = 'Tick “Timing checked” first.'; showState(); $('confirmed').focus(); return; }
       if (!S.state.engineReady) { S.note = 'Choose “Set up analysis engine” once, then run the analysis.'; showState(); $('setup').focus(); return; }
       S.saving = true; S.note = null; showState();
       try { await syncDraft(); await send('analyze', { draft: collectDraft(), confirmed: true }); }
@@ -1006,14 +1610,14 @@
       try { await api('close', {}); S.closed = true; play(false); $('lost').textContent = 'This analysis page is closed. Saved results remain in the results folder. You can close this tab.'; $('lost').classList.add('on'); showState(); }
       catch (error) { draftError(error); }
     });
-    $('discard').addEventListener('click', () => { S.note = null; S.protocolDrafts = {}; fillDraft((S.results && S.results.appliedDraft) || S.initialDraft); $('confirmed').checked = false; for (const key of FILES) $(key + '-file').value = ''; draftChanged(); });
+    $('discard').addEventListener('click', () => { S.note = null; S.unlinked.clear(); S.protocolDrafts = {}; fillDraft((S.results && S.results.appliedDraft) || S.initialDraft); $('confirmed').checked = !!(S.results && S.results.appliedDraft); for (const key of FILES) $(key + '-file').value = ''; draftChanged(); });
     $('quality-filter').addEventListener('click', () => { S.qualityFlag = null; S.group = -1; showGroup(5); showQuality(); showTab('review'); });
     $('group').addEventListener('change', () => { if (Number($('group').value) !== 5 && S.qualityFlag) { S.qualityFlag = null; showQuality(); } });
     $('all-call-columns').addEventListener('change', () => table('table-calls', S.results.tables.calls));
     $('response-window').addEventListener('change', () => { S.window = $('response-window').value; updateWindow(); });
     $('metrics-table').addEventListener('change', showMetricTable);
     $('group').addEventListener('change', () => { S.group = Number($('group').value); listCells(); });
-    $('cell').addEventListener('change', () => pick($('cell').value));
+    $('cell').addEventListener('change', () => chooseCell($('cell').value));
     $('previous').addEventListener('click', () => stepCell(-1)); $('next').addEventListener('click', () => stepCell(1));
     $('every').addEventListener('change', () => { S.every = $('every').checked; Plot.dirty = true; drawPlot(); legend(); });
     $('view').addEventListener('change', () => { play(false); S.view = $('view').value; S.viewChosen = true; updateTransport(); requestFrame(); });
@@ -1026,7 +1630,7 @@
     $('palette').addEventListener('change', () => { S.palette = $('palette').value; drawHeatmap(); });
     $('range').addEventListener('change', () => { S.range = $('range').value; drawHeatmap(); });
     $('tall').addEventListener('change', () => { S.tall = $('tall').checked; drawHeatmap(); });
-    $('save-plot').addEventListener('click', () => save($('plot'), 'traces', drawPlot)); $('save-heatmap').addEventListener('click', () => save($('heatmap'), 'heatmap', drawHeatmap));
+    $('save-plot').addEventListener('click', () => save(plotPicture, plotKind(), 'plot-saved')); $('save-heatmap').addEventListener('click', () => save(heatmapPicture, 'heatmap', 'heatmap-saved'));
 
     const picture = $('picture');
     picture.addEventListener('wheel', (event) => { event.preventDefault(); const box = picture.getBoundingClientRect(), mx = event.clientX - box.left, my = event.clientY - box.top, before = place(picture.clientWidth, picture.clientHeight);
@@ -1036,7 +1640,7 @@
     window.addEventListener('mousemove', (event) => { if (!Pic.drag) return; if (Math.abs(event.clientX - Pic.drag.x) + Math.abs(event.clientY - Pic.drag.y) > 3) Pic.moved = true;
       if (Pic.moved) { Pic.panX += event.clientX - Pic.drag.x; Pic.panY += event.clientY - Pic.drag.y; Pic.drag = { x: event.clientX, y: event.clientY }; drawPicture(); } });
     window.addEventListener('mouseup', () => { Pic.drag = null; Plot.scrubbing = false; });
-    picture.addEventListener('click', (event) => { if (Pic.moved) return; const i = cellAt(event); if (i >= 0) pick(S.info.names[i]); });
+    picture.addEventListener('click', (event) => { if (Pic.moved) return; const i = cellAt(event); if (i >= 0) chooseCell(S.info.names[i]); });
     picture.addEventListener('dblclick', () => { Pic.zoom = 1; Pic.panX = Pic.panY = 0; drawPicture(); });
     picture.addEventListener('mousemove', (event) => { if (Pic.drag) return; const i = cellAt(event); tip(i >= 0 ? fullName(S.info.names[i]) + (callOf(S.info.names[i]) ? ' · ' + callOf(S.info.names[i]) : '') : '', event.clientX, event.clientY); });
     picture.addEventListener('mouseleave', () => tip(''));
@@ -1048,10 +1652,10 @@
       }
       const at = traceAt(event); if (!at) { tip(''); if (Plot.hover) { Plot.hover = null; drawPlot(); } return; }
       if (at.name !== Plot.hover) { Plot.hover = at.name; drawPlot(); }
-      tip(at.name ? fullName(at.name) + ' · ' + S.results.traces[at.name][at.index].toFixed(3) + ' at ' + S.results.time[at.index].toFixed(1) + ' s' + (callOf(at.name) ? ' · ' + callOf(at.name) : '') : '', event.clientX, event.clientY);
+      tip(at.name ? fullName(at.name) + ' · ' + shownTraces()[at.name][at.index].toFixed(3) + ' at ' + S.results.time[at.index].toFixed(1) + ' s' + (callOf(at.name) ? ' · ' + callOf(at.name) : '') : '', event.clientX, event.clientY);
     });
     plot.addEventListener('pointerleave', () => { tip(''); if (Plot.hover) { Plot.hover = null; drawPlot(); } });
-    plot.addEventListener('pointerdown', (event) => { const at = traceAt(event); if (!at) return; event.preventDefault(); if (at.name && at.name !== S.cell) pick(at.name); Plot.scrubbing = true; plot.setPointerCapture(event.pointerId); seek(at.time); });
+    plot.addEventListener('pointerdown', (event) => { const at = traceAt(event); if (!at) return; event.preventDefault(); if (at.name && at.name !== S.cell) chooseCell(at.name); Plot.scrubbing = true; plot.setPointerCapture(event.pointerId); seek(at.time); });
     for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) plot.addEventListener(type, () => { Plot.scrubbing = false; });
     plot.addEventListener('wheel', (event) => { const g = Plot.geom; if (!g) return; event.preventDefault(); const box = plot.getBoundingClientRect(), share01 = Math.max(0, Math.min(1, (event.clientX - box.left - g.L) / g.W));
       const centre = g.x0 + share01 * (g.x1 - g.x0), factor = Math.pow(1.0015, event.deltaY), span = Math.min(g.full1 - g.full0, Math.max((g.full1 - g.full0) / 60, (g.x1 - g.x0) * factor));
@@ -1060,7 +1664,7 @@
     plot.addEventListener('dblclick', () => { Plot.x0 = Plot.x1 = null; Plot.dirty = true; drawPlot(); });
 
     const heatmap = $('heatmap');
-    heatmap.addEventListener('click', (event) => { const at = heatmapAt(event); if (at) { pick(at.name); if (at.inside) setFrame(at.frame + 1, true); showTab('review'); } });
+    heatmap.addEventListener('click', (event) => { const at = heatmapAt(event); if (at) { chooseCell(at.name); if (at.inside) setFrame(at.frame + 1, true); showTab('review'); } });
     heatmap.addEventListener('mousemove', (event) => { const at = heatmapAt(event); if (!at) { tip(''); return; } const trace = S.results.traces[at.name], v = trace ? trace[at.frame] : null;
       tip(fullName(at.name) + (callOf(at.name) ? ' · ' + callOf(at.name) : '') + (at.inside ? ' · ' + (at.gap ? 'acquisition gap; nearest frame' : finite(v) ? v.toFixed(3) : 'no value') + ' at ' + S.results.time[at.frame].toFixed(1) + ' s' : ''), event.clientX, event.clientY); });
     heatmap.addEventListener('mouseleave', () => tip(''));

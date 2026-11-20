@@ -1,5 +1,156 @@
 # Changelog
 
+## 2026.11.20.17
+
+- **Movement is measured against the frames the cells are chosen on.** Build .16 compared every frame with where the field sits for most of the recording, so on a recording that drifts slowly it called the first hundred frames "moved", although those are the frames the outlines were drawn on. While cells are chosen blind, the message now reads, for example, "The field sits about 4 px from where the cells are chosen (frames 1–20) from frame 139 on."
+- The shift is estimated between the 4-pixel steps of the check, with the smooth lamp light and haze taken off first, so a slow drift is no longer reported as a sudden step.
+- Worded by size: from 2.5 pixels the field "sits about N px from…" or "drifted by about N px"; from 8 pixels it "moved" and the outlines are no longer on the same cells. Under 2.5 pixels nothing is said. Only movement of 8 pixels or more is left out of the resting picture and offered a repair on the Step 4 page.
+- When the frames the cells are chosen on moved themselves, the message says that their picture is smeared (C1 Run3 KCl: 18 px during frames 1–6, settling by frame 15, chosen on frames 1–20).
+- A run of noisy frames is reported as one piece ("34 frames between 2 and 119") instead of a list of fragments.
+- Measured with it: P2 Run2 capsaicin drifts about 4 px over the recording, C2 Run1 about 6 px with a jolt at frame 8, P3 Run2 and C3 Run2 under 2 px.
+
+## 2026.11.20.16
+
+- **Movement check.** When a recording is opened the plugin measures, frame by frame, how far the field is displaced from where it sits for most of the recording (on a picture reduced four times; shifts of 4 pixels or more count; about 3 s for 300 frames). Nothing is corrected. When frames moved, the Recording card, the log and `what_was_done.txt` say which ("The field moved (about 16 px) during frames 1–10").
+- Step 4 page: when F₀, the baseline or the response window include moved frames, the page says so and offers the frames after the movement in one click ("Use 11–20"). The automatic F₀ rule leaves moved frames out when at least 3 frames remain. The note under the movie says when the frame on screen is a displaced one.
+- The resting picture behind "Response in magenta" and "Change from baseline" is made without the moved frames, so a movement at the start no longer leaves edges on every later frame.
+- **Blind detection: outlines of the first picture that are never shown no longer hide outlines of the second.** The merge compared every outline of picture 2 with every outline of picture 1, including those the size rule drops afterwards. On one recording a single 6445-pixel outline hid six cells and an 11-pixel speck hid a 1731-pixel one. Now only picture-1 outlines that are shown (150 to 6000 pixels, not a strip on another outline) count. Re-run on saved outlines: 7 cell-sized outlines recovered on P2 Run2 capsaicin, 4 on P3 Run2, 4 on C2 Run1; none lost.
+- Very bright suggestions ("precipitate?") are drawn as a red 2-pixel line. The orange 1-pixel line ran along the bright edge it traced and could not be seen.
+- Not in this build: measurements of moved frames are still taken at the outlines' fixed places (no registration), and Fiji's own pictures (all frames, before the stimulus, response) still average moved frames. The message says so.
+
+## 2026.11.20.15
+
+Step 4 page, stimulus timing:
+
+- **One input, in frames: "Stimulus added after frame".** F₀ frames, the baseline and the response window follow it and are shown beside it as dashed chips ("1–20", "same as F₀", "21–300 (end)"). A click on a chip gives that row two frame boxes of its own; **auto** puts it back. **Use frame N** sets the stimulus to the movie frame on screen.
+- Windows are defined by frame. The seconds sent to the analysis are taken from the recording's own frame times (the stimulus is the time of the first frame after it; a baseline runs up to, not including, the frame after its last frame; the response window runs to its last frame, both ends included), never from a typed round number. The same entry gives the same frames whatever the frame interval, and "to the end" always means the last frame. The protocol file format is unchanged.
+- New starting rule: F₀ is the last 20 frames before the stimulus (all of them when there are fewer), and the baseline is the same frames as F₀. Before, the starting baseline was every frame from the start of the recording.
+- The frames used to choose cells in Fiji are shown as their own line ("Cells chosen in Fiji on frames 1–113") and no longer decide the stimulus once an analysis has been run: the next recording starts from the stimulus frame of your last analysis ("Same as your last recording"). When the last session's settings for this recording are filled in, the page says so and offers **Use Fiji's values**.
+- When the frames used to choose cells run past the stimulus, the page says so: "Cells were chosen on frames 1–74. Frames 21–74 are after the stimulus, so these cells were not chosen blind to it."
+- A row set separately that is wrong gets one message beside it, naming the frames, with a one-click repair ("baseline frames 10–12 come after the stimulus. Use 1–9"). A setting that guarantees no call for any cell (a baseline of fewer frames than the rule needs, a response window past the last frame) now stops the run instead of warning that cells "may" be unscorable. A control that was just ticked asks for its one number in one message.
+- The tick box reads back what it confirms ("Timing checked: 1 frame/s, stimulus after frame 20"). When the typed frame rate differs from the recording's own, the page shows the file's rate with **Use it**.
+- A protocol import says what it did, and unticks the box only when the timing changed. A run in which no cell got a call says so in the headline and the status line, without "0 of 0 evaluable cells" or "including 0 responders".
+
+Step 4 page, layout and wording:
+
+- The settings column is one **Timing** card that fits without the 300-pixel scrolling box: every control the same size on one right edge; the rule is one line that opens its settings; stimulus name, rule type, protocol file, recorded timestamps, diagnostic files, **Show explanations** and **View log** are under **Advanced**; condition and biological unit are under **Labels for the output**. The Run box is the tick, the button and one status line.
+- Shorter words throughout: "response window" (no "strip along the top"), "baseline", "Background removed", "Raw gray levels", "Done." The legend, menus, notes and messages lost their parentheses and second sentences. One name per thing: baseline and response window, in the settings, the legend and the messages.
+- The buttons under the movie (Save picture, Download, Save frames…) are dark with light text; they looked switched off. **Save frames…** opens a small panel on the page instead of the browser's pop-up boxes. Pictures and frames follow **Options** (width in inches × dpi, up to four times the recorded pixels), and the picture has its own Options button; outline thickness moved there.
+- **Y axis** boxes beside the plot buttons set the plot's vertical limits (empty = automatic), on screen and in saved plots.
+- One **Signal** setting for the plot and the Processed data table. "All traces" sits with the plot buttons. The Results folder button is beside the results; "Analysis engine ready" shows only when the engine is not ready.
+- **Background areas** in the View menu: the pixels taken as each cell's background, in blue, on the all-frames picture.
+- Each view has colour swatches under the picture (green and magenta for "Response in magenta", and so on) instead of a sentence.
+- **"Response in magenta" and "Change from baseline" no longer show noise as a response.** A change is drawn at full strength only from twice what a resting frame shows by itself, so a recording in which nothing responds stays dark. A brightening beside an equal darkening (a bright object that shifted) is taken out. Both views count from each frame's own middle value. Display only.
+
+Choosing cells:
+
+- **Outlines too thin to be a cell are no longer accepted by themselves.** Cellpose sometimes draws a strip along the rim of a cell it has already outlined (seen as cells 78 and 79 on one cell). An outline under 4 pixels wide on average, or with roundness under 0.2, is left out when it lies along another outline, and otherwise kept as "unsure" (never accepted without a click). The log gives both counts.
+- **Cell IDs are the same in every session.** A new outline's ID is worked out from the outline itself (its place and pixels), so tables from two sessions on the same outlines can be matched by cell. Before, every Fiji session gave the same cells new random IDs.
+
+Also in this build: the linked-timing work of the cloud session is merged (its seconds boxes are replaced by the frame editor above; its counting of baseline samples and its windows under the frame slider are kept). The plugin window stays an ordinary window.
+
+## 2026.11.20.14
+
+- **Save options for pictures** on the Step 4 page (Options, beside Save plot and Save heatmap): format **PNG or TIFF**, size (6 × 4, 7 × 5, 8 × 6, 10 × 7.5 or 12 × 8 inches, or as on screen), resolution **150, 300 or 600 dpi**, and TIFF compression **LZW, ZIP or none**. The resolution is written into the file, so it opens at the chosen size. A saved plot now carries its title and legend and leaves out the time cursor. Download gives the same file as Save. The choices are remembered. PDF and SVG are not offered yet.
+- **The colour picture is one colour photo.** `..._picture_colour.tif` used to be a three-channel stack that only ImageJ shows in colour; it is now an ordinary colour image with the same display ranges. A second file, `..._picture_colour_cells_outlined.png`, has the measured cells outlined in white, a key to the colours (green cells, yellow very bright objects, magenta response) and a 100 µm bar.
+- **Save picture** on the Step 4 page saves the whole picture in the view on screen (the colour overview or a movie frame), with the outlines shown and a key to the colours and the outline colours, in the chosen format and resolution.
+- **Save frames…** on the Step 4 page writes every Nth frame (you type N; 50 to start with) of the movie view on screen as its own picture, in a folder of its own inside `plots`. Each carries its frame number, time and view in the corner and the outlines shown on the page, in the format, resolution and compression chosen under Options (for example LZW TIFF), with a small file saying what the outline colours mean.
+- A small menu beside "All outlines" sets the thickness of the cell outlines (thin, normal, thick, very thick), on screen and in saved pictures and frames.
+- **The heatmap has a legend**: the colour scale with its range, the strip beside the Cell axis (responded, did not respond, excluded or unscorable), the gray rows, the selected-cell marker and the stimulus line. The call key is also drawn into the saved heatmap.
+- **ΔF/F₀ of raw values** in the Signal menus (plot and Processed data): each cell's raw trace against its own mean over the F₀ frames, with no background removed. For display and export; the response calls still use the background-corrected ΔF/F₀.
+
+## 2026.11.20.13
+
+- **Processed data tab** on the Step 4 page, as in SimpleCa: one row per frame, one column per cell, for ΔF/F₀, gray levels above background or raw gray values, 50 frames at a time on screen, with **Save table** (the whole table as CSV into the `plots` folder) and **Download CSV**.
+
+- Step 4 page, smaller fixes: the page says when its settings were filled in from Fiji or from the last session on this recording; "Saved in plots…" notes clear when a new analysis finishes; a save that cannot reach Fiji says so; a one-cell plot's file name carries the cell ("Cell_12" and the start of its ID) whatever signal is shown.
+
+- **Metrics summary** on the Step 4 page, as in SimpleCa: the Metrics tab opens on mean ± SEM and number of cells for every metric, for all cells, by response call, and by how the cells were chosen. **Save table** and **Download CSV** work for it (with SD) and for every other table on that tab.
+- The top of the Step 4 page is one compact row (the heading goes once there are results, the tiles are a single line), and a handle under the movie and the plot sets their height. The routine playback hint is with the explanations.
+
+Step 2, from a look at the window after suggestions were accepted:
+
+- **Add cells that respond…** and **Continue to measure** sit under Suggest and Accept, so the step the "Next:" line names is on screen without scrolling.
+- When the outlines are ready, the progress block shrinks to its result line; stages, timings and settings stay under Details. The result is no longer repeated further down.
+- The empty trace frame is hidden while cells are chosen blind.
+- The count names the orange outlines "very bright (precipitate?)", as the legend does, and the legend has no gap when "responds" is hidden.
+
+## 2026.11.20.12
+
+- The heatmap opens in **plasma**, the colours SimpleCa uses, instead of blue–white–red. Values below zero then take the darkest colour; choose Blue–white–red to see them.
+- The Step 4 plot opens on the **Average** alone, chosen with three buttons (Average, One cell + average, Responders vs non-responders) instead of a menu. In 2026.11.20.11 the average was there but behind a menu that still opened on one cell, and it was missed.
+
+## 2026.11.20.11
+
+Step 4 page:
+
+- **The plot opens on the average alone.** Three buttons choose what it shows: **Average** (mean ± SEM of all cells, or of the group chosen under Show, and nothing else; the default), **One cell + average** (the selected cell with its thresholds, as before) and **Responders vs non-responders**. Picking a cell never changes what the plot shows. "All traces" is off until ticked.
+- **Corrected or uncorrected signal.** Signal switches the plot between ΔF/F₀, gray levels above background and raw gray values (not background corrected), read from the measurement's own tables. Excluded cells, which have no ΔF/F₀ trace, can be seen this way.
+- **Save plot** writes the picture, the numbers behind it (CSV) and how it was made into a `plots` folder beside the tables and says where, with an Open folder link. Download still goes through the browser.
+- **Two more movie views.** "Recording, background removed" takes the smooth background off every frame, and "Response in magenta" shows that in green with the rise above the baseline frames in magenta, so responding cells turn pink. Each frame's own median counts as "no change", so the slow fade of the field does not hide the response. Display only.
+- **Resizable panes.** Drag the edge between the settings and the work area, and between the movie and the plot; double-click to reset. The sizes are remembered.
+- **More room for the data.** The movie and plot get at least 54 % of the window's height (the page scrolls when needed), the tiles are smaller, a zero count takes little room, the green "Showing the completed analysis" banner appears only when settings were changed afterwards, and the Run box is shorter so more of the settings is visible.
+- **The headline shows how the cells were chosen.** When cells were chosen blind and others added afterwards, the first tile leads with % responding of the blind cells, with the added cells and all cells beside it.
+- **Fewer false alarms.** The note that the 10 % rise level lies below the baseline SD concerns the rise-time metric, not the call; it no longer counts as a quality flag (on P3 Run2 it flagged 149 of 238 cells). A warning worded two ways is shown once.
+- The plot's legend names everything drawn (baseline band, response window, the run that counted, each dashed level), the response window is a strip along the top instead of a fill, and a dashed line marks when the stimulus was added.
+- Tables show "Cell 1" instead of the long ID (the ID is in the tooltip) and leave out columns that say the same on every row.
+- Explanations under the settings and plots are hidden by default; "Show explanations" in the header brings them back.
+- "Discard pending changes" keeps the confirmation tick when it returns to the settings of the completed analysis. Cancel shows only while an analysis runs. The response-window chooser shows only when there are two windows.
+
+Plugin:
+
+- The ROI registry records each cell's own selection basis (chosen blind, or added afterwards), and the measurement's basis says "Blind on frames a-b, then response-assisted: n chosen blind, m added afterwards". Before, every cell of such a measurement was listed as response-assisted.
+- Cells count as chosen blind when they were held, unchanged, at the moment blind choosing ended: when the response or the all-frames picture was first shown.
+
+## 2026.11.20.10
+
+- **Step 2 says what to do next.** A "Next:" line at the top of Step 2 always names the one thing to do, from what has been done so far: Suggest cells, Accept likely, click the dashed outlines that are cells, then **Add cells that respond…** or **Continue to measure**.
+- **Add cells that respond…** (blind only, beside Continue to measure) shows the response and looks for the cells that only show when they respond, without a second press. Switching Picture to Response (magenta) after blind suggestions does the same. Before, the outlines on screen stayed the blind ones until Suggest cells again was pressed, which looked finished and was not.
+- Switching to another picture and suggesting again reuses saved outlines of that picture; a new Cellpose run is made only when the outlines on screen came from the same kind of picture.
+- Legend kinds that were switched off come back on when new suggestions arrive, and the Next line says which kinds are hidden.
+- With the response shown, the button reads **Accept responding and likely (n)**.
+- The result line for blind suggestions is short again ("382 suggestions from two pictures; Cellpose took 20 s and 19 s (GPU)"), so it is no longer cut off. The record keeps both commands and timings.
+- The question shown before the response appears now says what happens to the cells already chosen and to the ones added afterwards.
+
+## 2026.11.20.9
+
+- **Responding cells are no longer graded away.** An outline that rises on its own at the stimulus is now graded **responds** even when part of it is very bright (precipitate does not respond). Before, such cells were graded unsure or "precipitate?" and left out by **Accept likely**. On P3 Run2 ATP, 17 of 58 clearly responding areas had no chosen cell after Accept likely; with the new rule 6 are left (4 at the picture's edge, 1 whose rise is no larger than its surroundings, 1 real precipitate). The rise must also be at least 5 % of the outline's brightness. Checked on this one recording only; blind grades are unchanged.
+- **Blind and response-assisted choosing can be used together.** Choose cells blind first, then switch to **Response (magenta)** and add what is only visible when it responds. Each cell is recorded as chosen blind, or as added (or reshaped) after the response was shown (`..._cells_chosen_blind_or_after_response.csv`). When Step 4 finishes it gives % responding for each group and for all cells (`..._responders_by_how_chosen_<run>.csv`). Only the blind group is free of selection on the response.
+- **Step 4 starts from what you confirmed in Fiji.** The frames confirmed for blind selection become the baseline, and the stimulus is taken to follow their last frame (a range longer than 30 frames gives the last 20 as the resting baseline). Without them, the frames before the rise the plugin found are used, as before. The page says where its starting values come from.
+- Step 4 remembers the settings last used for a recording (`step4_last_settings.json` beside its tables) and fills them in the next time that recording is opened with the same frames from Fiji.
+- Fix: the Step 4 warning "the response baseline holds 0 samples … every cell will be unscorable" appeared on every recording, whatever the baseline. The samples were miscounted; the analysis itself was not affected.
+- The frames dialog for blind selection says what the frames are used for, and offers the longer range when the range typed ends 20 or more frames before the one the plugin found (fewer frames give a noisier picture and fewer cells).
+- **The legend is a switch.** Click a legend entry (your cells, background, responds, likely a cell, unsure, precipitate?) to hide or show that kind on the picture; double-click to see only that kind, and again for everything. Hidden suggestions cannot be accepted by a click.
+- The plugin window is an ordinary window again: clicking a picture or another program puts it behind. It no longer stays above Fiji's other windows.
+
+## 2026.11.20.8
+
+- **Blind detection uses two pictures.** Cellpose now runs twice on the pre-stimulus picture: once shown from 0 to 2 gray levels and once from 0 to 8, brighter pixels capped. Every outline from the 0-2 picture is kept. An outline from the 0-8 picture is added when it shares less than 10 % of the smaller outline's area with every 0-2 outline. Neither picture holds anything of the response, and the grades are unchanged.
+- Why: 0-2 alone was best only on P3 Run2, where it was chosen. On four ATP recordings of 18 Nov 2026 (real Cellpose), of the response-assisted outlines that could be cells, the two pictures together found 68 / 95 / 55 / 62 % (C2 Run1 / C3 Run2 / P2 Run1 / P3 Run2). That compares with 46 / 94 / 34 / 50 % for 0-2 alone and 57 / 86 / 45 / 36 % for 0-8 alone. Of the audited cells it found 167 / 128 / 114 / 156 of 240 / 164 / 210 / 223. A cap taken from each picture's own 90th percentile was never better than the best fixed cap. The cost is 25-55 % more suggestions to review on C2, P2 and P3.
+- The cells blind detection misses still rise clearly more often than the ones it finds: by about 10-12 points on P2 Run1 and P3 Run2 under every cap tried, and by 4 points on C2 Run1 with the two pictures.
+- Each picture has its own folder in `automatic_outlines_blind/`, and saved outlines are reused per picture. `detection_picture.txt` records how many outlines came from each picture, the evidence table has a `found_on_picture_gray_levels` column, and `..._suggestions_rois.zip` holds every suggestion, named as in the table. The record (`what_was_done.txt`) gives both Cellpose commands and the merge counts.
+- The progress bar gives each Cellpose run half of the detection part (0-42 % and 42-84 %), so it keeps moving during the second run.
+- Response-assisted and all-frames detection, the sensitivity check, measurements and Step 4 are unchanged.
+
+## 2026.11.20.7
+
+- **Blind cell selection for % responding.** Step 1 now asks how cells are chosen: **Before the stimulus only (blind)**, the default, **All frames**, or **All frames, with the response in magenta**. The magenta choice stays off by default.
+- Blind: you confirm the last frame before the stimulus. The plugin offers the frames that end well before the rise it finds, and asks you to type it when no response is found. The picture shows those frames only, with nothing in the magenta channel. Cellpose gets that picture only, never the response (saved in `automatic_outlines_blind/` with `detection_picture.txt`). Suggestions are graded on shape, size and brightness in that picture, so no suggestion is graded "responds". Hovering shows what a cell is but no trace. Changing the frames after the stimulus changes nothing about blind detection.
+- The blind picture for Cellpose is shown from 0 to 2 gray levels with brighter pixels capped, so very bright objects cannot flatten dim cells. On P3 Run2 ATP (real Cellpose), of 260 response-assisted outlines that could be cells, the pre-stimulus picture found 94 at the old 0–8 range and 131 at 0–2. Of the 182 cells accepted there on the magenta picture, it found 59 and 91. A square root on the levels, or dividing by the lamp light, found fewer. Not yet tried on other recordings.
+- Step 2's **Baseline…** view is replaced by **Before stimulus (blind)…**. Before, it changed only the picture on screen while Cellpose still got the all-frames picture. It now switches the whole selection to blind. Suggestions made with the response are dropped from view when switching to blind.
+- The recorded selection basis is `Pre-stimulus, blind (frames a-b)` only if nothing of the response (magenta, a trace, the analysis page) had been shown before the outlines were final. Outlines changed after that are recorded as `Pre-stimulus picture (frames a-b), not blind: …`. Showing magenta from the blind view asks first.
+- **Sensitivity check** (Step 3 tick box, blind only, on by default): after measuring, response-assisted detection runs once for comparison, reusing saved outlines when the picture matches. The report gives how many of its outlines that could be cells the blind detection also found, by grade, and how many coincide with measured cells. It is added to `what_was_done.txt`, with `..._sensitivity_check.csv` and the missed outlines as `..._sensitivity_check_missed_RoiSet.zip`. The comparison outlines are never added to the cells or measured.
+- The plugin window no longer floats over other programs when the plugin is started while another program is in front. It stays above Fiji's own windows only while Fiji is in use, and drops back within about two seconds when it is not.
+- A copy newer than the latest release (a test build) now says so on the first screen instead of "You are up to date".
+- Measurements, background rules, response thresholds and Step 4 are unchanged. The response-assisted and all-frames detection pictures are unchanged (checked byte for byte against the saved P3 Run2 picture).
+- Fix a false Step 4 warning introduced in 2026.11.20.6: "the response baseline holds 0 samples … every cell will be unscorable" appeared for any baseline. Baseline samples are now counted as the analysis engine counts them (baseline start ≤ frame time < baseline end), and the warning names the frames.
+- Step 4 stimulus timing: **Noise baseline to** and **Score response from** now follow **Stimulus added at** by default and are shown as "= stimulus time". Changing the stimulus time, or pressing **Use frame N**, moves them with it, using the identical stored number. **Set separately** gives a field its own value and **Link to stimulus time** reverses it. A protocol whose values differ opens with those fields separate. The protocol file format is unchanged. The legacy rule works the same way, with the stimulus time as the one editable field.
+- Step 4: each window shows the frames it will use, for example "F₀: frames 1–20. Noise baseline: frames 1–20 (20 samples). Stimulus: between frames 20 and 21. Scoring: frames 21–300.", and the noise baseline, stimulus and scored frames of the primary stimulus are drawn under the frame slider.
+- Step 4: when two time fields disagree, both are marked and one message sits beside the field to change, stating both values and offering the repair, for example "Set to 20 s". A problem is described once: the plugin's general message is not added to the page's specific one.
+- Step 4: a typed time that reads the same as a frame's time is stored as that frame's exact time, so a retyped value no longer differs from an untouched one by a hidden fraction of a second.
+- Step 4: the warning that the F₀ frames reach the stimulus offers **Use frames 1–N**. The starting stimulus time is labelled as a suggestion until it is changed. "Resting baseline frames" is now **F₀ frames (set the ΔF/F₀ zero)** and "Response baseline" is **Noise baseline**; the fields are in the order they occur in time.
+
+
 ## 2026.11.20.6
 
 - Step 2 has a **Picture** switch: **All frames**, **Baseline…** and **Response (magenta)**. Magenta can now be turned on after the recording is open; the response is looked for at that moment, exactly as the first screen's option does, and the picture changes in place so outlines and clicks keep working. The first screen's option still works and still starts unticked.

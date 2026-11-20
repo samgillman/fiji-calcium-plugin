@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.6.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.17.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -55,9 +55,19 @@ from the raw file to a table of gray values per cell:
 
   1. You choose the recording and a folder for the results.
   2. It makes the cells visible: cells are green and very bright objects (precipitate, debris)
-     are yellow. In Step 2, Picture switches between All frames, Baseline… (frames before the
-     stimulus, so a cell looks the same whether or not it responds) and Response (magenta), which
-     looks for the response when first chosen. Magenta starts off; the view in use is recorded.
+     are yellow. Step 1 asks how cells are chosen:
+       - Before the stimulus only (blind), the default and the choice for % responding. You confirm
+         the last frame before the stimulus (the plugin offers the frames that end well before the
+         rise it finds). The picture, the suggested outlines and their grades then come from those
+         frames only; the response is never shown, traces are hidden while choosing, and no
+         suggestion is graded "responds". Whether a cell is chosen cannot depend on its response.
+       - All frames: the average of all frames, which includes the frames after the stimulus.
+       - All frames with the response in magenta: dim cells are then found only if they respond,
+         which raises % responding. Use it for the size or timing of responses, not for % responding.
+     In Step 2, Picture switches between All frames, Before stimulus (blind)… and Response (magenta).
+     The way cells were chosen is recorded with every measurement. "Pre-stimulus, blind" is recorded
+     only if nothing of the response (magenta, a trace, Step 4) was shown before the outlines were
+     final; outlines changed after that are recorded as not blind.
      "‹ Change recording" goes back to the first screen; "‹ Back" buttons move between steps.
   3. You choose the cells: draw around each one, or let it suggest outlines and click the real cells.
      For every cell it finds a background area right next to that cell and shows it in blue.
@@ -105,7 +115,7 @@ HOW TO USE IT
              thick cyan    responds on its own after the stimulus
              thin cyan     likely a cell (dim, smooth, brighter than its surroundings)
              grey dashes   unsure
-             orange        very bright: probably precipitate
+             red           very bright: probably precipitate
          Move the mouse over an outline to read the measurements behind its grade and to see its
          gray value over time. "Accept likely" takes every cyan outline at once; go
          through them afterwards and remove the wrong ones.
@@ -152,11 +162,15 @@ In the results folder, in a subfolder named after the recording:
                                                   whether it is within 40 pixels of the picture's edge
   ..._cells_RoiSet.zip                            your cell outlines (open with ROI Manager > More > Open)
   ..._cells_and_background_areas.png              check picture: cells yellow, background blue
-  ..._picture_all_frames.tif, ..._picture_colour.tif
+  ..._picture_all_frames.tif, ..._picture_colour.tif  (the colour picture is one ordinary colour image)
+  ..._picture_colour_cells_outlined.png           the colour picture with your cells outlined, a key to the
+                                                  colours and a 100 micrometre bar
   ..._what_was_done.txt                           every step and setting that was used
   automatic_outlines/                             only if suggestions were used: the picture given to
                                                   Cellpose, its outlines, its messages, and a table of
                                                   every suggestion with its grade and measurements
+  automatic_outlines_blind/                       the same for blind suggestions, one folder per
+                                                  picture (0-2 and 0-8 gray levels); see Blind picture
 
 If the box is ticked, a background-corrected copy of the movie also opens in Fiji (32-bit). It is
 saved only if the second box is ticked; the file is large (about 1.7 GB for 300 frames of 1388 x 1040).
@@ -175,6 +189,73 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        the colour picture simply has no magenta.
   Colour picture       green = all-frames picture (0 to 8); red = the same picture shown 10 to 30, so
                        only very bright objects get red and turn yellow; magenta = response picture.
+  Blind picture        The same steps as the all-frames picture on the frames before the stimulus only
+                       (Z Project Sum Slices of those frames, Divide, Subtract Background 150, Gaussian
+                       Blur 1.5). Cellpose runs twice on it, never on the response: once shown from
+                       0 to 2 gray levels and once from 0 to 8, brighter pixels capped. The 0-2 picture
+                       keeps precipitate and rounded cells from flattening the dim cells; the 0-8 picture
+                       keeps the brighter cells whole. Every outline from the 0-2 picture is kept. An
+                       outline from the 0-8 picture is added when it shares less than 10 % of the
+                       smaller outline's area with every 0-2 outline. Suggestions are graded on the
+                       pre-stimulus picture (size, brightness, contrast).
+                       Saved in automatic_outlines_blind/: one folder per picture
+                       (picture_1_shown_0_to_2_gray_levels, picture_2_shown_0_to_8_gray_levels) with
+                       the picture, Cellpose's outlines and messages; detection_picture.txt (how many
+                       outlines came from each picture); ..._suggestions_rois.zip (all suggestions,
+                       named as in the table); and the table, whose last column says which picture
+                       each suggestion came from.
+                       Tested on four ATP recordings of 18 Nov 2026: of the response-assisted outlines
+                       that could be cells, the two pictures together found 68 / 95 / 55 / 62 %
+                       (C2 Run1 / C3 Run2 / P2 Run1 / P3 Run2), against 46 / 94 / 34 / 50 % with 0-2
+                       alone and 57 / 86 / 45 / 36 % with 0-8 alone. No single cap was best on all
+                       four. The cost is 25-55 % more suggestions to review.
+  Order in Step 2      The blue "Next:" line at the top of Step 2 always names the one thing to do:
+                       Suggest cells, Accept likely, click the dashed outlines that are cells, then
+                       Add cells that respond… (blind only) or Continue to measure.
+  Blind, then magenta  Blind and response-assisted choosing can be used together: choose cells blind, then
+                       press Add cells that respond… (the same as switching Picture to Response
+                       (magenta)); the plugin then looks for the cells that are only visible when
+                       they respond, by itself. Every cell is recorded as chosen blind, or as added (or reshaped)
+                       after the response was shown (..._cells_chosen_blind_or_after_response.csv). When
+                       Step 4 finishes it gives % responding for each group and for all cells. Only the
+                       blind group is free of selection on the response: the response picture can add
+                       dim cells that respond, never dim cells that do not.
+  Grades               responds = the outline rises on its own at the stimulus (more than 0.5 gray levels,
+                       1.25 times its surroundings, and 5 % of its own brightness), also when part of it
+                       is very bright; likely = dim, even, clearly brighter than its surroundings;
+                       precipitate? = very bright and no rise of its own; unsure = the rest.
+  Legend               Click a legend entry to hide or show that kind on the picture; double-click to see
+                       only that kind (again for everything).
+  Step 4 start values  The frames confirmed for blind selection become the baseline and the stimulus is
+                       taken to follow their last frame (more than 30 frames: the last 20 are the resting
+                       baseline). Otherwise the frames before the rise the plugin found. The settings
+                       last used for a recording are filled in again next time (step4_last_settings.json).
+  Step 4 page          The plot opens on the Average: the mean trace (with SEM) of all cells, or of the
+                       group chosen under Show, and nothing else. The buttons above it switch to
+                       "One cell + average" or "Responders vs non-responders".
+                       Signal: dF/F0, gray levels above background, or raw gray values (not corrected).
+                       Save plot puts the picture, its numbers (CSV) and how it was made into a "plots"
+                       folder beside the tables. Options (beside Save) sets the format (PNG or TIFF),
+                       the size in inches, the resolution (150, 300 or 600 dpi, recorded in the file)
+                       and the TIFF compression (LZW, ZIP or none; LZW and ZIP lose nothing).
+                       Save picture saves the view on screen with the outlines shown and a colour key;
+                       Save frames… saves every Nth frame of a movie view, each labelled with its
+                       frame and time. Signal also offers dF/F0 of the raw values. View: the recording as recorded, with the background
+                       removed, or with the response in magenta (green cells turn pink as they rise;
+                       display only). Drag the edges between the settings, the movie and the plot to
+                       resize them. "Show explanations" in the header turns the help texts on.
+  Sensitivity check    After a blind measurement (tick box in Step 3, on by default) the response-
+                       assisted detection runs once for comparison (saved outlines are reused). The
+                       report says how many of its outlines that could be cells (graded responds,
+                       likely or unsure) the blind detection also found, by grade. A response-assisted
+                       outline counts as found when a blind outline contains its centre or it contains
+                       the centre of a blind outline. Its outlines are never added to the cells or
+                       measured. Files: ..._sensitivity_check.csv and
+                       ..._sensitivity_check_missed_RoiSet.zip (the missed ones that could be cells; open it in the
+                       ROI Manager). If most are
+                       found, the blind picture picks up dim cells well. If many are missed, % responding
+                       is still unbiased only if cells that are dim at rest respond at the same rate as
+                       the others: state that assumption with the result.
   Background of a cell A band from 6 to 40 pixels outside the cell's outline, without other cells
                        (widened by 4 pixels) and without bright objects. Of the pixels left, the
                        darkest quarter (ranked in the all-frames picture) is that cell's background.

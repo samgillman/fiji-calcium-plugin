@@ -194,8 +194,8 @@ details[open] > summary { margin-bottom: 8px; }
 .caption > span { overflow: visible; }
 @media (max-height: 850px) and (min-width: 801px) {
   .layout { flex: none; min-height: 0; align-items: flex-start; }
-  aside { position: sticky; top: 10px; max-height: calc(100vh - 20px); }
-  .settings-scroll { flex-basis: 300px; min-height: 180px; }
+  aside { position: sticky; top: 10px; max-height: calc(100vh - 78px); }
+  .settings-scroll { flex: 0 1 auto; min-height: 180px; }
   main { min-height: 720px; }
   .panel { min-height: 350px; }
   .scroller { min-height: 300px; max-height: 65vh; }
@@ -237,3 +237,141 @@ details[open] > summary { margin-bottom: 8px; }
 .flag-filter:hover { text-decoration: underline; }
 .flag-filter.on { font-weight: 600; }
 .from-frame { display: block; margin: -2px 0 8px auto; }
+
+/* Explanations can be switched off (header button); warnings, results and state lines always stay. */
+body:not(.show-help) .help { display: none !important; }
+/* Draggable edges: between the settings and the work area, and between the movie and the plot. */
+.layout { gap: 0; }
+aside { flex: 0 0 var(--side-w, 350px); }
+.resizer { flex: 0 0 16px; align-self: stretch; position: relative; cursor: col-resize; touch-action: none; }
+.resizer::after { content: ''; position: absolute; top: 50%; left: 50%; width: 4px; height: 48px; margin: -24px 0 0 -2px; border-radius: 3px; background: #C5CED8; }
+.resizer:hover::after, .resizer.on::after { background: var(--blue); }
+body.no-side #resize-side { display: none; }
+body.dragging { cursor: col-resize; user-select: none; -webkit-user-select: none; }
+body.has-results .split { grid-template-columns: minmax(200px, var(--pic-w, 47%)) 14px minmax(240px, 1fr); gap: 0; }
+body:not(.has-results) #resize-split { display: none; }
+#resize-split { flex: none; }
+.plot-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 8px 12px 0; flex: none; }
+.plot-head label { display: flex; align-items: center; gap: 6px; color: var(--gray-600); } .plot-head label.check { color: inherit; }
+.plot-head select { max-width: 260px; }
+.save-note { color: var(--good); font-size: 12px; overflow-wrap: anywhere; } .save-note.bad { color: var(--bad); }
+.save-note button { background: none; border: 0; padding: 0 0 0 6px; color: var(--blue-dark, #1F5F7A); text-decoration: underline; cursor: pointer; font: inherit; }
+@media (max-width: 1150px) { aside { flex-basis: var(--side-w, 320px); } }
+@media (max-width: 800px) {
+  .layout { gap: 12px; } .resizer { display: none; }
+  .split, body.has-results .split { grid-template-columns: 1fr; gap: 12px; }
+}
+
+/* More room for the movie and the plot, less for the page's own furniture. */
+.split { min-height: max(350px, 54vh); }
+.workspace-heading h1 { font-size: 17px; margin: 0; }
+.tiles { display: flex; gap: 10px; flex-wrap: wrap; }
+.tile { flex: 1 1 0; min-width: 120px; padding: 7px 12px; } .tile.big { flex: 3 1 0; border-left: 4px solid var(--blue); }
+.tile b { font-size: 21px; } .tile.big span { line-height: 1.35; }
+.tile.on { border-color: var(--blue); box-shadow: var(--shadow-1); }
+.tile.zero { flex: 0 1 112px; min-width: 96px; } .tile.zero b { font-size: 16px; color: var(--gray-600); font-weight: 600; }
+.legend .chip i.band { height: 10px; width: 14px; border: 1px solid #C5CED8; border-radius: 2px; }
+/* The settings column: the Run box stays short so the settings above it are not seen through a keyhole. */
+.run-box { gap: 6px; padding: 10px 12px; }
+.run-box .status { max-height: 6.2em; overflow-y: auto; }
+.run-box .validation { max-height: 74px; }
+#setup:disabled { display: none; }
+#cancel:disabled { display: none; }   /* Cancel belongs to a running analysis only */
+/* What the plot shows: three buttons, the average first */
+.seg { display: inline-flex; } .seg button { border-radius: 0; margin-left: -1px; padding: 4px 10px; font-size: 13px; }
+.seg button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; } .seg button:last-child { border-radius: 0 6px 6px 0; }
+.seg button.on { background: var(--blue); border-color: var(--blue); color: #fff; position: relative; }
+
+/* The results in one compact row instead of a heading and tall tiles; the heading goes once there are results. */
+body.has-results .workspace-heading { display: none; }
+.tile { flex-direction: row; align-items: baseline; gap: 7px; padding: 5px 11px; flex: 0 1 auto; min-width: 0; }
+.tile.big { flex: 1 1 auto; } .tile b { font-size: 17px; } .tile.big b { font-size: 21px; }
+.tile.zero { flex: 0 1 auto; min-width: 0; } .tile.zero b { font-size: 15px; }
+.quality-review { padding: 4px 11px; }
+/* A handle under the movie and the plot sets their height. */
+.resizer.h { flex: 0 0 12px; height: 12px; cursor: row-resize; }
+.resizer.h::after { width: 56px; height: 4px; margin: -2px 0 0 -28px; }
+.split.sized { flex: none; height: var(--split-h); min-height: 240px; }
+/* How pictures are saved: a small panel beside the Save button that opened it */
+.save-options { position: fixed; z-index: 20; width: 300px; background: #fff; border: 1px solid var(--gray-100); border-radius: var(--radius-md); box-shadow: 0 8px 28px rgba(31,41,51,.22); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.save-options[hidden] { display: none; }
+.save-options label { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--gray-600); }
+.save-options select { min-width: 150px; }
+.legend .chip i.scale { width: 96px; height: 10px; border: 1px solid #C5CED8; border-radius: 2px; }
+#heatmap-legend { padding: 4px 2px 6px; }
+.caption.dark .save-note { color: #7fe0b5; } .caption.dark .save-note button { color: #9fd3ff; }
+.toolbar.dark select.quiet { background: transparent; border-color: transparent; color: #9AA5B1; padding: 3px 4px; font-size: 12px; max-width: 120px; }
+.toolbar.dark select.quiet:hover, .toolbar.dark select.quiet:focus { border-color: #33404d; color: #E6EBF0; }
+
+/* stimulus timing: linked fields, messages beside the field, the frames each window uses, and the windows under the slider */
+.field-error { color: var(--bad); font-size: 12px; margin: -2px 0 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; text-align: right; }
+.validation .repair { margin-left: 4px; }
+.frames-preview { margin: 6px 0; font-size: 12px; color: var(--gray-600); font-variant-numeric: tabular-nums; }
+.suggestion { margin: -4px 0 8px; text-align: right; }
+.time-wrap { flex: 1 1 auto; min-width: 0; position: relative; display: flex; align-items: center; }
+.time-wrap input[type=range] { width: 100%; }
+#time-windows { position: absolute; left: 8px; right: 8px; bottom: -4px; height: 3px; pointer-events: none; }
+#time-windows i { position: absolute; top: 0; height: 100%; border-radius: 2px; }
+#time-windows .baseline { background: #9AA5B1; } #time-windows .scoring { background: #E08A1E; }
+#time-windows .stimulus { width: 2px; height: 9px; top: -3px; margin-left: -1px; background: #1F2933; }
+
+/* ---- 2026.11.20.15: the settings column. One Timing card, every control the same size on one right edge, from/to pairs on
+   one row, a short Run box. */
+#side { font-size: 13px; }
+#side .card { padding: 10px 12px; }
+#side .card h2 { font-size: 14px; margin: 0 0 4px; }
+#side .row { display: grid; grid-template-columns: minmax(0, 1fr) 176px; align-items: center; gap: 8px; margin: 4px 0; min-height: 28px; font-size: 13px; }
+#side .row > span:first-child { white-space: normal; color: var(--gray-900); }
+#side input:not([type]), #side input[inputmode], #side select { height: 28px; font-size: 13px; padding: 3px 7px; box-sizing: border-box; }
+#side .row > input, #side .row > select, #side .row .wide { width: 100%; max-width: none; min-width: 0; }
+#side .pair { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 5px; align-items: center; }
+#side .pair > input, #side .cell input { width: 100%; min-width: 0; }
+#side .cell { display: flex; gap: 3px; min-width: 0; align-items: center; }
+/* a row that follows the stimulus: its frames on a dashed chip; a click swaps in two boxes and "auto" puts the chip back */
+.derived[data-linked="1"] .pair { display: none !important; }
+.derived:not([data-linked="1"]) > .link-toggle { display: none; }
+#side .derived .pair { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; gap: 4px; width: 100%; }
+.link-toggle { flex: 1 1 auto; min-width: 0; height: 28px; padding: 0 7px; font-size: 13px; text-align: left; color: var(--gray-900); border: 1px dashed #C5CED8; border-radius: var(--radius-sm); background: var(--gray-50); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.link-toggle:hover:not(:disabled) { border-color: var(--blue); background: var(--blue-light); }
+.relink { height: 28px; padding: 0 5px; font-size: 11px; color: var(--gray-600); border: 1px solid #C5CED8; border-radius: var(--radius-sm); background: #fff; cursor: pointer; }
+.derived:has([aria-invalid]) .link-toggle { border-color: var(--bad); color: var(--bad); }
+.fiji-frames { margin: 2px 0 4px; }
+#side .with-button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px; align-items: center; }
+#side .with-button input { width: 100%; min-width: 0; }
+.from-frame { display: inline-block; margin: 0; height: 28px; padding: 0 8px; font-size: 12px; white-space: nowrap; }
+.suggestion { margin: -2px 0 4px; text-align: right; }
+.frames-preview { margin: 4px 0 2px; }
+.window-editor { margin-top: 8px; padding-top: 6px; }
+.window-editor h3 { font-size: 13px; margin: 0 0 2px; color: var(--gray-600); font-weight: 600; }
+.window-editor .rule-summary { margin: 0; padding: 0; background: none; font-size: 12px; font-weight: 400; color: var(--gray-900); }
+#side summary { min-height: 28px; display: flex; align-items: center; gap: 6px; font-size: 13px; }
+#side summary::before { content: '▸'; color: var(--gray-600); font-size: 11px; } #side details[open] > summary::before { content: '▾'; }
+#side summary::-webkit-details-marker { display: none; } #side summary { list-style: none; }
+#side details[open] > summary { margin-bottom: 4px; }
+#side .check { align-items: center; min-height: 28px; } #side .check input { margin-top: 0; }
+#side #rate-note { margin: -2px 0 4px; text-align: right; }
+.settings-scroll { gap: 8px; }
+aside { gap: 8px; }
+/* the Run box: tick, button, one status line */
+.run-box { gap: 6px; padding: 8px 10px; }
+.run-box .confirm { font-size: 13px; }
+.run-box .status { min-height: 0; max-height: 3em; overflow: hidden; font-size: 12px; }
+.run-box .status:empty, #open-feedback:empty { display: none; }
+.run-box .validation { max-height: 110px; }
+.run-box .actions { align-items: center; }
+#log:disabled { display: none; }
+#discard { font-size: 12px; padding: 5px 8px; }
+/* Save and Download under the movie sit on a dark bar: dark buttons, light words (they looked switched off in pale grey on white) */
+.caption.dark button { background: #1c252e; color: #E6EBF0; border-color: #33404d; }
+.caption.dark button.ghost { background: transparent; border-color: transparent; color: #9fd3ff; }
+.caption.dark button:hover:not(:disabled) { background: #26323d; border-color: #5BC0FF; }
+.caption.dark button:disabled { color: #5d6b78; }
+.save-options .inline { display: inline-flex; align-items: center; gap: 6px; color: var(--gray-900); } .save-options input[type=number] { width: 72px; font: inherit; padding: 4px 7px; border: 1px solid #C5CED8; border-radius: var(--radius-sm); }
+/* what the colours of the view mean: filled swatches beside the outline swatches */
+.view-key { display: inline-flex; flex-wrap: wrap; gap: 4px 12px; } .view-key:empty { display: none; }
+.caption .chip i.fill { width: 11px; height: 11px; border-radius: 2px; border: 1px solid rgba(255,255,255,.35); }
+#side details.card > h3, #side details.card h3 { font-size: 12px; margin: 10px 0 2px; color: var(--gray-600); font-weight: 600; text-transform: none; }
+#side details.card h3:first-of-type { margin-top: 2px; }
+.tiles #open-folder { align-self: center; margin-left: auto; }
+.y-axis { display: inline-flex; align-items: center; gap: 5px; color: var(--gray-600); } .y-axis i { font-style: normal; }
+.y-axis input { width: 58px; height: 28px; box-sizing: border-box; font-size: 13px; padding: 3px 6px; }
