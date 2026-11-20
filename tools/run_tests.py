@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import time
+import hashlib
 import urllib.request
 import urllib.error
 
@@ -15,6 +16,50 @@ DEPENDENCIES = {
     "groovy-json-4.0.28.jar": "org/apache/groovy/groovy-json/4.0.28/groovy-json-4.0.28.jar",
     "ij-1.54p.jar": "net/imagej/ij/1.54p/ij-1.54p.jar",
 }
+# SHA-256 of the exact jars on Maven Central, so a mirror or a damaged
+# download can never stand in for the pinned version.
+CHECKSUMS = {
+    "groovy-4.0.28.jar": "d77164a44ab994837e61eecead64721bdb1794fa2bc6704ac6fe70cd32ef9dd3",
+    "groovy-json-4.0.28.jar": "edec45c85ff811f9a9baacdf5b020e34593a0055ac63c92fbf1233c3b2cc9cc6",
+    "ij-1.54p.jar": "2e1a09961dfb41cee66ddc821b2577a41a072566ce45a49bae69267099741e20",
+}
+# Maven Central intermittently answers GitHub Actions runners with 429 or a
+# transient 404, and a push to main starts two Checks runs at once. Spread
+# attempts over two CDNs and a Google-hosted copy of Central, backing off.
+MIRRORS = [
+    "https://repo.maven.apache.org/maven2/",
+    "https://repo1.maven.org/maven2/",
+    "https://maven-central.storage-download.googleapis.com/maven2/",
+]
+ATTEMPTS = 8
+
+
+def download(name, remote, path):
+    temporary = path.with_suffix(".tmp")
+    last_error = None
+    for attempt in range(ATTEMPTS):
+        url = MIRRORS[attempt % len(MIRRORS)] + remote
+        try:
+            print("Downloading " + url, flush=True)
+            with urllib.request.urlopen(url, timeout=60) as response:
+                data = response.read()
+            digest = hashlib.sha256(data).hexdigest()
+            if digest != CHECKSUMS[name]:
+                raise ValueError(name + " from " + url + " has SHA-256 " + digest + ", expected " + CHECKSUMS[name])
+            temporary.write_bytes(data)
+            temporary.replace(path)
+            return
+        except (urllib.error.URLError, TimeoutError, ConnectionError, ValueError) as error:
+            last_error = error
+            print("  failed: " + str(error), flush=True)
+            if attempt == ATTEMPTS - 1:
+                break
+            delay = min(2 ** attempt, 30)
+            retry_after = getattr(error, "headers", None) and error.headers.get("Retry-After")
+            if retry_after and retry_after.isdigit():
+                delay = min(max(delay, int(retry_after)), 60)
+            time.sleep(delay)
+    raise RuntimeError("Could not download " + name + " after " + str(ATTEMPTS) + " attempts") from last_error
 
 
 def main():
@@ -24,20 +69,8 @@ def main():
         dependencies.mkdir(parents=True, exist_ok=True)
         for name, remote in DEPENDENCIES.items():
             path = dependencies / name
-            if not path.is_file():
-                temporary = path.with_suffix(".tmp")
-                mirrors = ["https://repo.maven.apache.org/maven2/", "https://repo1.maven.org/maven2/", "https://repo.maven.apache.org/maven2/"]
-                for attempt in range(3):
-                    try:
-                        print("Downloading " + mirrors[attempt] + remote, flush=True)
-                        with urllib.request.urlopen(mirrors[attempt] + remote, timeout=60) as response:
-                            temporary.write_bytes(response.read())
-                        break
-                    except (urllib.error.URLError, TimeoutError):
-                        if attempt == 2:
-                            raise
-                        time.sleep(2)
-                temporary.replace(path)
+            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != CHECKSUMS[name]:
+                download(name, remote, path)
     jars = [dependencies / name for name in DEPENDENCIES]
     for jar in jars:
         if not jar.is_file():
