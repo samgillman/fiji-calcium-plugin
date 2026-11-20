@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.11.20.2
+
+- Add portable, versioned response protocols shared with SimpleCa²⁺ commit b92d4ce98ddab3fceac352179703c1f48f044c90: independent baseline/onset/scoring windows, generic positive controls, editable per-window floor/noise/persistence rules, JSON import/export and retained field timing overrides.
+- Offer a provisional 0.10/3-SD/1-second preset and preserve the actual historical schema-1 sample rule for legacy analyses. Use timestamp spans, explicit missing/gap coverage and separately recorded eligibility/QC. Low-reference and zero-SD flags remain warnings.
+- Analyze full-precision unlifted corrected fluorescence, preserve stable ROI identities and accepted/edge-excluded registries, record selection basis, and make response-assisted selection an optional review aid. Existing three-decimal and lifted legacy exports remain labeled compatibility outputs.
+- Add exact timestamp CSVs, input/ROI/protocol snapshots, applied-versus-draft state, correct transformed local thresholds in native plots, qualifying-run evidence, window/latency/AUC metrics and plot provenance.
+- Add separately labeled sensitivity and negative-control diagnostics, condition/biological-unit metadata and unit-aware summaries without treating cells as biological replicates.
+- Preserve the 2026.11.20.1 interface theme, embedded cell picture, zoom/navigation, result tiles, collapsible workflow and Cellpose progress/selection behavior. Update the managed runtime to verify jsonlite support and extend scientific, precision, protocol-round-trip and native GUI regressions.
+
 ## 2026.11.20.1
 
 - Redesign every plugin window to match SimpleCa²⁺: the computer's own interface font instead of a fixed one, the SimpleCa²⁺ colours, white cards, and one clearly marked main button per step. Measurements, thresholds and saved tables are unchanged.

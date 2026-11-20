@@ -3,7 +3,7 @@ import ij.gui.Roi
 
 def loader=new GroovyClassLoader(getClass().classLoader)
 loader.parseClass(new File('scripts/Plugins/Calcium Imaging/Calcium_Cells_Step_By_Step.groovy'))
-def Runtime=loader.loadClass('CalciumRRuntime'),Job=loader.loadClass('CalciumLocalJob'),Engine=loader.loadClass('CalciumSimpleCaEngine'),Csv=loader.loadClass('CalciumCsv')
+def Runtime=loader.loadClass('CalciumRRuntime'),Job=loader.loadClass('CalciumLocalJob'),Engine=loader.loadClass('CalciumSimpleCaEngine'),Csv=loader.loadClass('CalciumCsv'),Protocol=loader.loadClass('CalciumResponseProtocol'),Installer=loader.loadClass('CalciumInstaller')
 def root=new File('build/runtime with spaces').absoluteFile
 root.mkdirs()
 def runtime=Runtime.newInstance(home:root)
@@ -24,6 +24,25 @@ def metrics=Csv.read(new File(result,'metrics.csv'))
 assert metrics.size()==7 && metrics[1][0]=='Cell001' && metrics[3][3]=='Excluded'
 assert new File(result,'input_corrected_fluorescence.csv').bytes==new File('build/analysis-fixtures/input.csv').bytes
 assert Csv.read(new File(result,'analysis_manifest.csv')).any{it[0]=='plugin_version'}
+// The managed Windows/Mac/Linux path also round-trips the portable protocol
+// through the native editor contract and checks the independent shared fixture.
+def portable=Protocol.read(new File('tests/fixtures/response-protocols/golden-protocol.json'))
+def payload=Protocol.payload(portable.windows,2,portable.name,portable.validation_status)
+def shared=Csv.read(new File('build/analysis-fixtures/shared-golden-input.csv'))
+def nativeInput=new File(root,'native measured.csv'),timestamps=new File(root,'per frame times.csv')
+Csv.write(nativeInput,shared.collect{it.take(1)+it.drop(2)})
+Csv.write(timestamps,[['Frame','Time_s']]+shared.drop(1).collect{it.take(2)})
+def nativeSettings=[baseline_start:'1',baseline_end:'4',sampling_hz:'',recording:'Golden field',input_mode:'background_corrected_fluorescence',
+    protocol_json:groovy.json.JsonOutput.toJson(payload),expected_input_sha256:Installer.digest(nativeInput.bytes),
+    timestamps_file:timestamps.path,timestamps_sha256:Installer.digest(timestamps.bytes)]
+def nativeResult=Engine.analyze(runtime,nativeInput,nativeSettings,root,job)
+def nativeCounts=Csv.read(new File(nativeResult,'responder_counts.csv'))
+int evaluable=nativeCounts[0].indexOf('Evaluable'),responded=nativeCounts[0].indexOf('Responded')
+assert nativeCounts.drop(1).collect{it[evaluable]}==['4','5','3']
+assert nativeCounts.drop(1).collect{it[responded]}==['1','4','1']
+assert new File(nativeResult,'timestamps.csv').bytes==timestamps.bytes
+assert Protocol.read(new File(nativeResult,'protocol.json')).windows[1].Stimulus=='Ionomycin'
+assert new File(nativeResult,'measured_fluorescence.csv').bytes==nativeInput.bytes
 try {
     Engine.analyze(runtime,new File('build/analysis-fixtures/input.csv').absoluteFile,settings+[expected_input_sha256:'outdated-measurement'],new File('build/analysis output').absoluteFile,job)
     assert false : 'Changed input must not be linked to old ROI snapshots'
@@ -33,7 +52,7 @@ def engine=Engine.unpack(root)
 new File(engine,'runner.R').text='corrupted'
 assert Engine.unpack(root)==engine
 assert new File(engine,'runner.R').getText('UTF-8').startsWith('# Fiji adapter.')
-println 'PASS: clean managed R setup, cached setup, real analysis, paths with spaces, embedded code repair, source snapshot and manifest'
+println 'PASS: managed R/jsonlite setup and cache, legacy and independent golden analysis, native protocol round trip, timestamp snapshots, paths with spaces and embedded source repair'
 } catch(Throwable problem) {
     if(job.logFile.isFile())println(job.logFile.getText('UTF-8'))
     throw problem

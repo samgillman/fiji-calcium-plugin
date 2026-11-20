@@ -17,7 +17,8 @@ def validate():
     source = (ROOT / PLUGIN).read_text(encoding="utf-8")
     if f'static final String VERSION = "{version}"' not in source:
         raise ValueError("CalciumRelease.VERSION does not match VERSION")
-    displayed = re.findall(r"version (\d[\d.-]+)", source)
+    # Calendar plugin versions are separate from portable protocol schema versions.
+    displayed = re.findall(r"version (\d{4}[\d.-]+)", source)
     if not displayed or any(value != version for value in displayed):
         raise ValueError("A plugin version header, title, or log does not match VERSION")
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")

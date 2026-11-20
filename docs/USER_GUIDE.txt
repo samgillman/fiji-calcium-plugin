@@ -1,10 +1,13 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.1.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.2.
 
 NEW: STEP 4 — SIMPLECA ANALYSIS INSIDE FIJI
 After Measure and save, open Analyze responses. On first use, click Set up analysis engine
 (internet required). The same interface supports 64-bit Windows, Mac and x64 Linux.
-Confirm the recording frame rate, baseline frames and stimulus times before running analysis.
+Confirm the frame rate or load per-frame timestamps, choose normalization baseline frames, and
+review a versioned protocol with separate baseline/onset/response windows before analysis.
+The provisional 0.10/3-SD/1-second rule is a starting point for validation on your controls.
+The actual historical consecutive-sample rule remains available as a legacy protocol.
 Traces, heatmap, metrics, cell response calls and counts open inside Fiji. Selecting a trace,
 table cell or heatmap row highlights its outline on the cell picture inside the same window.
 Step 4 uses the UNLIFTED background-corrected fluorescence. It keeps invalid-baseline and
@@ -17,8 +20,9 @@ One menu command takes a calcium-imaging recording (a time-lapse movie, for exam
 from the raw file to a table of gray values per cell:
 
   1. You choose the recording and a folder for the results.
-  2. It makes the cells visible: a colour picture in which cells are green, very bright objects
-     (precipitate, debris) are yellow, and cells that brightened after a stimulus are magenta.
+  2. It makes the cells visible: cells are green and very bright objects (precipitate, debris)
+     are yellow. An optional response-assisted review view adds magenta; it starts disabled.
+     Review baseline frames is available for choosing cells independently of their response.
   3. You choose the cells: draw around each one, or let it suggest outlines and click the real cells.
      For every cell it finds a background area right next to that cell and shows it in blue.
   4. It measures every cell and its background in every frame of the ORIGINAL recording and saves
@@ -86,7 +90,8 @@ HOW TO USE IT
          and edge outlines already in the ROI Manager are drawn dashed and not measured. Untick it
          to treat edge cells like all others. See "Cells at the edge of the picture" below.
   5. Press "Continue to measure" (or click the Step 3 title), then "Measure and save". The window
-     then shows how many cells were measured and how many show a clear rise, and Step 4 opens.
+     then shows how many cells were measured and the legacy 5-SD screening-rise count.
+     That old screening count is not the protocol-defined responder percentage in Step 4.
 
 
 WHAT IT SAVES
@@ -96,11 +101,16 @@ In the results folder, in a subfolder named after the recording:
   ..._background_next_to_each_cell.csv            the background of each cell, every frame
   ..._gray_values_background_corrected_for_SimpleCa.csv
                                                   raw minus background. First column "Frame", then one
-                                                  column per cell. This is the table to analyse.
-  ..._for_SimpleCa_every_cell_kept.csv            the same table, but no cell is lost: see "Dim cells" below.
-                                                  Use this one when counting how many cells respond.
+                                                  column per cell; legacy three-decimal precision.
+  ..._gray_values_background_corrected_native.csv
+                                                  full-precision raw-minus-background input for Step 4.
+  ..._roi_registry.csv                            all accepted IDs, geometry hashes, edge exclusions,
+                                                  local background counts and selection basis.
+  ..._accepted_rois.zip                           all accepted outlines, including premeasurement exclusions.
+  ..._for_SimpleCa_every_cell_kept.csv            legacy intensity-lifted diagnostic table. Do not use
+                                                  it for fractional amplitude or responder percentages.
   ..._summary_per_cell.csv                        position, size, resting level, peak, rise per cell,
-                                                  whether it shows a clear rise, whether it was lifted,
+                                                  legacy screening-rise flag, whether it was lifted,
                                                   whether it is within 40 pixels of the picture's edge
   ..._cells_RoiSet.zip                            your cell outlines (open with ROI Manager > More > Open)
   ..._cells_and_background_areas.png              check picture: cells yellow, background blue
@@ -178,14 +188,19 @@ the edge, and the record of steps says whether edge cells were left out. Change 
 EDGE_MARGIN in the settings block.
 
 DIM CELLS AND PERCENT RESPONDING
-Some cells are no brighter than their own background at rest. After background correction their
-resting value is zero or negative, so dF/F0 cannot be worked out, and analysis programs that need
-dF/F0 leave them out. That shrinks the number of cells and skews the percentage that respond.
-The table "for_SimpleCa_every_cell_kept.csv" avoids this: any cell whose lowest 20-frame average
-before the response is below 1 gray level is lifted by a constant so that it equals 1. Its rises
-and falls in gray levels are unchanged, so it can still be scored as responding or not. The SIZE of
-dF/F0 of a lifted cell means nothing. The summary table says which cells were lifted and by how much.
-The plugin's own count ("N of M show a clear rise") is made in gray levels and uses every cell.
+Some corrected resting fluorescence is zero or negative, so a fractional change cannot be
+interpreted. Step 4 keeps these cells as technical exclusions with reasons; missing or insufficient
+local stimulus-window coverage is unscorable. The reported percentage is 100 * Responded / Evaluable,
+where Evaluable = Responded + Did not respond. Registered, excluded and unscorable counts remain
+separate, and accepted edge exclusions remain in the ROI registry/cohort flow.
+Low F0 relative to baseline SD and zero SD are review warnings, not automatic exclusions.
+The old intensity-lifted table adds an arbitrary constant to dim traces. That changes fractional
+amplitudes and thresholds; it does not repair normalization or provide a valid responder denominator.
+It remains available for legacy diagnostics. The Step 3 screening-rise flag is a separate historical
+5-SD display aid, not the user-declared Step 4 rule.
+Choose cells independently of whether they respond; neither normalization nor thresholds can undo
+response-selected ROI sampling. Supply independent culture/animal/preparation IDs when known;
+cell counts and fields are not automatically independent biological replicates.
 
 
 LIMITS: PLEASE READ

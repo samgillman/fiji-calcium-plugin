@@ -41,10 +41,11 @@ assert answerStep1 { parts ->
     def choice = parts.find { it instanceof JComboBox }; assert choice.selectedItem == 'Choose a file from disk...'
     choice.selectedIndex = 0
     parts.find { it instanceof JTextField }.text = 'chosen folder'
+    assert !parts.find { it instanceof JCheckBox }.selected : 'Response-assisted selection starts disabled'
     parts.find { it instanceof JCheckBox }.doClick()
     assert parts.findAll { it instanceof JButton }*.text.containsAll(['Browse…', 'Cancel', 'Next'])
     parts.find { it instanceof JButton && it.text == 'Next' }.doClick()
-} == [recording: '1:  movie.tif   (300 frames, 16-bit)', look: false, folder: 'chosen folder']
+} == [recording: '1:  movie.tif   (300 frames, 16-bit)', look: true, folder: 'chosen folder']
 assert answerStep1 { parts -> parts.find { it instanceof JButton && it.text == 'Cancel' }.doClick() } == null
 try {
     SwingUtilities.invokeAndWait {

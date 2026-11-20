@@ -21,7 +21,7 @@ Fiji includes Bio-Formats for microscope recordings. Cellpose is optional: you c
 1. Choose the original recording and an output folder.
 2. Choose cells on the colour image. Draw outlines or click **Suggest cells automatically**, then review the suggestions. Automatic detection shows percentage stage progress, a persistent explanation of the current work, total and stage time, saved-outline reuse, image size, CPU/GPU and detection settings. **Details** shows recent events; **Log** and **Cancel** remain available.
 3. Click **Measure and save** to export raw fluorescence, each cell's local background, corrected traces, ROI outlines, and an analysis log.
-4. Open **Analyze responses** in Step 4. On first use, click **Set up analysis engine** to install a private R runtime. Confirm the frame rate, baseline and stimulus/KCl windows, then analyze. Review native traces, heatmap, metrics and responder counts; selecting a cell also highlights it on the cell picture inside the same window. See [the integrated analysis guide](docs/SIMPLECA.md).
+4. Open **Analyze responses** in Step 4. On first use, click **Set up analysis engine** to install a private R runtime. Confirm the frame rate or load timestamps, choose a versioned response protocol, and review each stimulus/control window before analysis. Review native traces, heatmap, metrics and responder counts; selecting a cell also highlights it on the cell picture inside the same window. See [the integrated analysis guide](docs/SIMPLECA.md).
 
 Accepted cells use white outlines with a black outer border. Click one to select it, then **Remove selected**, or enable **Click cells to remove** to remove cells directly from the picture. **Undo** restores removals and reverses additions. Turn removal mode off to accept suggestions again.
 
@@ -43,11 +43,11 @@ Installation happens only after you click Install update or run the standalone i
 
 ## Scientific scope and validation
 
-The defaults were developed for 1388 × 1040 recordings at 0.645 µm/pixel. Review the user guide and settings for other imaging conditions. Automatic outlines and grades require review. The sizes of ΔF/F₀ responses from intensity-lifted, dim cells are not interpretable; see the guide's discussion of the “every cell kept” table.
+The defaults were developed for 1388 × 1040 recordings at 0.645 µm/pixel. Review the user guide and settings for other imaging conditions. Automatic outlines and grades require review. Select identifiable cells independently of their response. The optional magenta display is a review aid and starts disabled. Intensity-lifted legacy tables must not be used for fractional response percentages; native analysis uses full-precision unlifted values.
 
 The original workflow was tested on macOS with Fiji/ImageJ 1.54p. A Windows user reported successful detection, but the newest UI/update features have not been validated in a complete Windows imaging session. Automated tests exercise progress, cancellation, retries, ROI import, and update metadata on simulated detector runs; they do not establish segmentation accuracy.
 
-The integrated analysis supports 64-bit Windows, Intel/Apple Silicon Mac and x64 Linux. Automated checks install R and compare results with the pinned SimpleCa source on Windows, macOS and Linux. Step 4 uses unlifted background-corrected fluorescence, retains excluded/unscorable records and reports the evaluable denominator. This first integration analyzes one recording at a time; it does not include all of the web application's multi-recording plot controls.
+The integrated analysis supports 64-bit Windows, Intel/Apple Silicon Mac and x64 Linux. CI is configured to install R/jsonlite and check independent synthetic outcomes and parity with the pinned SimpleCa source on Windows, macOS and Linux. Step 4 exchanges protocol JSON with SimpleCa²⁺, retains excluded/unscorable records and reports the evaluable denominator. Its provisional 1-second preset is a starting rule for control-based validation; true legacy sample rules remain available. Completed results keep their applied settings even while a new protocol is being edited. Native analysis handles one recording at a time; it does not include all of the web application's multi-recording plot controls.
 
 ## Report a problem
 
