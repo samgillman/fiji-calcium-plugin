@@ -45,6 +45,12 @@ const assert = require('assert/strict');
         await page.evaluate(() => window.scrollTo(0, 0)); await settledPaint();
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), name + ' layout must not overflow horizontally');
         assert.ok(await page.isVisible('#transport'), name + ' keeps playback controls visible');
+        if (stage === 'after' && width >= 1024) assert.ok(await page.evaluate(() => {
+          const picture = document.getElementById('picture-card').getBoundingClientRect();
+          const plot = document.getElementById('plot-card').getBoundingClientRect();
+          return Math.abs(picture.top - plot.top) <= 2 && picture.right <= plot.left &&
+            picture.bottom <= innerHeight + 2 && plot.bottom <= innerHeight + 2;
+        }), name + ' shows movie and traces together without an internal vertical scroll');
         await page.screenshot({ path: path.join(out, 'page-' + stage + '-' + name + '.png') });
       }
       await page.setViewportSize({ width: 1440, height: 900 }); await settledPaint();
