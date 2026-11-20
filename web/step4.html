@@ -12,6 +12,7 @@
   <div class="brand">SimpleCa²⁺ <span>in Fiji · Step 4</span></div>
   <div class="recording" id="recording" title=""></div>
   <div class="grow"></div>
+  <button class="ghost" id="open-folder" type="button" disabled hidden>Results folder</button>
   <button class="ghost" id="toggle-settings" type="button">Hide settings</button>
   <span class="pill" id="engine">Checking the analysis engine…</span>
 </header>
@@ -21,6 +22,7 @@
 <div class="layout">
   <aside id="side" aria-label="Analysis settings">
     <div class="settings-title"><h1>Set up the analysis</h1><p class="fine">Review the movie first. Then check the timing and choose a response rule.</p></div>
+    <div class="settings-scroll">
     <section class="card">
       <h2>1. Check the recording time</h2>
       <label class="row"><span>Frames per second</span><input id="sampling_hz" inputmode="decimal" aria-describedby="time-help"></label>
@@ -56,6 +58,7 @@
       <div class="file-note"><span id="negative_control-name">No file selected</span><button id="negative_control-clear" class="ghost small" type="button" hidden>Remove</button></div>
       <p class="fine">Diagnostics are saved separately and do not change the primary calls. Available for version 2 protocols.</p>
     </details>
+    </div>
     <section class="run-box">
       <h2>3. Run the analysis</h2>
       <label class="check confirm"><input type="checkbox" id="confirmed"> I checked the frame rate or timestamps, baseline and stimulus timing</label>
@@ -84,7 +87,6 @@
       <button class="tab" disabled data-tab="calls" type="button" role="tab">Cell response calls</button>
       <button class="tab" disabled data-tab="counts" type="button" role="tab">Responder counts</button>
       <div class="grow"></div>
-      <button class="ghost" id="open-folder" type="button" disabled>Open analysis folder</button>
     </nav>
 
     <section class="panel" id="panel-review">

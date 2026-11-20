@@ -51,6 +51,13 @@ const assert = require('assert/strict');
           return Math.abs(picture.top - plot.top) <= 2 && picture.right <= plot.left &&
             picture.bottom <= innerHeight + 2 && plot.bottom <= innerHeight + 2;
         }), name + ' shows movie and traces together without an internal vertical scroll');
+        if (stage === 'after' && width >= 1024) assert.ok(await page.evaluate(() => {
+          const note = document.getElementById('picture-note').getBoundingClientRect();
+          const card = document.getElementById('picture-card').getBoundingClientRect();
+          const fields = document.querySelector('.settings-scroll').getBoundingClientRect();
+          const run = document.querySelector('.run-box').getBoundingClientRect();
+          return note.bottom <= card.bottom && fields.bottom <= run.top;
+        }), name + ' keeps the frame caption visible and run controls outside the settings scroll');
         await page.screenshot({ path: path.join(out, 'page-' + stage + '-' + name + '.png') });
       }
       await page.setViewportSize({ width: 1440, height: 900 }); await settledPaint();

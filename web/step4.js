@@ -225,7 +225,7 @@
     else if (S.note) { status.className = 'status bad'; status.textContent = S.note; }
     else if (!S.results && !state.error && state.tone !== 'bad') { status.className = 'status'; status.textContent = state.engineReady ? 'Check the settings above, confirm the timing, then run. Movie playback works now.' : 'Movie playback is ready. Before the first analysis, choose “Set up analysis engine” below (requires internet).'; }
     else { status.className = 'status ' + (state.tone === 'good' ? 'good' : state.tone === 'bad' ? 'bad' : ''); status.textContent = state.message; }
-    $('open-folder').disabled = !state.folder;
+    $('open-folder').disabled = !state.folder; $('open-folder').hidden = !state.folder;
     const pending = hasPending(), notice = $('applied-note'); notice.hidden = !S.results; notice.classList.toggle('pending', pending);
     notice.textContent = pending ? 'Settings changed. The results, movie timing and exports still use the last completed analysis. Choose “Apply changes & reanalyze” to update them.' : 'Showing the completed analysis. Response calls and counts come from the saved results.';
     $('workspace-title').textContent = S.results ? 'Review the responses' : 'Review the recording';

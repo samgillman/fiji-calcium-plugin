@@ -25,7 +25,7 @@ body { margin: 0; font: 14px/1.45 var(--font); color: var(--gray-900); backgroun
 .gone:not(.on) { display: none; }
 
 .layout { flex: 1 1 auto; display: flex; gap: 16px; padding: 16px 20px; min-height: 0; }
-aside { flex: 0 0 350px; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
+aside { flex: 0 0 350px; display: flex; flex-direction: column; gap: 12px; overflow: hidden; }
 main { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
 
 .card { background: var(--white); border: 1px solid var(--gray-100); border-radius: var(--radius-md); box-shadow: var(--shadow-1); padding: 12px 14px; }
@@ -113,7 +113,9 @@ body.no-side aside { display: none; }
 
 /* Keep playback in view. A preview is useful before analysis; empty result panels stay out of its way. */
 h1 { font-size: 18px; margin: 0 0 3px; line-height: 1.3; }
-.settings-title { padding: 0 2px; }
+.settings-title { padding: 0 2px; flex: none; }
+.settings-scroll { min-height: 0; flex: 1 1 auto; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 0 1px 2px; }
+.settings-scroll > .card { flex: none; }
 .workspace-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: none; }
 .workspace-heading p { margin: 0; color: var(--gray-600); font-size: 13px; }
 .badge { background: var(--blue-light); color: var(--blue-dark); padding: 4px 9px; border-radius: 5px; font-size: 12px; white-space: nowrap; }
@@ -137,7 +139,7 @@ body.has-results .split { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr)
 .speed-label select { max-width: 62px; }
 #playback-note { min-height: 1.3em; }
 .toolbar.dark label.view-label { color: #c5ced8; }
-.run-box { position: sticky; bottom: 0; z-index: 2; padding: 12px; border: 1px solid #bfd7e3; border-radius: 8px; background: #f1f8fc; box-shadow: 0 -3px 10px rgba(31,41,51,.06); display: flex; flex-direction: column; gap: 8px; }
+.run-box { flex: none; position: relative; z-index: 2; padding: 12px; border: 1px solid #bfd7e3; border-radius: 8px; background: #f1f8fc; box-shadow: 0 -3px 10px rgba(31,41,51,.06); display: flex; flex-direction: column; gap: 8px; }
 .run-box h2 { margin: 0; }
 .status { font-size: 13px; min-height: 1.45em; overflow-wrap: anywhere; }
 .run-box .primary { flex: 1; }
@@ -175,6 +177,11 @@ details[open] > summary { margin-bottom: 8px; }
   .brand span, #engine { display: none; }
   .tiles { gap: 6px; }
   .tile { padding: 8px; }
+  .toolbar.dark { gap: 6px; }
+  .toolbar.dark .view-label { flex: 1 1 100%; }
+  .toolbar.dark .view-label select { flex: 1; max-width: none; }
+  .toolbar.dark button, .toolbar.dark .check { font-size: 12px; }
+  .toolbar.dark button { padding: 3px 6px; }
 }
 @media (max-width: 800px) {
   html, body { height: auto; min-height: 100%; }
@@ -187,6 +194,8 @@ details[open] > summary { margin-bottom: 8px; }
   #heatmap-box { height: 420px; flex: none; }
   .scroller { max-height: 60vh; }
   .run-box { position: static; }
+  .settings-scroll { overflow: visible; flex: none; }
+  .top { flex-wrap: wrap; }
   .workspace-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
   .tiles { grid-template-columns: 1fr 1fr; }
 }
