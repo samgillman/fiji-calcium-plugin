@@ -43,4 +43,5 @@ assert Csv.read(new File(timedResult,'input_corrected_fluorescence.csv'))[0]==ro
 try {Engine.analyze(runtime,noTime,timed+[timestamps_sha256:'changed'],root,job);assert false}catch(IOException expected){assert expected.message.contains('timestamps changed')}
 try {Engine.analyze(runtime,input,settings+[roi_registry_sha256:'changed'],root,job);assert false}catch(IOException expected){assert expected.message.contains('registry changed')}
 try {Engine.analyze(runtime,input,settings+[sensitivity_file_sha256:'changed'],root,job);assert false}catch(IOException expected){assert expected.message.contains('diagnostic file changed')}
+new GroovyShell(loader,new Binding([loader:loader,runtime:runtime,root:root])).evaluate(new File('tests/test_web_analysis_runtime.groovy'))
 println 'PASS: native JSON -> shared R protocol, exact outputs, diagnostic snapshots, explicit timing sidecars and changed-source protection through the real Java bridge'

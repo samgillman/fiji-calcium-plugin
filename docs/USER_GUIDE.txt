@@ -1,19 +1,53 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.2.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.3.
 
-NEW: STEP 4 — SIMPLECA ANALYSIS INSIDE FIJI
-After Measure and save, open Analyze responses. On first use, click Set up analysis engine
-(internet required). The same interface supports 64-bit Windows, Mac and x64 Linux.
-Confirm the frame rate or load per-frame timestamps, choose normalization baseline frames, and
-review a versioned protocol with separate baseline/onset/response windows before analysis.
-The provisional 0.10/3-SD/1-second rule is a starting point for validation on your controls.
-The actual historical consecutive-sample rule remains available as a legacy protocol.
-Traces, heatmap, metrics, cell response calls and counts open inside Fiji. Selecting a trace,
-table cell or heatmap row highlights its outline on the cell picture inside the same window.
-Step 4 uses the UNLIFTED background-corrected fluorescence. It keeps invalid-baseline and
-unscorable cells in the quality/count tables and reports the evaluable denominator explicitly.
-The older "every cell kept" export below is retained for compatibility; Step 4 never uses it.
-See docs/SIMPLECA.md for setup, outputs, definitions and reproducibility details.
+STEP 4 — LOCAL SIMPLECA ANALYSIS
+After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
+by Fiji on your own computer. No recording data is uploaded. Keep Fiji open while using the page.
+Use a Fiji window instead opens the native fallback. Both views include linked recording playback
+and use the same R engine and saved analysis results. The browser adds interactive trace hover,
+table sorting and an interactive heatmap.
+
+The browser starts in Recording view. Play, the frame slider, previous/next frame and Speed are
+prominent at the top and work before analysis or R setup. The page identifies this as a preview;
+response-percentage tiles and result tables stay hidden until an analysis has completed.
+Playback follows the available frame times. Unconfirmed seconds are labeled provisional. With
+no valid time base, the page labels a preview fallback of 20 frames per second at 1x; this is a
+display rate, not an acquisition-rate estimate. Static colour overview is explicitly a still image:
+Play is disabled there, and frame controls are disabled before results exist. After analysis, the
+frame slider can inspect the trace cursor without animating that overview. Choose Recording to
+play or scrub movie frames.
+
+On first use, click Set up analysis engine (internet required). This installs private R and
+jsonlite for 64-bit Windows, Intel/Apple Silicon Mac or x64 Linux. Later analysis can run offline.
+Confirm the frame rate or load exact per-frame timestamps. Choose the normalization baseline
+frames, then review each protocol row's local baseline, stimulus onset and response window.
+The primary stimulus and optional named control can have different thresholds and timing.
+Detailed response rules, protocol files and experiment/diagnostic settings expand when needed;
+the current timing and rule summary remain visible. Browser percentage fields use 10 for 10%,
+which is stored as the fraction 0.10 in the shared protocol.
+The provisional 0.10 / 3 baseline SD / 1-second rule is a starting point to validate on your controls.
+At 2 Hz, a one-second span needs three qualifying samples. The actual historical consecutive-
+sample rule remains available as a legacy protocol; it retains its original endpoint handling.
+
+Step 4 uses full-precision UNLIFTED background-corrected fluorescence. Invalid normalization,
+missing data and incomplete stimulus coverage remain visible as exclusions or unscorable calls.
+Percent responding is 100 * Responded / Evaluable; exclusions do not become nonresponders.
+Draft edits and changed timestamp/diagnostic files are marked as pending. They do not relabel an
+older completed result, its plots or its denominator, or change its movie timing and exports.
+Apply changes & reanalyze runs the new settings; the last completed result remains until success.
+
+In the browser, select a cell by trace, table, heatmap or picture. The time slider, Play button and
+plot cursor move together in Recording view. Change from baseline subtracts the normalization
+baseline image and lightly smooths the view. Static colour overview stays still. These are display
+operations only. Filters, palettes and 99-percent display ranges do not change measurements.
+The Step 3 intensity-lifted "every cell kept" table below remains a legacy diagnostic export;
+Step 4 never uses it for fractional response percentages.
+
+Protocol JSON, exact inputs, timestamps, ROI identities, exclusions, quality flags, window metrics,
+biological-unit metadata and the applied settings are saved with each analysis. Optional sensitivity
+and negative-control diagnostics stay separate from the applied result. See docs/SIMPLECA.md for
+setup, formulas, full output definitions and reproducibility details.
 
 WHAT IT DOES
 One menu command takes a calcium-imaging recording (a time-lapse movie, for example .zvi, .czi or .tif)
@@ -57,6 +91,8 @@ HOW TO USE IT
   1. Empty the ROI Manager if it holds outlines from other work (the plugin uses whatever is in it).
   2. Choose  Plugins > Calcium Imaging > Calcium Cells Step By Step.
   3. In the first window pick the recording: one that is open in Fiji, or "Choose a file from disk...".
+     For a file from disk, the file chooser opens as soon as you pick that entry (or press
+     "Choose file…"), and the file's name is shown under the list.
      Pick the original recording, not a processed copy. Choose a folder for the results. Press Next.
   4. The colour picture opens on the left, and a window with one card per step stays on top at the
      right. Step 2 is open; click the title of another step to open it (the open one closes).
@@ -194,6 +230,7 @@ local stimulus-window coverage is unscorable. The reported percentage is 100 * R
 where Evaluable = Responded + Did not respond. Registered, excluded and unscorable counts remain
 separate, and accepted edge exclusions remain in the ROI registry/cohort flow.
 Low F0 relative to baseline SD and zero SD are review warnings, not automatic exclusions.
+For a noise-only rule, zero estimated SD is unscorable unless a justified nonzero noise floor is set.
 The old intensity-lifted table adds an arbitrary constant to dim traces. That changes fractional
 amplitudes and thresholds; it does not repair normalization or provide a valid responder denominator.
 It remains available for legacy diagnostics. The Step 3 screening-rise flag is a separate historical
@@ -208,14 +245,17 @@ LIMITS: PLEASE READ
     micrometres per pixel (cultured cells loaded with Fluo-4, one frame per second). For a different
     magnification or camera, change the numbers in the "settings" block at the top of the .groovy
     file (it is a plain text file).
-  - How the background is chosen changes the resting level of a cell. When cells are only a few
-    gray levels above the background, the size of dF/F0 is therefore not reliable. The rise in gray
-    levels and the question "did this cell respond" are much more robust. Check
-    ..._summary_per_cell.csv: cells with "cell_above_background" below about 1 have no usable dF/F0.
+  - Background choice changes the resting level. For dim cells, inspect the raw reference,
+    background and quality flags; an unstable reference makes fractional amplitudes difficult to
+    interpret. Raw rises and baseline noise help review the recording, but shifting a trace upward
+    does not repair normalization. Historical "cell_above_background" flags are review aids, not a
+    universal cell-eligibility threshold.
   - The automatic response finder misses a response when only a handful of cells respond.
   - The suggested outlines are suggestions only. They include precipitate and sometimes join two
     cells. Nothing becomes a cell unless you click it.
-  - Tested on one Mac with Fiji (ImageJ 1.54p). Not yet tested on Windows or Linux.
+  - The original imaging workflow was tested on one Mac with Fiji (ImageJ 1.54p). Automated
+    Windows/Linux interface checks and Windows/macOS/Linux R checks do not establish biological
+    accuracy or replace a complete imaging-workflow check on the computer being used.
 
 
 IF SOMETHING GOES WRONG
@@ -286,8 +326,8 @@ The plugin window can be resized. Smaller windows show scrollbars instead of com
 controls. Use the mouse wheel or vertical scrollbar to reach lower sections; use the horizontal
 scrollbar when the window is too narrow. Detection, results, and update messages preserve the
 window size you chose. The initial window fits within the screen. The colour picture is fitted
-into the free space to the left of the plugin window, and the Step 4 window opens there too, so
-the windows do not cover each other.
+into the free space beside the plugin window. The native Step 4 fallback can open beside Fiji;
+the default Step 4 page uses an ordinary browser window.
 
 STEP 2 PROGRESS AND GITHUB UPDATES
 The progress panel shows percentage stage progress, a persistent explanation of the current stage,

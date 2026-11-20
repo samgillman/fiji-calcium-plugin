@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimpleCa²⁺ · Analyze responses</title>
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<header class="top">
+  <div class="brand">SimpleCa²⁺ <span>in Fiji · Step 4</span></div>
+  <div class="recording" id="recording" title=""></div>
+  <div class="grow"></div>
+  <button class="ghost" id="toggle-settings" type="button">Hide settings</button>
+  <span class="pill" id="engine">Checking the analysis engine…</span>
+</header>
+
+<div class="gone" id="lost" role="alert">This page lost its connection to Fiji. Keep the plugin window open, then press <b>Analyze responses</b> there again.</div>
+
+<div class="layout">
+  <aside id="side" aria-label="Analysis settings">
+    <div class="settings-title"><h1>Set up the analysis</h1><p class="fine">Review the movie first. Then check the timing and choose a response rule.</p></div>
+    <section class="card">
+      <h2>1. Check the recording time</h2>
+      <label class="row"><span>Frames per second</span><input id="sampling_hz" inputmode="decimal" aria-describedby="time-help"></label>
+      <p class="fine" id="time-help">Seconds are estimates until you confirm the frame rate or supply recorded timestamps.</p>
+      <div class="row"><span>Resting baseline frames</span><span class="pair"><input id="baseline_start" inputmode="numeric" aria-label="Baseline first frame"><i>to</i><input id="baseline_end" inputmode="numeric" aria-label="Baseline last frame"></span></div>
+      <p class="fine">These frames define F₀ for the trace display. Each stimulus has its own response baseline below.</p>
+      <details><summary>Use recorded timestamps</summary><p class="fine">A CSV with a Time_s column in seconds, one row per frame. It takes priority over the frame rate.</p>
+        <label class="file-label">Timestamp CSV <input id="timestamps-file" type="file" accept=".csv,text/csv"></label>
+        <div class="file-note"><span id="timestamps-name">No file selected</span><button id="timestamps-clear" class="ghost small" type="button" hidden>Remove</button></div>
+      </details>
+    </section>
+    <section class="card" id="protocol-settings">
+      <h2>2. Set the stimulus and rule</h2>
+      <label class="row"><span>Rule type</span><select id="protocol-mode"><option value="2">Elapsed time / custom</option><option value="1">Legacy consecutive samples</option></select></label>
+      <p class="fine" id="rule-help">Starter settings are provisional. Check them against your controls before using responder percentages.</p>
+      <div id="windows-editor"></div>
+      <label class="check"><input type="checkbox" id="control"> Include a positive control</label>
+      <details id="protocol-details"><summary>Protocol name, files and overrides</summary>
+        <label class="stack">Protocol name<input id="protocol-name" class="wide"></label>
+        <label class="stack">Validation status<select id="protocol-validation"><option value="provisional">Provisional</option><option value="user_defined">User defined</option><option value="validated_by_user">Validated by user</option></select></label>
+        <div class="actions"><label class="file-button">Import protocol JSON<input type="file" id="protocol-import" accept=".json,application/json"></label><button id="protocol-export" type="button">Export protocol</button></div>
+        <label class="stack">Field timing overrides (JSON)<textarea id="field-overrides" rows="3" spellcheck="false" aria-describedby="overrides-help"></textarea></label>
+        <p class="fine" id="overrides-help">Optional. Imported overrides are preserved. Use an array of field timing overrides from a SimpleCa protocol, or leave blank.</p>
+      </details>
+    </section>
+    <details class="card" id="optional-settings"><summary>Experiment details and diagnostics</summary>
+      <label class="stack">Condition<input id="condition" class="wide" placeholder="Optional"></label>
+      <label class="stack">Biological unit<input id="biological_unit" class="wide" placeholder="Optional: animal, culture, etc."></label>
+      <p class="fine">Cell counts do not establish the number of independent biological replicates.</p>
+      <label class="file-label">Sensitivity grid CSV<input id="sensitivity-file" type="file" accept=".csv,text/csv"></label>
+      <div class="file-note"><span id="sensitivity-name">No file selected</span><button id="sensitivity-clear" class="ghost small" type="button" hidden>Remove</button></div>
+      <label class="file-label">Negative-control windows CSV<input id="negative_control-file" type="file" accept=".csv,text/csv"></label>
+      <div class="file-note"><span id="negative_control-name">No file selected</span><button id="negative_control-clear" class="ghost small" type="button" hidden>Remove</button></div>
+      <p class="fine">Diagnostics are saved separately and do not change the primary calls. Available for version 2 protocols.</p>
+    </details>
+    <section class="run-box">
+      <h2>3. Run the analysis</h2>
+      <label class="check confirm"><input type="checkbox" id="confirmed"> I checked the frame rate or timestamps, baseline and stimulus timing</label>
+      <div class="actions"><button class="primary" id="analyze" type="button" disabled>Run analysis</button><button id="cancel" type="button" disabled>Cancel</button></div>
+      <div class="progress" id="progress" hidden><div id="bar"></div></div>
+      <p class="status" id="status" role="status"></p>
+      <div class="actions"><button id="setup" type="button" disabled>Set up analysis engine</button><button id="log" type="button" disabled>View log</button></div>
+    </section>
+    <p class="fine" id="version"></p>
+  </aside>
+
+  <main>
+    <div class="workspace-heading"><div><h1 id="workspace-title">Review the recording</h1><p id="workflow-help">Drag the frame slider or press Play. You can review the movie before running analysis.</p></div><span class="badge" id="review-stage">Preview · no analysis yet</span></div>
+    <div class="applied-note" id="applied-note" role="status" hidden></div>
+    <div class="tiles" id="result-tiles" hidden>
+      <button class="tile big" id="tile-responding" type="button" data-group="1" title="Show only the cells that responded"><b>–</b><span>responding to the primary stimulus</span></button>
+      <button class="tile" id="tile-registered" type="button" data-group="0" title="Show all cells"><b>–</b><span>cells registered</span></button>
+      <button class="tile" id="tile-excluded" type="button" data-group="3" title="Show only excluded or unscorable cells"><b>–</b><span>excluded</span></button>
+      <button class="tile" id="tile-unscorable" type="button" data-group="3" title="Show only excluded or unscorable cells"><b>–</b><span>unscorable</span></button>
+    </div>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab on" data-tab="review" type="button" role="tab">Cells and traces</button>
+      <button class="tab" disabled data-tab="heatmap" type="button" role="tab">Heatmap</button>
+      <button class="tab" disabled data-tab="metrics" type="button" role="tab">Metrics + quality</button>
+      <button class="tab" disabled data-tab="calls" type="button" role="tab">Cell response calls</button>
+      <button class="tab" disabled data-tab="counts" type="button" role="tab">Responder counts</button>
+      <div class="grow"></div>
+      <button class="ghost" id="open-folder" type="button" disabled>Open analysis folder</button>
+    </nav>
+
+    <section class="panel" id="panel-review">
+      <div class="timebar" id="transport" aria-label="Recording playback">
+        <button class="primary" id="play" type="button" disabled>▶ Play</button>
+        <button id="frame-back" type="button" aria-label="Previous frame" title="Previous frame" disabled>‹</button>
+        <input type="range" id="time" min="1" max="1" step="1" value="1" aria-label="Recording frame" disabled>
+        <button id="frame-forward" type="button" aria-label="Next frame" title="Next frame" disabled>›</button>
+        <label class="speed-label">Speed<select id="speed" aria-label="Playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option></select></label>
+        <span id="time-label" aria-live="off">Frame 1</span>
+      </div>
+      <p class="fine" id="playback-note">Loading the recording…</p>
+      <div class="toolbar">
+        <label id="window-select-label" hidden>Response window <select id="response-window"></select></label>
+        <label id="group-label" hidden>Show <select id="group"><option>All cells</option></select></label>
+        <label>Cell <select id="cell"></select></label>
+        <button id="previous" type="button" title="Previous cell (left arrow)" disabled>‹</button>
+        <button id="next" type="button" title="Next cell (right arrow)" disabled>›</button>
+        <label class="check" id="every-label" hidden><input type="checkbox" id="every" checked> All traces</label>
+        <div class="verdict" id="verdict"></div>
+      </div>
+      <div class="split">
+        <div class="card flush" id="picture-card">
+          <div class="toolbar dark">
+            <label class="view-label">View <select id="view" aria-label="Recording display"><option value="raw">Recording</option><option value="change">Change from baseline</option><option value="picture">Static colour overview</option></select></label>
+            <label class="check"><input type="checkbox" id="outlines" checked> All outlines</label>
+            <button id="zoom-cell" type="button" disabled>Zoom to cell</button>
+            <button id="zoom-all" type="button">Whole picture</button>
+          </div>
+          <div class="stage"><canvas id="picture"></canvas><div class="movie-message" id="movie-message" role="status">Loading the recording…</div></div>
+          <div class="caption dark"><span id="call-legend" hidden><span class="chip"><i style="background:#3ddbb5"></i>responded</span><span class="chip"><i style="background:#ffa24a"></i>did not respond</span><span class="chip"><i class="dash"></i>excluded or unscorable</span></span><span class="grow"></span><span id="picture-note"></span></div>
+        </div>
+        <div class="card flush" id="plot-card" hidden>
+          <div class="legend" id="legend"></div>
+          <div class="stage light"><canvas id="plot"></canvas><div class="empty" id="plot-empty">Run the analysis to see every cell's trace.</div></div>
+          <div class="caption"><span title="Click a trace to select that cell. Drag to move through time. Scroll to zoom the time axis; double-click to reset it.">Drag to scrub · click a trace to select a cell · scroll to zoom</span><span class="grow"></span><button class="ghost small" id="save-plot" type="button" disabled>Save plot + metadata</button></div>
+        </div>
+      </div>
+
+    </section>
+
+    <section class="panel" id="panel-heatmap" hidden>
+      <div class="toolbar">
+        <label>Sort <select id="order">
+          <option value="call">Response call, strongest on top</option>
+          <option value="tpeak">Time to peak</option>
+          <option value="amp">Peak amplitude</option>
+          <option value="orig">Original order</option></select></label>
+        <label>Colours <select id="palette" title="Blue–white–red keeps values below zero. The other palettes start at zero, so anything below zero takes the darkest colour.">
+          <option value="signed">Blue–white–red</option>
+          <option value="plasma">plasma</option><option value="viridis">viridis</option><option value="magma">magma</option>
+          <option value="inferno">inferno</option><option value="cividis">cividis</option></select></label>
+        <label>Range <select id="range" title="“99 % of values” stops one extreme cell from washing out all the others; values beyond the range take the end colour.">
+          <option value="robust">99 % of values</option><option value="full">Largest value</option></select></label>
+        <label class="check" title="One readable row per cell, with its name; the list scrolls"><input type="checkbox" id="tall"> Cell names</label>
+        <div class="grow"></div>
+        <button class="ghost small" id="save-heatmap" type="button" disabled>Save heatmap + metadata</button>
+      </div>
+      <div class="scroller" id="heatmap-box"><canvas id="heatmap"></canvas><div class="empty" id="heatmap-empty">Run the analysis to see the heatmap.</div></div>
+    </section>
+
+    <section class="panel" id="panel-metrics" hidden><div class="toolbar"><label>Table <select id="metrics-table"></select></label></div><div class="scroller"><table id="table-metrics"></table></div></section>
+    <section class="panel" id="panel-calls" hidden><div class="scroller"><table id="table-calls"></table></div></section>
+    <section class="panel" id="panel-counts" hidden><div class="scroller"><table id="table-counts"></table></div><p class="fine pad">Counts describe the cells you chose; cell N is not animal N.</p></section>
+  </main>
+</div>
+<div class="tip" id="tip" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

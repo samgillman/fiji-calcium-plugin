@@ -52,6 +52,7 @@ def engine=Engine.unpack(root)
 new File(engine,'runner.R').text='corrupted'
 assert Engine.unpack(root)==engine
 assert new File(engine,'runner.R').getText('UTF-8').startsWith('# Fiji adapter.')
+new GroovyShell(loader,new Binding([loader:loader,runtime:runtime,root:root])).evaluate(new File('tests/test_web_analysis_runtime.groovy'))
 println 'PASS: managed R/jsonlite setup and cache, legacy and independent golden analysis, native protocol round trip, timestamp snapshots, paths with spaces and embedded source repair'
 } catch(Throwable problem) {
     if(job.logFile.isFile())println(job.logFile.getText('UTF-8'))
