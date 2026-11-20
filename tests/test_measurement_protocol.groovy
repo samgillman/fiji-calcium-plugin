@@ -52,3 +52,18 @@ assert Protocol.payload([legacy],1,'Historical','user_defined').schema_version==
     catch(IllegalArgumentException expected){assert expected.message.contains('version-2-only')}
 }
 println 'PASS: native protocol rejects inconsistent baseline metadata and unsupported legacy settings'
+
+// Two-window rules mirror the pinned engine (analysis/upstream/response_protocols.R), so these never reach R as exit code 1.
+def stimulus=Protocol.window('Stimulus','Capsaicin',0d,20d,250d)
+def refused={List windows,String text->try{Protocol.payload(windows,2,'Overlap','user_defined');assert false:'Engine-refused protocol accepted: '+text}catch(IllegalArgumentException expected){assert expected.message.contains(text):expected.message}}
+// Stress test: KCl baseline 200-250 s inside a primary window that ends at 250 s.
+refused([stimulus,Protocol.window('Control','KCl',200d,250d,299d)],'falls inside the Capsaicin response interval')
+refused([stimulus,Protocol.window('Control','KCl',100d,240d,299d)],'response intervals overlap')
+refused([Protocol.window('Stimulus','Capsaicin',150d,200d,250d),Protocol.window('Control','KCl',0d,100d,180d)],'Capsaicin baseline (150–200 s) falls inside the KCl response interval')
+assert Protocol.payload([stimulus,Protocol.window('Control','KCl',250d,260d,299d)],2,'Adjacent','user_defined').windows.size()==2 : 'A control baseline that starts where the primary window ends is allowed, as in the engine'
+assert Protocol.payload([Protocol.window('Stimulus','Capsaicin',0.5d,3d,14.5d)+[Duration_mode:'samples'],Protocol.window('Control','KCl',0.5d,3d,14.5d)+[Duration_mode:'samples']],1,'Legacy','user_defined').windows.size()==2 : 'The engine applies the two-window rules to version 2 only'
+// Hand-edited or malformed files explain what to fix.
+def edited=new groovy.json.JsonSlurper().parseText(groovy.json.JsonOutput.toJson(portable));edited.name='Renamed by hand'
+try{Protocol.parse(edited);assert false}catch(IOException expected){assert expected.message.contains('"Renamed by hand" at the top of the file') && expected.message.contains('Make every copy match'):expected.message}
+try{Protocol.parse('{"schema": "simpleca.response-protocol",');assert false}catch(IOException expected){assert expected.message.startsWith('This protocol file is not valid JSON.'):expected.message}
+println 'PASS: protocols the engine would refuse for overlapping windows are caught first; edited or malformed files get plain messages'

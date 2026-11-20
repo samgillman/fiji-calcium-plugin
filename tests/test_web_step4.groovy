@@ -69,6 +69,16 @@ try {
     }
     def badRule=Settings.copy(about.draft);badRule.protocol.windows[0].Floor_local_fraction=-0.1d
     assert Settings.diagnose(badRule,data).errors
+    // Stress test: an impossible minimum baseline sample count is announced before a run that would score no cell.
+    def starved=Settings.copy(about.draft);starved.protocol.windows[0].Min_baseline_samples=5000
+    assert Settings.diagnose(starved,data).warnings.any{it.contains('needs 5000') && it.contains('every cell will be unscorable')}
+    assert !Settings.diagnose(about.draft,data).warnings.any{it.contains('every cell will be unscorable')}
+    // A refused engine run reports R's own reason, not only an exit code.
+    def engineLog=File.createTempFile('engine','.log');engineLog.deleteOnExit()
+    engineLog.text='SIMPLECA\t5\tReading protocol\nError in responder_validate_protocol(protocol) : \n  Each stimulus requires a baseline outside the other stimulus\'s response interval.\nCalls: main -> responder_validate_protocol\nExecution halted\n'
+    assert loader.loadClass('CalciumLocalJob').engineError(engineLog)=="Each stimulus requires a baseline outside the other stimulus's response interval."
+    engineLog.text='Error: Protocol is missing: End_s.\nExecution halted\n'
+    assert loader.loadClass('CalciumLocalJob').engineError(engineLog)=='Protocol is missing: End_s.'
     def overlap=Settings.copy(about.draft);overlap.values.baseline_end='10'
     assert Settings.diagnose(overlap,data).warnings.any{it.contains('F₀ baseline includes')}
 
@@ -79,7 +89,8 @@ try {
     // Stale HTTP edits cannot overwrite a newer draft revision.
     assert json('api/draft',[draft:about.draft,revision:0])[0]==200 && json('api/session')[1].draft.values.sampling_hz==''
     pending=Settings.copy(about.draft)
-    def primary=Protocol.window('Stimulus','Capsaicin',0.5d,3d,14.5d),control=Protocol.window('Control','Ionomycin',0.5d,3d,14.5d)
+    // The pinned engine refuses overlapping primary and control intervals, so the control follows the primary window.
+    def primary=Protocol.window('Stimulus','Capsaicin',0.5d,3d,7d),control=Protocol.window('Control','Ionomycin',7d,9d,14.5d)
     control.Floor_local_fraction=0.35d;control.SD_multiplier=5d;control.Duration_mode='samples';control.Consecutive_samples=4
     pending.protocol=Protocol.payload([primary,control],2,'Browser protocol','user_defined')
     def imported=json('api/protocol',[protocol:pending.protocol]);assert imported[0]==200 && imported[1].protocol.windows[1].Consecutive_samples==4

@@ -13,15 +13,16 @@ def source=new File('tests/fixtures/simpleca').absoluteFile,fixture=new File(roo
 source.listFiles().findAll{it.isFile()}.each{new File(fixture,it.name).bytes=it.bytes}
 List clock=(0..<30).collect{it/2d+(it>=15?5d:0d)}
 ['normalized_traces.csv','mean_trace.csv'].each{file->def rows=Csv.read(new File(fixture,file));rows.drop(1).eachWithIndex{row,i->row[0]=clock[i]};Csv.write(new File(fixture,file),rows)}
-def primary=Protocol.window('Stimulus','Capsaicin',0.5d,3d,19.5d)
-def control=Protocol.window('Control','Ionomycin',0.5d,3d,19.5d);control.Floor_local_fraction=0.4d;control.SD_multiplier=5d
+// The pinned engine refuses overlapping intervals, so the control baseline starts where the primary window ends.
+def primary=Protocol.window('Stimulus','Capsaicin',0.5d,3d,5.5d)
+def control=Protocol.window('Control','Ionomycin',5.5d,12.5d,19.5d);control.Floor_local_fraction=0.4d;control.SD_multiplier=5d
 Map protocol=Protocol.payload([primary,control],2,'Synthetic browser display protocol','provisional')
 ['protocol.json','applied_protocol.json'].each{new File(fixture,it).text=Protocol.json(protocol)}
 def callRows=Csv.read(new File(fixture,'responder_calls.csv'));List header=callRows[0]
 header.add('QC_flags');callRows.drop(1).each{it.add('DURATION_BELOW_SAMPLE_INTERVAL')}
 def set={List row,String name,Object value->int index=header.indexOf(name);if(index>=0)row[index]=''+value}
-callRows.drop(1).each{row->set(row,'End_s',19.5);set(row,'Effective_end_s',19.5)}
-def extra=callRows.drop(1).collect{original->def row=new ArrayList(original);set(row,'Role','Control');set(row,'Stimulus','Ionomycin');set(row,'Floor_local_fraction',0.4);set(row,'Floor_threshold',0.4);set(row,'Threshold_increase',0.4);set(row,'SD_multiplier',5);set(row,'Baseline_mean',0.5)
+callRows.drop(1).each{row->set(row,'End_s',5.5);set(row,'Effective_end_s',5.5)}
+def extra=callRows.drop(1).collect{original->def row=new ArrayList(original);set(row,'Start_s',12.5);set(row,'End_s',19.5);set(row,'Effective_end_s',19.5);set(row,'Baseline_s',7);set(row,'Role','Control');set(row,'Stimulus','Ionomycin');set(row,'Floor_local_fraction',0.4);set(row,'Floor_threshold',0.4);set(row,'Threshold_increase',0.4);set(row,'SD_multiplier',5);set(row,'Baseline_mean',0.5)
     if(row[header.indexOf('Cell')]=='Cell001'){set(row,'Status','Did not respond');set(row,'Reason','Synthetic control fixture below threshold')}
     if(row[header.indexOf('Cell')]=='Cell002'){set(row,'Status','Responded');set(row,'Reason','Synthetic control fixture sustained crossing')}
     if(row[header.indexOf('Cell')]=='Cell005'){set(row,'Status','Did not respond');set(row,'Reason','Synthetic control fixture below threshold')}

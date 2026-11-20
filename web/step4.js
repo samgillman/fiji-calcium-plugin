@@ -30,7 +30,7 @@
 
   /** Sets a canvas to the size it is shown at (sharp on high-density screens) and returns a context in CSS pixels. */
   function fit(canvas) {
-    const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;
+    const dpr = (window.devicePixelRatio || 1) * (S.exportScale || 1), w = canvas.clientWidth, h = canvas.clientHeight;
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
     const ctx = canvas.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     return { ctx, w, h, dpr };
@@ -197,8 +197,23 @@
         if (numeric(row.End_s) && Number(row.End_s) > end) warnings.push(label + 'response end exceeds this recording; complete-window rules may mark cells unscorable.');
         if (!legacy && row.Duration_mode === 'seconds' && numeric(row.Min_duration_s) && Number(row.Min_duration_s) < interval) warnings.push(label + 'minimum duration (' + row.Min_duration_s + ' s) is shorter than the frame interval (' + fmt(interval) + ' s). Timing is coarsely resolved.');
         if (!index && numeric(row.Stimulus_onset_s) && numeric(value.baseline_end) && (Number(value.baseline_end) - 1) * interval >= Number(row.Stimulus_onset_s)) warnings.push('The trace F₀ baseline includes the stimulus onset or later frames. Review the resting baseline.');
+        if (!legacy && numeric(row.Baseline_start_s) && numeric(row.Baseline_end_s) && numeric(row.Min_baseline_samples)) {
+          let samples = 0; for (let i = 0; i < n; i++) { const t = i * interval; if (t >= Number(row.Baseline_start_s) && t < Number(row.Baseline_end_s)) samples++; }
+          if (samples < Number(row.Min_baseline_samples)) warnings.push(label + 'the baseline holds ' + samples + ' samples but the rule needs ' + row.Min_baseline_samples + ', so every cell will be unscorable for this window.');
+        }
       }
     });
+    // The pinned engine refuses overlapping primary and control windows; catch that here instead of failing the run.
+    if (!legacy && draft.protocol.windows.length === 2) {
+      const [a, b] = draft.protocol.windows.map((w) => expandWindow(w, legacy)), keys = ['Baseline_start_s', 'Baseline_end_s', 'Stimulus_onset_s', 'End_s'];
+      if ([a, b].every((w) => keys.every((key) => numeric(w[key])))) {
+        const v = (w, key) => Number(w[key]);
+        if (Math.max(v(a, 'Stimulus_onset_s'), v(b, 'Stimulus_onset_s')) < Math.min(v(a, 'End_s'), v(b, 'End_s'))) add('window-1-Stimulus_onset_s', 'Control: its response interval overlaps the primary one. Start the control at or after ' + fmt(v(a, 'End_s')) + ' s, or end the primary window earlier.');
+        [[a, b, 0], [b, a, 1]].forEach(([own, other, index]) => {
+          if (Math.max(v(own, 'Baseline_start_s'), v(other, 'Stimulus_onset_s')) < Math.min(v(own, 'Baseline_end_s'), v(other, 'End_s'))) add('window-' + index + '-Baseline_start_s', (index ? 'Control: ' : 'Stimulus: ') + 'the baseline (' + fmt(v(own, 'Baseline_start_s')) + '–' + fmt(v(own, 'Baseline_end_s')) + ' s) falls inside the other response interval (' + fmt(v(other, 'Stimulus_onset_s')) + '–' + fmt(v(other, 'End_s')) + ' s).');
+        });
+      }
+    }
     if (!String(draft.protocol.name || '').trim()) add('protocol-name', 'Enter a protocol name.');
     if (draft.protocol.field_overrides !== null && !Array.isArray(draft.protocol.field_overrides)) add('field-overrides', 'Field overrides must be a valid JSON array.');
     const signature = JSON.stringify(draft);
@@ -344,10 +359,7 @@
     const selector = $('response-window'); selector.innerHTML = '';
     for (const w of windows) { const o = document.createElement('option'); o.value = w.key; o.textContent = w.stimulus + (w.role === 'Control' ? ' · control' : ' · primary'); selector.appendChild(o); }
     if (!windows.some((w) => w.key === S.window)) S.window = windows[0].key; selector.value = S.window;
-    const counts = r.counts || {}, whole = (key) => { const v = number(counts[key]); return isFinite(v) ? String(Math.round(v)) : '–'; }, percent = number(counts.Percent_responding);
-    $('tile-responding').innerHTML = '<b>' + (isFinite(percent) ? Math.round(percent) + '%' : '–') + '</b><span>' + escape(counts.Stimulus || windows[0].stimulus) + ': ' + whole('Responded') + ' of ' + whole('Evaluable') + ' evaluable cells</span>';
-    $('tile-registered').firstChild.textContent = whole('Registered'); $('tile-excluded').firstChild.textContent = whole('Excluded'); $('tile-unscorable').firstChild.textContent = whole('Unscorable');
-    document.body.classList.add('has-results');
+    showTiles(); document.body.classList.add('has-results');
     for (const id of ['result-tiles', 'plot-card', 'group-label', 'window-select-label', 'every-label', 'call-legend']) $(id).hidden = false;
     for (const tab of document.querySelectorAll('.tab')) tab.disabled = false;
     const tables = $('metrics-table'); tables.innerHTML = '';
@@ -357,6 +369,15 @@
     table('table-calls', r.tables.calls); table('table-counts', r.tables.counts);
     for (const id of ['save-plot', 'save-heatmap']) $(id).disabled = false;
     Plot.x0 = Plot.x1 = null; updateWindow(); setFrame(S.frame); showState();
+  }
+  /** Headline tiles always describe the primary window (pressing one returns to it); each names its stimulus. */
+  function showTiles() {
+    const r = S.results, w = (r.windows || []).find((x) => x.role === 'Stimulus') || (r.windows || [])[0] || {}, counts = r.counts || {};
+    const whole = (key) => { const v = number(counts[key]); return isFinite(v) ? String(Math.round(v)) : '–'; }, percent = number(counts.Percent_responding), name = escape(counts.Stimulus || w.stimulus || 'Stimulus');
+    $('tile-responding').innerHTML = number(counts.Evaluable) === 0
+      ? '<b>–</b><span>' + name + ': no evaluable cells. Check the baseline and response window against the recording.</span>'
+      : '<b>' + (isFinite(percent) ? Math.round(percent) + '%' : '–') + '</b><span>' + name + ': ' + whole('Responded') + ' of ' + whole('Evaluable') + ' evaluable cells</span>';
+    $('tile-registered').firstChild.textContent = whole('Registered'); $('tile-excluded').firstChild.textContent = whole('Excluded'); $('tile-unscorable').firstChild.textContent = whole('Unscorable');
   }
   function updateWindow() {
     const group = $('group'); group.innerHTML = '';
@@ -786,13 +807,23 @@
   function exportMetadata() {
     return { schema: 'simpleca.view-export', schema_version: 1, recording: S.info.recording, plugin_version: S.info.pluginVersion,
       appliedFingerprint: S.results.appliedFingerprint || S.state.appliedFingerprint, appliedProtocol: S.results.appliedProtocol || S.results.protocol,
-      manifest: S.results.manifest, settingsPending: hasPending(), displayed_window: S.window, cell: S.cell, group: GROUPS[S.group],
-      frame: S.frame, time_s: frameTimes()[S.frame - 1], view: S.view, time_range: [Plot.x0, Plot.x1], palette: S.palette, range: S.range, order: S.order };
+      manifest: S.results.manifest, results_folder: S.results.folder || (S.state && S.state.folder) || null, settingsPending: hasPending(), displayed_window: S.window, cell: S.cell, group: GROUPS[S.group],
+      frame: S.frame, time_s: frameTimes()[S.frame - 1], view: S.view, time_range: shownRange(), palette: S.palette, range: S.range, order: S.order };
   }
-  function save(canvas, name) {
+  /** The time span drawn on the trace plot; a full view is recorded as the recording's first and last times. */
+  function shownRange() { const time = S.results.time; return [Plot.x0 === null ? time[0] : Plot.x0, Plot.x1 === null ? time[time.length - 1] : Plot.x1]; }
+  /** recording_window_cell_kind.png, so saved figures from different views do not overwrite each other. */
+  function exportName(kind) {
+    const w = (S.results.windows || []).find((x) => x.key === S.window) || {}, subject = kind === 'traces' ? (S.cell || GROUPS[S.group]) : GROUPS[S.group];
+    return [S.info.recording, w.stimulus, subject, kind].filter(Boolean).map((part) => String(part).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')).filter(Boolean).join('_') + '.png';
+  }
+  /** Figures are redrawn at 3× their on-screen size (at least 2400 px wide) before encoding, then the screen view is restored. */
+  function save(canvas, kind, draw) {
     // Capture provenance now, not after the asynchronous PNG encoder has finished.
-    const metadata = JSON.stringify(exportMetadata(), null, 2);
-    canvas.toBlob((blob) => { download(blob, name); download(new Blob([metadata], { type: 'application/json' }), name.replace(/\.png$/, '.metadata.json')); }, 'image/png');
+    const metadata = JSON.stringify(exportMetadata(), null, 2), name = exportName(kind);
+    S.exportScale = Math.max(3, 2400 / Math.max(1, canvas.clientWidth)) / (window.devicePixelRatio || 1); Plot.dirty = true;
+    try { draw(); canvas.toBlob((blob) => { download(blob, name); download(new Blob([metadata], { type: 'application/json' }), name.replace(/\.png$/, '.metadata.json')); }, 'image/png'); }
+    finally { S.exportScale = 1; Plot.dirty = true; draw(); }
   }
   function wire() {
     for (const tab of document.querySelectorAll('.tab')) tab.addEventListener('click', () => showTab(tab.dataset.tab));
@@ -893,7 +924,7 @@
     $('palette').addEventListener('change', () => { S.palette = $('palette').value; drawHeatmap(); });
     $('range').addEventListener('change', () => { S.range = $('range').value; drawHeatmap(); });
     $('tall').addEventListener('change', () => { S.tall = $('tall').checked; drawHeatmap(); });
-    $('save-plot').addEventListener('click', () => save($('plot'), 'traces.png')); $('save-heatmap').addEventListener('click', () => save($('heatmap'), 'heatmap.png'));
+    $('save-plot').addEventListener('click', () => save($('plot'), 'traces', drawPlot)); $('save-heatmap').addEventListener('click', () => save($('heatmap'), 'heatmap', drawHeatmap));
 
     const picture = $('picture');
     picture.addEventListener('wheel', (event) => { event.preventDefault(); const box = picture.getBoundingClientRect(), mx = event.clientX - box.left, my = event.clientY - box.top, before = place(picture.clientWidth, picture.clientHeight);

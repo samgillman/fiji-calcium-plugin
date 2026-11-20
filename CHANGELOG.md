@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Catch primary and positive-control windows that the analysis engine would refuse (overlapping response intervals, or a baseline inside the other stimulus's response interval) while editing and before a run, in both Step 4 views, instead of failing with "exit code 1". Response rules and thresholds are unchanged.
+- When the engine does stop, show its own reason from the log instead of only an exit code.
+- Warn before a run when a window's baseline holds fewer samples than the rule's minimum, and say after a run when a window scored no cells, instead of a plain "Complete".
+- Name saved trace and heatmap PNGs after the recording, response window and cell or group, export them at three times screen size (at least 2400 px wide), and record the results folder and the actual shown time span in their metadata.
+- Explain malformed protocol JSON and protocol names edited in only one place in plain words.
+- Clear the "Cancelling" label when a cancelled run stops, without a stale percentage.
+
 ## 2026.11.20.5
 
 - Validate Step 4 settings while editing, mark invalid fields and disable analysis until errors are corrected. Preserve separate elapsed-time and legacy drafts when switching rules; add Discard pending changes to restore the completed analysis or initial settings.
