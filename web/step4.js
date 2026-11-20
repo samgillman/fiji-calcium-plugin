@@ -830,6 +830,8 @@
     Buf.decoding.set(key, job); return job.promise;
   }
   /** Keeps the buffer filled: the frame on screen first, then about 3 s of playback ahead (a few frames when paused). */
+  // A frame that just failed is left alone for 2 s, the one on screen included: every finished request calls this again, so without the wait a
+  // frame that cannot load would be asked for without pause. Moving the slider or pressing Play asks for it again at once.
   function pumpFrames() {
     if (!S.info || !S.info.hasMovie || still()) return;
     const mode = S.view, w = frameWidth(), speed = Number($('speed').value), wanted = [S.frame];
@@ -838,7 +840,7 @@
     if (!S.timer && S.frame > 1) wanted.push(S.frame - 1);
     wanted.forEach((f, i) => {
       const key = frameKey(f, mode), stored = Buf.blobs.get(key), failed = Buf.failed.get(key);
-      if ((!stored || stored.w < w) && Buf.inflight.size < PARALLEL && !Buf.inflight.has(key) && !(f !== S.frame && failed && performance.now() - failed < 2000)) fetchFrame(f, mode, w).catch(() => {});
+      if ((!stored || stored.w < w) && Buf.inflight.size < PARALLEL && !Buf.inflight.has(key) && !(failed && performance.now() - failed < 2000)) fetchFrame(f, mode, w).catch(() => {});
       else if (stored && stored.w >= w && i < 8 && !bitmapFor(f, mode)) decodeFrame(f, mode).catch(() => {});
     });
     trimFrames();

@@ -10,6 +10,7 @@
 - Wording follows: **Before the response only (blind)** on the first screen, **Before response (blind)…** in Step 2, "Frames before the response" in the dialog. The saved record reads `Before the response, blind (frames a-b)` (it was `Pre-stimulus, blind (frames a-b)`).
 - Step 4 page: the frames the cells were chosen on are shown as "Cells chosen in Fiji on frames a–b, before the response." The page no longer warns that they run past the stimulus, and the starting stimulus frame taken from them is called a placeholder.
 - Offered on the 18 Nov recordings: P3 Run2 1–107, C2 Run1 1–68, P2 Run1 1–64, C3 Run2 1–60, P2 Run2 capsaicin 1–60, C1 Run3 KCl 13–60 (frames 1–12 moved; the rise near frame 6 is that movement).
+- Step 4 page: a movie frame that cannot load is no longer asked for again without pause (it was requested hundreds of times a second until the slider moved). It is left alone for 2 seconds; moving the slider or pressing Play asks again at once.
 
 ## 2026.11.20.17
 
