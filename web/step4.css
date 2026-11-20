@@ -38,6 +38,10 @@ input:not([type]), input[inputmode] { font: inherit; width: 64px; padding: 4px 7
 input.wide { width: 130px; }
 input:focus, select:focus, button:focus-visible { outline: 2px solid rgba(0,114,178,.45); outline-offset: 1px; }
 input.changed { border-color: var(--blue); background: var(--blue-light); }
+input[aria-invalid=true], select[aria-invalid=true], textarea[aria-invalid=true] { border-color: var(--bad); background: #fff1ef; }
+.validation { color: var(--bad); font-size: 12px; max-height: 100px; overflow-y: auto; }
+.validation ul { margin: 0; padding-left: 17px; }
+.validation .warning { color: var(--warn); }
 .check { display: flex; align-items: flex-start; gap: 7px; cursor: pointer; } .check input { margin-top: 3px; accent-color: var(--blue); }
 .confirm { padding: 0 2px; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -80,6 +84,11 @@ select { border: 1px solid #C5CED8; border-radius: var(--radius-sm); padding: 4p
 .toolbar.dark button:hover:not(:disabled) { background: #26323d; border-color: #5BC0FF; } .toolbar.dark button:disabled { color: #5d6b78; }
 .verdict { flex: 1 1 100%; min-width: 0; color: var(--gray-600); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .verdict b { color: var(--gray-900); } .verdict .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+.cell-quality { flex: 1 1 100%; color: var(--warn); font-size: 12px; overflow-wrap: anywhere; }
+.quality-review { flex: none; margin: 0; padding: 7px 12px; border: 1px solid #e0c28c; border-radius: 5px; background: #fff7e8; }
+.quality-review summary { color: var(--warn); }
+.quality-review ul { max-height: 170px; overflow-y: auto; padding-left: 20px; font-size: 12px; }
+.quality-review .fine { margin-top: 6px; }
 
 .split { flex: 1 1 auto; min-height: 220px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .stage { position: relative; flex: 1 1 auto; min-height: 0; background: #10161C; } .stage.light { background: #fff; }
@@ -107,6 +116,10 @@ th { position: sticky; top: 0; background: var(--gray-50); font-weight: 600; cur
 th:hover { color: var(--blue-dark); } th.up::after { content: " ▲"; font-size: 10px; } th.down::after { content: " ▼"; font-size: 10px; }
 tbody tr { cursor: pointer; } tbody tr:nth-child(even) { background: #FBFCFD; } tbody tr:hover { background: var(--blue-light); } tbody tr.on { background: #d5ebf5; }
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
+th.cell-column, td.cell-column { position: sticky; left: 0; background: #fff; box-shadow: 1px 0 var(--gray-100); z-index: 2; }
+th.cell-column { background: var(--gray-50); z-index: 3; }
+tr.on td.cell-column { background: #d5ebf5; }
+td.empty-table { padding: 24px; color: var(--gray-600); }
 
 .tip { position: fixed; z-index: 10; pointer-events: none; background: var(--gray-900); color: #fff; font-size: 12px; padding: 4px 8px; border-radius: var(--radius-sm); box-shadow: var(--shadow-2); white-space: nowrap; }
 body.no-side aside { display: none; }
@@ -143,6 +156,7 @@ body.has-results .split { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr)
 .run-box h2 { margin: 0; }
 .status { font-size: 13px; min-height: 1.45em; overflow-wrap: anywhere; }
 .run-box .primary { flex: 1; }
+#sampling_hz { width: 140px; }
 .row { flex-wrap: wrap; }
 .row > span:first-child { white-space: normal; }
 .row input { width: 72px; }
@@ -171,6 +185,24 @@ details[open] > summary { margin-bottom: 8px; }
 .tab { white-space: nowrap; padding: 7px 9px; }
 .tab:disabled { background: transparent; border-color: transparent; }
 :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* Keep a useful plot height, then allow the page to scroll instead of clipping captions. */
+.layout { min-height: 720px; }
+.split { min-height: 350px; }
+.stage { min-height: 220px; }
+.verdict { white-space: normal; overflow: visible; }
+.caption { white-space: normal; flex-wrap: wrap; overflow: visible; }
+.caption > span { overflow: visible; }
+@media (max-height: 850px) and (min-width: 801px) {
+  .layout { flex: none; min-height: 0; align-items: flex-start; }
+  aside { position: sticky; top: 10px; max-height: calc(100vh - 20px); }
+  .settings-scroll { flex-basis: 300px; min-height: 180px; }
+  main { min-height: 720px; }
+  .panel { min-height: 350px; }
+  .scroller { min-height: 300px; max-height: 65vh; }
+  .split { flex: none; min-height: 350px; }
+  .stage { height: 260px; flex: none; }
+  #heatmap-box { height: 420px; flex: none; }
+}
 @media (max-width: 1150px) {
   .layout { gap: 12px; padding: 12px; }
   aside { flex-basis: 320px; }

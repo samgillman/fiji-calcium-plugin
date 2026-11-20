@@ -14,10 +14,11 @@
   <div class="grow"></div>
   <button class="ghost" id="open-folder" type="button" disabled hidden>Results folder</button>
   <button class="ghost" id="toggle-settings" type="button">Hide settings</button>
+  <button class="ghost" id="close-page" type="button">Close analysis</button>
   <span class="pill" id="engine">Checking the analysis engine…</span>
 </header>
 
-<div class="gone" id="lost" role="alert">This page lost its connection to Fiji. Keep the plugin window open, then choose <b>Open analysis page</b> there again.</div>
+<div class="gone" id="lost" role="alert">This page lost its connection to Fiji. Keep Fiji open. Saved results remain in the results folder; reopen the analysis from Fiji if the connection does not recover.</div>
 
 <div class="layout">
   <aside id="side" aria-label="Analysis settings">
@@ -38,8 +39,10 @@
       <h2>2. Set the stimulus and rule</h2>
       <label class="row"><span>Rule type</span><select id="protocol-mode"><option value="2">Elapsed time / custom</option><option value="1">Legacy consecutive samples</option></select></label>
       <p class="fine" id="rule-help">Starter settings are provisional. Check them against your controls before using responder percentages.</p>
+      <p class="fine">Each rule type keeps its own draft settings when you switch.</p>
       <div id="windows-editor"></div>
       <label class="check"><input type="checkbox" id="control"> Include a positive control</label>
+      <p class="fine" id="control-help" hidden>Enter the control's actual baseline, addition time and scoring window within this recording.</p>
       <details id="protocol-details"><summary>Protocol name, files and overrides</summary>
         <label class="stack">Protocol name<input id="protocol-name" class="wide"></label>
         <label class="stack">Validation status<select id="protocol-validation"><option value="provisional">Provisional</option><option value="user_defined">User defined</option><option value="validated_by_user">Validated by user</option></select></label>
@@ -62,10 +65,13 @@
     <section class="run-box">
       <h2>3. Run the analysis</h2>
       <label class="check confirm"><input type="checkbox" id="confirmed"> I checked the frame rate or timestamps, baseline and stimulus timing</label>
+      <div id="validation" class="validation" role="status" hidden></div>
       <div class="actions"><button class="primary" id="analyze" type="button" disabled>Run analysis</button><button id="cancel" type="button" disabled>Cancel</button></div>
+      <button id="discard" type="button" hidden>Discard pending changes</button>
       <div class="progress" id="progress" hidden><div id="bar"></div></div>
       <p class="status" id="status" role="status"></p>
       <div class="actions"><button id="setup" type="button" disabled>Set up analysis engine</button><button id="log" type="button" disabled>View log</button></div>
+      <p class="fine" id="open-feedback" role="status"></p>
     </section>
     <p class="fine" id="version"></p>
   </aside>
@@ -76,9 +82,10 @@
     <div class="tiles" id="result-tiles" hidden>
       <button class="tile big" id="tile-responding" type="button" data-group="1" title="Show only the cells that responded"><b>–</b><span>responding to the primary stimulus</span></button>
       <button class="tile" id="tile-registered" type="button" data-group="0" title="Show all cells"><b>–</b><span>cells registered</span></button>
-      <button class="tile" id="tile-excluded" type="button" data-group="3" title="Show only excluded or unscorable cells"><b>–</b><span>excluded</span></button>
-      <button class="tile" id="tile-unscorable" type="button" data-group="3" title="Show only excluded or unscorable cells"><b>–</b><span>unscorable</span></button>
+      <button class="tile" id="tile-excluded" type="button" data-group="3" title="Show only excluded cells"><b>–</b><span>excluded</span></button>
+      <button class="tile" id="tile-unscorable" type="button" data-group="4" title="Show only unscorable cells"><b>–</b><span>unscorable</span></button>
     </div>
+    <details id="quality-review" class="quality-review" hidden><summary id="quality-summary"></summary><ul id="quality-list"></ul><button id="quality-filter" type="button">Show cells needing review</button><p class="fine">Review flags do not change saved response calls or exclude cells automatically.</p></details>
 
     <nav class="tabs" role="tablist">
       <button class="tab on" data-tab="review" type="button" role="tab">Cells and traces</button>
@@ -107,6 +114,7 @@
         <button id="next" type="button" title="Next cell (right arrow)" disabled>›</button>
         <label class="check" id="every-label" hidden><input type="checkbox" id="every" checked> All traces</label>
         <div class="verdict" id="verdict"></div>
+        <div id="cell-quality" class="cell-quality" role="status" hidden></div>
       </div>
       <div class="split">
         <div class="card flush" id="picture-card">
@@ -148,8 +156,8 @@
       <div class="scroller" id="heatmap-box"><canvas id="heatmap"></canvas><div class="empty" id="heatmap-empty">Run the analysis to see the heatmap.</div></div>
     </section>
 
-    <section class="panel" id="panel-metrics" hidden><div class="toolbar"><label>Table <select id="metrics-table"></select></label></div><div class="scroller"><table id="table-metrics"></table></div></section>
-    <section class="panel" id="panel-calls" hidden><div class="scroller"><table id="table-calls"></table></div></section>
+    <section class="panel" id="panel-metrics" hidden><div class="toolbar"><label>Table <select id="metrics-table"></select></label></div><p class="fine" id="metric-help"></p><div class="scroller"><table id="table-metrics"></table></div></section>
+    <section class="panel" id="panel-calls" hidden><div class="toolbar"><label class="check"><input id="all-call-columns" type="checkbox"> Show all saved columns</label><span class="fine">Cell, response and quality fields are shown first. Saved CSVs retain every column.</span></div><div class="scroller"><table id="table-calls"></table></div></section>
     <section class="panel" id="panel-counts" hidden><div class="scroller"><table id="table-counts"></table></div><p class="fine pad">Counts describe the cells you chose; cell N is not animal N.</p></section>
   </main>
 </div>

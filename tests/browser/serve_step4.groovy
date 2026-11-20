@@ -18,6 +18,7 @@ def control=Protocol.window('Control','Ionomycin',0.5d,3d,19.5d);control.Floor_l
 Map protocol=Protocol.payload([primary,control],2,'Synthetic browser display protocol','provisional')
 ['protocol.json','applied_protocol.json'].each{new File(fixture,it).text=Protocol.json(protocol)}
 def callRows=Csv.read(new File(fixture,'responder_calls.csv'));List header=callRows[0]
+header.add('QC_flags');callRows.drop(1).each{it.add('DURATION_BELOW_SAMPLE_INTERVAL')}
 def set={List row,String name,Object value->int index=header.indexOf(name);if(index>=0)row[index]=''+value}
 callRows.drop(1).each{row->set(row,'End_s',19.5);set(row,'Effective_end_s',19.5)}
 def extra=callRows.drop(1).collect{original->def row=new ArrayList(original);set(row,'Role','Control');set(row,'Stimulus','Ionomycin');set(row,'Floor_local_fraction',0.4);set(row,'Floor_threshold',0.4);set(row,'Threshold_increase',0.4);set(row,'SD_multiplier',5);set(row,'Baseline_mean',0.5)
@@ -28,6 +29,11 @@ def extra=callRows.drop(1).collect{original->def row=new ArrayList(original);set
 Csv.write(new File(fixture,'responder_calls.csv'),callRows+extra)
 def counts=Csv.read(new File(fixture,'responder_counts.csv'));def controlCount=new ArrayList(counts[1]);['Role':'Control','Stimulus':'Ionomycin','Responded':'1','Did_not_respond':'2','Percent_responding':'33.3333333333333'].each{k,v->int i=counts[0].indexOf(k);if(i>=0)controlCount[i]=v};Csv.write(new File(fixture,'responder_counts.csv'),counts+[controlCount])
 def manifest=Csv.read(new File(fixture,'analysis_manifest.csv'));manifest<<['time_source','explicit_timestamps'];manifest<<['protocol_schema_version','2'];manifest<<['protocol_hash','synthetic-browser-fixture'];manifest<<['fixture_note','Synthetic display stand-in; no responder calculation in browser fixture'];Csv.write(new File(fixture,'analysis_manifest.csv'),manifest)
+def quality=Csv.read(new File(fixture,'cell_quality.csv'));quality[0].add('QC_flags')
+quality.drop(1).each{row->row.add(row[0]=='Cell005'?'reference_below_3_baseline_sd_review':'')}
+Csv.write(new File(fixture,'cell_quality.csv'),quality)
+// An empty optional table should explain that it has no rows.
+Csv.write(new File(fixture,'group_counts.csv'),[['Condition','Percent_responding']])
 def frames=new ImageStack(250,150)
 (1..30).each{int f->def ip=new ShortProcessor(250,150);ip.set(100);if(f>=8&&f<=17){ip.setRoi(30,50,20,20);ip.set(140);ip.resetRoi()};frames.addSlice(''+f,ip)}
 def colour=new ColorProcessor(250,150);colour.setColor(0x103a10);colour.fill()
@@ -39,7 +45,7 @@ session.runtime.metaClass.environment={->root} // Display test only; never downl
 session.draft.protocol=protocol;session.draft.timestamps=[name:'fixture-clock.csv',content:'Frame,Time_s\n'+clock.withIndex().collect{t,i->(i+1)+','+t}.join('\n')+'\n']
 session.open={File target->new File(root,'opened.txt').text=target.name}
 session.performAnalysis={rt,input,settings,out,job->new File(root,'sent.json').text=JsonOutput.prettyPrint(JsonOutput.toJson(settings));new File(root,'settings.txt').text=settings.collect{k,v->k+'='+v}.join('\n')
-    (1..4).each{job.check();job.progress.call(it*20,'Scoring synthetic display fixture');Thread.sleep(150)};fixture}
+    job.logFile.parentFile.mkdirs();job.logFile.text='Synthetic analysis log';(1..4).each{job.check();job.progress.call(it*20,'Scoring synthetic display fixture');Thread.sleep(150)};fixture}
 def server=loader.loadClass('CalciumWebServer').newInstance(session:session);server.start()
 new File(root,'url.txt').text=server.url();println 'Step 4 page: '+server.url()
 long end=System.currentTimeMillis()+600000L

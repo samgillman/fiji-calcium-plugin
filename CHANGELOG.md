@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.11.20.5
+
+- Validate Step 4 settings while editing, mark invalid fields and disable analysis until errors are corrected. Preserve separate elapsed-time and legacy drafts when switching rules; add Discard pending changes to restore the completed analysis or initial settings.
+- Require actual positive-control timing instead of inventing a window beyond the recording. Place the suggested primary onset after the final normalization-baseline frame and show warnings for baseline/onset overlap and incomplete recording coverage.
+- Surface saved quality flags, low-reference warnings, coarse temporal resolution and negative corrected-fluorescence traces in an expandable summary and per-cell feedback. Keep response rules and inclusion/exclusion policy unchanged; separate Excluded, Unscorable and Needs quality review filters.
+- Give each measurement a separate browser session and preserved input files. Existing pages remain available when another measurement is opened or the cell-selection window is closed, until Close analysis or Fiji exits. Distinguish tabs by cell count and session identity, and give feedback when opening a log or results folder.
+- Keep short-window layouts scrollable with readable plots and visible captions. Show core response-call columns first, pin cell names while scrolling, explain empty tables, and label legacy whole-recording metrics separately from stimulus-window metrics.
+- Reject invalid frame numbers and display modes at the local frame endpoint. Preserve full frame-rate precision in the settings box and keep completed results and exports tied to their applied settings.
+
 ## 2026.11.20.4
 
 - Move Check for updates, Install update, Later, Release notes and the startup-check preference onto Step 1, before choosing or opening a recording. Show update offers and installation progress inline on that screen.

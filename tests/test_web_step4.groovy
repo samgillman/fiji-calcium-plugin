@@ -56,6 +56,22 @@ try {
     def gray={byte[] bytes,int x,int y->image(bytes).getRGB(x,y)&255}
     def raw=call('api/frame?f=15&mode=raw');assert raw.status==200 && gray(raw.bytes,40,60)>gray(raw.bytes,100,60)
     assert call('api/frame?f=3').status==200
+    ['0','-5','31','abc','1.5',''].each{f->assert call('api/frame?f='+f+'&mode=raw').status==400}
+    assert call('api/frame?f=3&mode=unknown').status==400
+    assert about.draft.protocol.windows[0].Start_s>about.frameTimes[(about.draft.values.baseline_end as int)-1] : 'Suggested onset must follow the inclusive F0 baseline'
+    ['0','-1','abc',''].each{hz->
+        def invalid=Settings.copy(about.draft);invalid.values.sampling_hz=hz
+        assert Settings.diagnose(invalid,data).errors
+        assert json('api/analyze',[draft:invalid,confirmed:true])[0]==400 && !session.busy
+    }
+    [[baseline_start:'0'],[baseline_end:'5000'],[baseline_start:'8',baseline_end:'2']].each{changes->
+        def invalid=Settings.copy(about.draft);invalid.values.putAll(changes);assert Settings.diagnose(invalid,data).errors
+    }
+    def badRule=Settings.copy(about.draft);badRule.protocol.windows[0].Floor_local_fraction=-0.1d
+    assert Settings.diagnose(badRule,data).errors
+    def overlap=Settings.copy(about.draft);overlap.values.baseline_end='10'
+    assert Settings.diagnose(overlap,data).warnings.any{it.contains('F₀ baseline includes')}
+
     def pending=Settings.copy(about.draft)
     pending.values.sampling_hz=''
     assert json('api/draft',[draft:pending,revision:1])[0]==200
@@ -107,7 +123,7 @@ try {
     assert results.callsByWindow['Stimulus::Capsaicin']==results.calls && results.countsByWindow['Stimulus::Capsaicin']==results.counts
     assert results.baseline==[0,2] && results.stimulus==[3,14.5]
     assert results.tables.quality.rows.size()==6 && results.tables.containsKey('negativeControlCounts') && results.manifest.input_mode=='background_corrected_fluorescence'
-    assert results.appliedFingerprint==Settings.fingerprint(pending)
+    assert results.appliedFingerprint==Settings.fingerprint(pending) && results.appliedDraft==pending
     assert Session.json([a:Double.NaN,b:[1.5d,Double.POSITIVE_INFINITY],c:[2d] as double[]])=='{"a":null,"b":[1.5,null],"c":[2.0]}'
     // Applied time and normalization remain stable through incomplete or changed draft files.
     edited.timestamps.content='Time_s\n'+(0..<30).collect{it/2d+10d}.join('\n')+'\n';edited.values.baseline_start='2';edited.values.baseline_end='9'
@@ -115,7 +131,7 @@ try {
     assert state.frameTimes==results.time && state.rest==[1,5] && state.settingsPending
     reply=call('api/frame?f=15&mode=change');assert reply.status==200 && reply.type=='image/jpeg' && image(reply.bytes).width==250
     assert gray(reply.bytes,40,60)>200 && gray(reply.bytes,100,60)<60
-    assert gray(call('api/frame?f=3&mode=change').bytes,40,60)<60 && call('api/frame?f=999&mode=raw').status==200
+    assert gray(call('api/frame?f=3&mode=change').bytes,40,60)<60 && call('api/frame?f=999&mode=raw').status==400
     assert recording.roi==null && recording.stackSize==30 && recording.getStack().getProcessor(15).get(40,60)==140
     assert call('api/picture').type=='image/png'
     // Failure/cancel/incomplete output cannot replace a completed result or its applied snapshot.
@@ -134,6 +150,23 @@ try {
     assert Settings.identity(data+[measurementId:'new measurement'])!=session.measurementIdentity
     server.session=Session.newInstance(data+[key:'second']);assert json('api/state')[1].key!=about.key && json('api/state')[1].version==0
     server.session=null;assert json('api/state')[0]==409 && call('').status==200
+    // Remeasuring gets a distinct URL and read-only input snapshot; the first page remains reachable.
+    def Pages=loader.loadClass('CalciumWebPages'),pages=Pages.newInstance(snapshotRoot:new File(root,'snapshots'))
+    def original=new File(root,'measurement.csv');original.text='original measured values'
+    def oldData=data+[csv:original,measurementId:'first snapshot']
+    try {
+        def firstPage=pages.page(oldData),secondPage=pages.page(oldData+[measurementId:'second snapshot'])
+        assert pages.page(oldData).is(firstPage) && firstPage.url()!=secondPage.url()
+        original.text='remeasured values'
+        assert firstPage.session.measurement.csv.text=='original measured values' && secondPage.session.measurement.csv.text=='original measured values'
+        assert call('api/state',null,firstPage.url()).status==200 && call('api/state',null,secondPage.url()).status==200
+        File snapshot=firstPage.session.measurement.csv
+        assert call('api/close',[:],firstPage.url()).status==200
+        long deadline=System.nanoTime()+3000000000L;while(!firstPage.closed&&System.nanoTime()<deadline)Thread.sleep(10)
+        assert firstPage.closed && call('api/state',null,secondPage.url()).status==200
+        // stop() also cleans the executor and private measurement files.
+        firstPage.stop();assert !snapshot.exists()
+    }finally{pages.closeAll()}
     server.stop();try{call('api/state');assert false}catch(IOException expected){}
     println 'PASS: local browser HTTP/token, versioned draft protocol, exact values/uploads, pre-analysis recording transport, applied snapshots, all result tables, failure/cancel and measurement identity'
 } catch(Throwable t){t.printStackTrace();System.exit(1)}

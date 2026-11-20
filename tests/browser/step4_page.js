@@ -49,8 +49,8 @@ const assert = require('assert/strict');
           const picture = document.getElementById('picture-card').getBoundingClientRect();
           const plot = document.getElementById('plot-card').getBoundingClientRect();
           return Math.abs(picture.top - plot.top) <= 2 && picture.right <= plot.left &&
-            picture.bottom <= innerHeight + 2 && plot.bottom <= innerHeight + 2;
-        }), name + ' shows movie and traces together without an internal vertical scroll');
+            picture.height >= 350 && plot.height >= 350;
+        }), name + ' keeps movie and traces readable, with page scrolling when needed');
         if (stage === 'after' && width >= 1024) assert.ok(await page.evaluate(() => {
           const note = document.getElementById('picture-note').getBoundingClientRect();
           const card = document.getElementById('picture-card').getBoundingClientRect();
@@ -95,6 +95,12 @@ const assert = require('assert/strict');
     await page.waitForFunction(() => window.calciumStep4.S.state.frameTimes === null);
     await page.waitForFunction(() => /20 frames per second/.test(document.getElementById('playback-note').textContent));
     assert.doesNotMatch(await text('#time-label'), /\d(?:\.\d+)? s/);
+    for (const invalid of ['0', '-1', 'abc', '', '2abc']) {
+      await page.fill('#sampling_hz', invalid);
+      assert.ok(await page.isDisabled('#analyze'));
+      assert.match(await text('#validation'), /Frame rate/);
+      assert.equal(await page.getAttribute('#sampling_hz', 'aria-invalid'), 'true');
+    }
     await page.fill('#sampling_hz', '2');
     await page.waitForFunction(() => window.calciumStep4.S.state.frameTimes && window.calciumStep4.S.state.frameTimes[15] === 7.5);
     await page.setInputFiles('#timestamps-file', { name: initial.timestamps.name, mimeType: 'text/csv', buffer: Buffer.from(initial.timestamps.content) });
@@ -192,6 +198,9 @@ const assert = require('assert/strict');
     await importProtocol(originalProtocol, 'original-protocol.json');
 
     // Legacy is an explicit mode and disables elapsed-time-only fields.
+    const beforeSwitch = await page.evaluate(() => window.calciumStep4.collectDraft().protocol);
+    await page.selectOption('#protocol-mode', '1'); await page.selectOption('#protocol-mode', '2');
+    assert.deepEqual(await page.evaluate(() => window.calciumStep4.collectDraft().protocol), beforeSwitch, 'rule type round-trip preserves persistence, metadata and thresholds');
     await page.selectOption('#protocol-mode', '1');
     assert.ok(await page.isDisabled('#window-0-Duration_mode') && await page.isDisabled('#window-0-Min_duration_s'));
     assert.ok(await page.isEnabled('#window-0-Consecutive_samples'));
@@ -201,6 +210,9 @@ const assert = require('assert/strict');
     assert.equal(await page.inputValue('#window-0-Stimulus_onset_s'), '5');
     await page.uncheck('#control'); await page.check('#control');
     assert.equal(await page.inputValue('#window-1-Duration_mode'), 'samples');
+    assert.equal(await page.inputValue('#window-1-Start_s'), '');
+    assert.ok(await page.isDisabled('#analyze'));
+    assert.match(await text('#validation'), /Control:/);
     await importProtocol(originalProtocol, 'analysis-protocol.json');
 
     // The real HTTP submission carries v2 and the timestamp snapshot.
@@ -220,8 +232,24 @@ const assert = require('assert/strict');
     assert.equal((await text('#tile-registered')).replace(/\D/g, ''), '6');
     assert.equal(await page.inputValue('#view'), 'raw', 'analysis preserves the selected movie view');
     await page.selectOption('#cell', 'Cell001'); assert.match(await text('#verdict'), /Cell001: Responded/);
-    assert.deepEqual(await page.locator('#group option').allTextContents(), ['All cells (6)', 'Responded (2)', 'Did not respond (1)', 'Excluded or unscorable (3)']);
+    assert.deepEqual(await page.locator('#group option').allTextContents(), ['All cells (6)', 'Responded (2)', 'Did not respond (1)', 'Excluded (2)', 'Unscorable (1)', 'Needs quality review (6)']);
+    assert.match(await text('#quality-summary'), /6 cells flagged/);
+    await page.selectOption('#cell', 'Cell005'); assert.match(await text('#cell-quality'), /Low F₀/);
+    await page.locator('#quality-review summary').click(); assert.match(await text('#quality-list'), /shorter than one frame interval/);
+    await page.locator('#quality-review summary').click();
+    await page.selectOption('#cell', 'Cell001');
     await screenshots('after');
+    // Low windows and the connection banner must remain scrollable without hiding the caption.
+    await page.setViewportSize({width:1440,height:739});
+    await page.evaluate(() => document.getElementById('lost').classList.add('on'));
+    await settledPaint();
+    assert.ok(await page.evaluate(() => document.documentElement.scrollHeight > innerHeight));
+    await page.locator('#picture-note').scrollIntoViewIfNeeded();
+    assert.ok(await page.locator('#picture-note').evaluate((e) => {const a=e.getBoundingClientRect(),b=e.closest('.card').getBoundingClientRect();return a.bottom<=b.bottom&&a.bottom<=innerHeight;}));
+    await page.screenshot({path:path.join(out,'page-short-window.png')});
+    await page.evaluate(() => document.getElementById('lost').classList.remove('on'));
+    await page.setViewportSize({width:1440,height:900});
+
 
     // Control calls and thresholds change independently; headline counts stay primary.
     await page.selectOption('#response-window', 'Control::Ionomycin');
@@ -234,7 +262,11 @@ const assert = require('assert/strict');
     assert.equal(await page.inputValue('#response-window'), 'Stimulus::Capsaicin');
     assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell001', 'Cell005']);
     await page.click('#tile-excluded');
-    assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell003', 'Cell004', 'Cell006']);
+    assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell003', 'Cell004']);
+    assert.ok(await page.locator('#tile-excluded').evaluate((e) => e.classList.contains('on')));
+    assert.ok(!(await page.locator('#tile-unscorable').evaluate((e) => e.classList.contains('on'))));
+    await page.click('#tile-unscorable');
+    assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell006']);
     await page.click('#tile-registered'); await page.selectOption('#cell', 'Cell002');
 
     // Dragging begins on another cell's trace; pointer capture keeps it scrubbing.
@@ -271,7 +303,17 @@ const assert = require('assert/strict');
     await page.screenshot({ path: path.join(out, 'page-heatmap-plasma.png') });
     await page.selectOption('#palette', 'signed'); await page.selectOption('#range', 'robust');
     await page.click('.tab[data-tab=calls]'); assert.equal(await page.locator('#table-calls tbody tr').count(), 12);
+    const coreColumns = await page.locator('#table-calls thead th').count();
+    await page.check('#all-call-columns'); assert.ok(await page.locator('#table-calls thead th').count() > coreColumns);
+    await page.locator('#table-calls').evaluate((e) => e.parentElement.scrollLeft = 800);
+    assert.ok(await page.locator('#table-calls tbody .cell-column').first().evaluate((e) => {const a=e.getBoundingClientRect(),b=e.closest('.scroller').getBoundingClientRect();return a.left>=b.left-1&&a.left<b.left+5;}));
+    await page.uncheck('#all-call-columns');
     await page.screenshot({ path: path.join(out, 'page-calls.png') });
+    await page.click('.tab[data-tab=metrics]'); await page.selectOption('#metrics-table', 'groups');
+    assert.match(await text('#table-metrics'), /No rows were saved/);
+    await page.selectOption('#metrics-table', 'metrics'); assert.match(await text('#metric-help'), /signed net integral/);
+    await page.click('#log'); await page.waitForFunction(() => /Opened .* on the Fiji computer/.test(document.getElementById('open-feedback').textContent));
+
     const opened = page.waitForResponse((response) => response.url().endsWith('/api/open') && response.status() === 200);
     await page.click('#open-folder'); await opened;
     assert.equal(fs.readFileSync(path.join(out, 'opened.txt'), 'utf8'), 'browser-results');
@@ -320,6 +362,16 @@ const assert = require('assert/strict');
     assert.equal(metadata.settingsPending, true); assert.equal(metadata.time_s, 12.5);
     assert.equal(metadata.manifest.protocol_hash, 'synthetic-browser-fixture');
     await page.screenshot({ path: path.join(out, 'page-pending.png') });
+    // Restoring applied settings includes uploaded timestamp contents and the exact protocol.
+    await page.click('#discard'); await page.waitForFunction(() => !window.calciumStep4.S.state.settingsPending);
+    assert.equal(await page.evaluate(() => window.calciumStep4.exportMetadata().settingsPending), false);
+    assert.deepEqual(await page.evaluate(() => window.calciumStep4.collectDraft()), await page.evaluate(() => window.calciumStep4.S.results.appliedDraft));
+    for (const [id, value] of [['baseline_start','0'],['baseline_end','5000'],['baseline_start','8']]) {
+      await page.fill('#'+id,value);assert.ok(await page.isDisabled('#analyze'));await page.click('#discard');
+    }
+    await page.locator('#windows-editor details summary').first().click();
+    await page.fill('#window-0-Floor_local_fraction','-1');assert.ok(await page.isDisabled('#analyze'));await page.click('#discard');
+    assert.match(await page.title(), /6 cells · SimpleCa/);
     assert.deepEqual(problems, []);
     console.log('PASS: movie preview and pointer scrubbing, Play/manual seek, static view, stale/error frames, portable protocols/precision, primary/control results, irregular-time heatmap, pending settings, exports and responsive layouts');
   } catch (error) {
