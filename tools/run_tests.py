@@ -46,14 +46,22 @@ def main():
     if not java:
         raise RuntimeError("Java 17 or newer is required")
     env = dict(os.environ, CALCIUM_TEST_PYTHON=sys.executable)
+    if "--analysis-portable" in sys.argv:
+        subprocess.run([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", "tests/test_analysis_portable.groovy"], cwd=ROOT, env=env, check=True, timeout=300)
+        return
     if "--analysis-only" in sys.argv:
         subprocess.run([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", "tests/test_analysis_runtime.groovy"], cwd=ROOT, env=env, check=True, timeout=1200)
         return
     if "--browser" in sys.argv:
-        # Optional: drive the real Step 4 page in a browser. Needs Node with Playwright; screenshots land in build/web-step4.
+        # Drive the real local Step 4 page. Install Playwright and its Chromium
+        # runtime first; this gate must not silently fall back to syntax checks.
         node = shutil.which("node")
         if not node:
             raise RuntimeError("The browser check needs Node with Playwright")
+        try:
+            subprocess.run([node, "-e", "require.resolve('playwright')"], cwd=ROOT, env=env, check=True)
+        except subprocess.CalledProcessError as error:
+            raise RuntimeError("The browser check needs the Playwright Node package and its Chromium runtime; see docs/RELEASING.md") from error
         folder = ROOT / "build/web-step4"
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "url.txt").unlink(missing_ok=True)
@@ -71,12 +79,13 @@ def main():
                 served.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 served.kill()
+                served.wait(timeout=10)
         return
     if "--gui-only" not in sys.argv:
         node = shutil.which("node")
         if node:  # the page's script must at least parse; the full browser check is --browser
             subprocess.run([node, "--check", "web/step4.js"], cwd=ROOT, env=env, check=True)
-        for test in ["tests/test_progress.groovy", "tests/test_detection_start.groovy", "tests/test_updates.groovy", "tests/test_install.groovy", "tests/test_latest_base.groovy", "tests/test_analysis_bridge.groovy", "tests/test_web_step4.groovy"]:
+        for test in ["tests/test_progress.groovy", "tests/test_detection_start.groovy", "tests/test_updates.groovy", "tests/test_install.groovy", "tests/test_latest_base.groovy", "tests/test_analysis_bridge.groovy", "tests/test_measurement_protocol.groovy", "tests/test_web_step4.groovy"]:
             subprocess.run([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", test], cwd=ROOT, env=env, check=True)
         subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"], cwd=ROOT, env=env, check=True)
         subprocess.run([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", "tests/test_bootstrap.groovy"], cwd=ROOT, env=env, check=True)

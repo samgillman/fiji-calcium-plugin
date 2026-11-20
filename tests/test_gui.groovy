@@ -49,10 +49,11 @@ assert answerStep1(disk, { parts ->
     choice.selectedIndex = 0
     assert !button(parts, 'Choose file…').isShowing()
     parts.find { it instanceof JTextField }.text = 'chosen folder'
+    assert !parts.find { it instanceof JCheckBox }.selected : 'Response-assisted selection starts disabled'
     parts.find { it instanceof JCheckBox }.doClick()
     assert parts.findAll { it instanceof JButton }*.text.containsAll(['Browse…', 'Cancel', 'Next'])
     button(parts, 'Next').doClick()
-}) == [recording: movie, look: false, folder: 'chosen folder', file: null]
+}) == [recording: movie, look: true, folder: 'chosen folder', file: null]
 assert asked == 0
 assert answerStep1(disk, { parts -> button(parts, 'Cancel').doClick() }) == null
 // Picking "from disk" in the list asks for the file at once and shows its name; a cancelled chooser keeps the dialog open.
@@ -69,10 +70,10 @@ assert answerStep1(movie, { parts ->
     assert button(parts, 'Change file…') != null
     button(parts, 'Browse…').doClick(); assert parts.find { it instanceof JTextField }.text == 'browsed folder'
     button(parts, 'Next').doClick()
-}) == [recording: disk, look: true, folder: 'browsed folder', file: chosen]
+}) == [recording: disk, look: false, folder: 'browsed folder', file: chosen]
 assert asked == 3
 // Next alone is enough when "from disk" was already selected: it asks for the file and continues.
-assert answerStep1(disk, { parts -> button(parts, 'Next').doClick() }) == [recording: disk, look: true, folder: 'default folder', file: chosen]
+assert answerStep1(disk, { parts -> button(parts, 'Next').doClick() }) == [recording: disk, look: false, folder: 'default folder', file: chosen]
 assert asked == 4
 try {
     SwingUtilities.invokeAndWait {

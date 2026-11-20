@@ -1,4 +1,4 @@
-"""Bundle the exact pinned R sources into the single-file plugin, preserving older updaters."""
+"""Bundle the pinned R engine and local browser page into the single-file plugin."""
 from pathlib import Path
 import base64, hashlib, io, re, zipfile
 ROOT=Path(__file__).resolve().parents[1]

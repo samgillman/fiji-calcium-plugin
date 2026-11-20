@@ -17,7 +17,7 @@ class AnalysisBundleTests(unittest.TestCase):
     def test_upstream_matches_recorded_provenance(self):
         root = embed_analysis.ROOT / 'analysis'
         provenance = dict(line.split('\t') for line in (root / 'provenance.tsv').read_text().splitlines())
-        for name in ['utils.R', 'responders.R', 'LICENSE']:
+        for name in ['utils.R', 'responders.R', 'response_protocols.R', 'LICENSE']:
             self.assertEqual(hashlib.sha256((root / 'upstream' / name).read_bytes()).hexdigest(), provenance[name + '_sha256'])
 
     def test_host_metadata_differences_pass_but_changed_sources_fail(self):

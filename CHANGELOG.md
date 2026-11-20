@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026.11.20.3
+
+- Bring the portable response-protocol workflow into the local Step 4 browser page while preserving the 2026.11.20.2 movie, interactive traces, heatmap, cell navigation and native Fiji fallback. Browser displays read the shared engine's saved results; they do not recalculate response calls.
+- Open the browser in **Recording** view with prominent Play, frame-step, slider and speed controls available before analysis. Playback uses the available frame times; when no valid time base is available, the preview explicitly labels its 20-frames-per-second fallback at 1×. Label the colour overview as static, disable movie playback in that view, and hide result tiles until an analysis has completed.
+- Keep stimulus timing and a response-rule summary visible while placing detailed rules, protocol files and diagnostics in expandable sections. Pending edits leave the completed results, their movie timing and exports unchanged until **Apply changes & reanalyze** completes.
+- Add versioned protocols shared with SimpleCa²⁺ commit b92d4ce98ddab3fceac352179703c1f48f044c90: independent baseline/onset/scoring windows, one generically named positive control, editable per-window floor/noise/persistence rules, JSON import/export and retained field timing overrides.
+- Offer a provisional 0.10/3-SD/1-second preset and preserve the actual historical schema-1 sample rule. Version 2 uses timestamp spans and explicit complete-window eligibility; missing data or inadequate coverage remain unscorable. Review flags do not automatically exclude low-reference or peak-outlier cells.
+- Analyze full-precision unlifted corrected fluorescence. Preserve stable ROI identities, accepted/edge-excluded registries and the selection basis; response-assisted selection remains an optional review aid. Older rounded and intensity-lifted exports remain labeled compatibility outputs.
+- Add exact timestamp CSVs, input/ROI/protocol snapshots, applied-versus-draft state, transformed local thresholds, qualifying-run evidence, window peak/AUC/latency measurements and plot provenance. Changes to timestamp or diagnostic file contents mark the draft as changed even at the same path.
+- Add separately labeled sensitivity and negative-control diagnostics, condition/biological-unit metadata and summaries that distinguish biological units from cell-pooled percentages. Zero eligible cells produce an unavailable percentage.
+- Keep legacy mode's inactive fields explicit, preserve imported stimulus/control criteria during timing edits, and reject inconsistent protocol metadata. The managed runtime verifies jsonlite support. Extend independent scientific fixtures, protocol/precision checks, local browser/server checks and native GUI regressions; bundle both the pinned R sources and browser assets in the single plugin file.
+
 ## 2026.11.20.2
 
 - Step 4 now opens as a page in your browser, built with the same web technology and styling as the SimpleCa²⁺ app: results first, interactive traces (hover a trace to name it, click to select it, scroll to zoom the time axis), the recording played beside the traces, an ordered heatmap and sortable tables. The page is served by the plugin from your own computer; nothing is sent anywhere and no internet is needed.

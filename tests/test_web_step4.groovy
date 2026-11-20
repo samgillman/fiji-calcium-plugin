@@ -43,73 +43,99 @@ try {
     socket.outputStream.write(('GET /'+server.token+'/api/state HTTP/1.1\r\nHost: example.org\r\nConnection: close\r\n\r\n').getBytes('US-ASCII'));socket.outputStream.flush()
     assert new String(socket.inputStream.bytes,'US-ASCII').startsWith('HTTP/1.1 404') : 'A request that names another host must be refused';socket.close()
 
-    // What the page is told about the measurement, and the settings it should offer.
+    def Protocol=loader.loadClass('CalciumResponseProtocol'),Csv=loader.loadClass('CalciumCsv'),Installer=loader.loadClass('CalciumInstaller')
     def (code,about)=json('api/session')
-    assert code==200 && about.recording=='Fixture recording' && about.names==names && about.frames==30 && about.width==250 && about.height==150 && about.hasPicture && about.hasMovie
-    assert about.rois.size()==6 && about.rois[0].size()==4 && about.rois[0].collect{it[0]}.min()==30 && about.rois[0].collect{it[1]}.max()==70
-    def box=about.settings.collectEntries{[it.key,it]}
-    assert about.settings*.key==['sampling_hz','baseline_start','baseline_end','stimulus','stimulus_start','stimulus_end','response_baseline_seconds','amplitude_floor','noise_multiplier','consecutive_samples','kcl_start','kcl_end']
-    assert box.sampling_hz.shown=='2' && box.sampling_hz.exact=='2.0000001' && box.baseline_end.shown=='5' && box.amplitude_floor.shown=='0.1' && box.amplitude_floor.exact=='0.10'
-    assert box.stimulus_start.exact==''+((5-1)/2.0000001d) && box.stimulus_start.shown=='2' && box.stimulus_end.exact==''+((30-1)/2.0000001d) && box.kcl_start.shown==''
+    assert code==200 && about.recording=='Fixture recording' && about.names==names && about.frames==30 && about.hasMovie && about.hasPicture
+    assert about.key==Settings.identity(data) && about.rois.size()==6 && about.rois[0].size()==4
+    assert about.draft.values.sampling_hz=='2.0000001' && about.draft.values.baseline_end=='5'
+    assert about.draft.protocol.schema_version==2 && about.draft.protocol.windows[0].Duration_mode=='seconds' && about.draft.protocol.windows[0].Min_duration_s==1
+    assert about.timingProvisional && about.timeSource=='constant_fps' && Math.abs(about.frameTimes[1]-1/2.0000001d)<1e-14
     def state=json('api/state')[1]
-    assert !state.busy && state.version==0 && !state.engineReady && state.rest==[1,5] && state.key=='first' && state.message.contains('Check the settings') && call('api/results').text=='{}'
-
-    // The same checks as the Fiji window, before anything runs.
-    def typed=about.settings.collectEntries{[it.key,it.shown]}
-    def refused=json('api/analyze',[values:typed,confirmed:false,kcl:false])
-    assert refused[0]==400 && refused[1].error.contains('Confirm') && !session.busy
-    refused=json('api/analyze',[values:typed+[sampling_hz:'0'],confirmed:true,kcl:false]);assert refused[0]==400 && refused[1].error.contains('frame rate')
-    refused=json('api/analyze',[values:typed+[kcl_start:'soon'],confirmed:true,kcl:true]);assert refused[0]==400 && refused[1].error.contains('kcl_start')
-
-    // A run: an untouched box sends its exact value, an edited box what was typed; a second run cannot start meanwhile.
-    def sent=null;def gate=new CountDownLatch(1)
-    session.performAnalysis={rt,input,settings,out,job->sent=settings;job.progress.call(40,'Scoring responses');gate.await(5,TimeUnit.SECONDS);job.check();fixture}
-    def started=json('api/analyze',[values:typed+[stimulus:'Capsaicin',stimulus_start:'3',stimulus_end:' 14 ',response_baseline_seconds:'2.5'],confirmed:true,kcl:false])
-    assert started[0]==200 && started[1].busy
-    long wait=System.nanoTime()+3000000000L;while(sent==null&&System.nanoTime()<wait)Thread.sleep(10)
-    state=json('api/state')[1];assert state.busy && state.percent==40 && state.stage=='Scoring responses'
-    refused=json('api/analyze',[values:typed,confirmed:true,kcl:false]);assert refused[0]==400 && refused[1].error.contains('already running')
-    gate.countDown();settle()
-    assert sent.sampling_hz=='2.0000001' && sent.amplitude_floor=='0.10' && sent.stimulus=='Capsaicin' && sent.stimulus_start=='3' && sent.stimulus_end=='14' && sent.response_baseline_seconds=='2.5'
-    assert sent.baseline_start=='1' && sent.baseline_end=='5' && sent.kcl_enabled=='false' && sent.recording=='Fixture recording' && sent.input_mode=='background_corrected_fluorescence'
-    state=json('api/state')[1];assert state.version==1 && state.tone=='good' && state.message.startsWith('Complete') && state.folder=='simpleca' && state.percent==100
-
-    // The saved tables, as the page reads them. Nothing is recalculated; a missing number is null, never NaN.
-    def reply=call('api/results');assert reply.status==200 && !reply.text.contains('NaN')
-    def results=slurp.parseText(reply.text)
-    assert results.time.size()==30 && results.time[1]==0.5 && results.mean.size()==30 && results.sem.size()==30 && results.folder=='simpleca'
-    assert results.traces.keySet()==['Cell001','Cell002','Cell005','Cell006'] as Set && results.traces.Cell001.max()==1
-    assert results.calls.Cell001.Status=='Responded' && results.calls.Cell002.Status=='Did not respond' && results.calls.Cell003.Status=='Excluded' && results.calls.Cell001.Peak_increase=='1'
-    assert results.counts.Registered=='6' && results.counts.Responded=='2' && results.counts.Evaluable=='3' && results.counts.Percent_responding.startsWith('66.6')
-    assert results.stimulus==[3,14.5] && results.baseline[0]==0 && results.tables.metrics.header[0]=='Cell' && results.tables.metrics.rows.size()==6 && results.tables.calls.rows.size()==6 && results.tables.counts.rows.size()==1
-    assert Session.json([a:Double.NaN,b:[1.5d,Double.POSITIVE_INFINITY],c:[2d] as double[]])=='{"a":null,"b":[1.5,null],"c":[2.0]}'
-
-    // Movie frames for the page's time cursor: the change from the resting frames, or the frame as recorded. The recording is only read.
+    assert !state.busy && state.version==0 && !state.engineReady && state.rest==[1,5] && !state.settingsPending && call('api/results').text=='{}'
+    // Raw recording frames are usable before any analysis, without altering the source recording.
     def gray={byte[] bytes,int x,int y->image(bytes).getRGB(x,y)&255}
-    reply=call('api/frame?f=15&mode=change');assert reply.status==200 && reply.type=='image/jpeg' && image(reply.bytes).width==250 && image(reply.bytes).height==150
-    assert gray(reply.bytes,40,60)>200 && gray(reply.bytes,100,60)<60 : 'Frame 15 minus the resting frames: only the responding square is bright'
-    assert gray(call('api/frame?f=3&mode=change').bytes,40,60)<60 && call('api/frame?f=999&mode=change').status==200
-    reply=call('api/frame?f=15&mode=raw');assert gray(reply.bytes,40,60)>gray(reply.bytes,100,60)
-    assert recording.getRoi()==null && recording.getStackSize()==30 && recording.getStack().getProcessor(15).get(40,60)==140
-    reply=call('api/picture');assert reply.type=='image/png' && image(reply.bytes).width==250
-
-    // Opening the folder, cancelling, and a failed run: completed results stay.
+    def raw=call('api/frame?f=15&mode=raw');assert raw.status==200 && gray(raw.bytes,40,60)>gray(raw.bytes,100,60)
+    assert call('api/frame?f=3').status==200
+    def pending=Settings.copy(about.draft)
+    pending.values.sampling_hz=''
+    assert json('api/draft',[draft:pending,revision:1])[0]==200
+    assert json('api/state')[1].frameTimes==null && json('api/state')[1].timeSource=='unknown'
+    // Stale HTTP edits cannot overwrite a newer draft revision.
+    assert json('api/draft',[draft:about.draft,revision:0])[0]==200 && json('api/session')[1].draft.values.sampling_hz==''
+    pending=Settings.copy(about.draft)
+    def primary=Protocol.window('Stimulus','Capsaicin',0.5d,3d,14.5d),control=Protocol.window('Control','Ionomycin',0.5d,3d,14.5d)
+    control.Floor_local_fraction=0.35d;control.SD_multiplier=5d;control.Duration_mode='samples';control.Consecutive_samples=4
+    pending.protocol=Protocol.payload([primary,control],2,'Browser protocol','user_defined')
+    def imported=json('api/protocol',[protocol:pending.protocol]);assert imported[0]==200 && imported[1].protocol.windows[1].Consecutive_samples==4
+    def inconsistent=Settings.copy(pending.protocol);inconsistent.windows[0].Baseline_s=999
+    assert json('api/protocol',[protocol:inconsistent])[0]==400
+    def unknown=Settings.copy(pending.protocol);unknown.schema_version=99
+    assert json('api/protocol',[protocol:unknown])[0]==400
+    assert json('api/analyze',[draft:pending,confirmed:false])[0]==400
+    assert json('api/analyze',[values:[:],confirmed:true])[0]==400 : 'The former scalar path must not silently run the legacy engine'
+    assert json('api/analyze',[draft:pending+[values:pending.values+[sampling_hz:'0']],confirmed:true])[0]==400
+    pending.timestamps=[name:'../../clock.csv',content:'Frame,Time_s\n'+(0..<30).collect{(it+1)+','+(it/2d)}.join('\n')+'\n']
+    pending.values.condition='Vehicle';pending.values.biological_unit='Culture1'
+    pending.sensitivity=[name:'sensitivity.csv',content:'Floor_local_fraction,SD_multiplier,Min_duration_s\n0.2,3,1\n']
+    assert json('api/draft',[draft:pending,revision:2])[0]==200
+    state=json('api/state')[1];assert state.timeSource=='explicit_timestamps' && state.frameTimes[1]==0.5 && state.timingProvisional
+    // A confirmed run snapshots a full protocol and the exact uploaded files, never user-controlled server paths.
+    def sent=null;def gate=new CountDownLatch(1)
+    session.performAnalysis={rt,input,settings,out,job->sent=settings
+        assert new File(settings.timestamps_file).name=='timestamps.csv' && new File(settings.timestamps_file).text==pending.timestamps.content
+        assert settings.timestamps_sha256==Installer.digest(new File(settings.timestamps_file).bytes)
+        assert new File(settings.sensitivity_file).name=='sensitivity.csv'
+        job.progress.call(40,'Scoring responses');gate.await(5,TimeUnit.SECONDS);job.check();fixture}
+    def started=json('api/analyze',[draft:pending,confirmed:true]);assert started[0]==200 && started[1].busy
+    long wait=System.nanoTime()+3000000000L;while(sent==null&&System.nanoTime()<wait)Thread.sleep(10)
+    assert json('api/analyze',[draft:pending,confirmed:true])[0]==400
+    def submitted=slurp.parseText(sent.protocol_json)
+    assert submitted.schema_version==2 && submitted.windows[1].Floor_local_fraction==0.35 && submitted.windows[1].Consecutive_samples==4
+    assert sent.sampling_hz=='' && sent.condition=='Vehicle' && sent.biological_unit=='Culture1' && sent.input_mode=='background_corrected_fluorescence'
+    assert sent.draft_sha256==Settings.fingerprint(pending)
+    def edited=Settings.copy(pending);edited.values.condition='Changed while running'
+    assert json('api/draft',[draft:edited,revision:3])[0]==200
+    gate.countDown();settle()
+    state=json('api/state')[1];assert state.version==1 && state.tone=='good' && state.settingsPending && !state.timingProvisional
+    assert !new File(sent.timestamps_file).exists() : 'Private request files are cleaned after the engine snapshots them'
+    def reply=call('api/results'),results=slurp.parseText(reply.text)
+    assert !reply.text.contains('NaN') && results.time.size()==30 && results.frameTimes==results.time && results.time[1]==0.5
+    assert results.traces.keySet()==['Cell001','Cell002','Cell005','Cell006'] as Set && results.traces.Cell001.max()==1
+    assert results.calls.Cell001.Status=='Responded' && results.calls.Cell003.Status=='Excluded'
+    assert results.counts.Responded=='2' && results.counts.Evaluable=='3'
+    assert results.windows==[[key:'Stimulus::Capsaicin',role:'Stimulus',stimulus:'Capsaicin']]
+    assert results.callsByWindow['Stimulus::Capsaicin']==results.calls && results.countsByWindow['Stimulus::Capsaicin']==results.counts
+    assert results.baseline==[0,2] && results.stimulus==[3,14.5]
+    assert results.tables.quality.rows.size()==6 && results.tables.containsKey('negativeControlCounts') && results.manifest.input_mode=='background_corrected_fluorescence'
+    assert results.appliedFingerprint==Settings.fingerprint(pending)
+    assert Session.json([a:Double.NaN,b:[1.5d,Double.POSITIVE_INFINITY],c:[2d] as double[]])=='{"a":null,"b":[1.5,null],"c":[2.0]}'
+    // Applied time and normalization remain stable through incomplete or changed draft files.
+    edited.timestamps.content='Time_s\n'+(0..<30).collect{it/2d+10d}.join('\n')+'\n';edited.values.baseline_start='2';edited.values.baseline_end='9'
+    json('api/draft',[draft:edited,revision:4]);state=json('api/state')[1]
+    assert state.frameTimes==results.time && state.rest==[1,5] && state.settingsPending
+    reply=call('api/frame?f=15&mode=change');assert reply.status==200 && reply.type=='image/jpeg' && image(reply.bytes).width==250
+    assert gray(reply.bytes,40,60)>200 && gray(reply.bytes,100,60)<60
+    assert gray(call('api/frame?f=3&mode=change').bytes,40,60)<60 && call('api/frame?f=999&mode=raw').status==200
+    assert recording.roi==null && recording.stackSize==30 && recording.getStack().getProcessor(15).get(40,60)==140
+    assert call('api/picture').type=='image/png'
+    // Failure/cancel/incomplete output cannot replace a completed result or its applied snapshot.
     assert json('api/open',[what:'folder'])[0]==200 && opened==['simpleca'] && json('api/open',[what:'log'])[0]==404
     session.performAnalysis={rt,input,settings,out,job->while(!job.cancelled)Thread.sleep(20);job.check()}
-    assert json('api/analyze',[values:typed+[stimulus_start:'3',stimulus_end:'14.5',response_baseline_seconds:'2.5'],confirmed:true,kcl:false])[0]==200
-    assert json('api/cancel',[:])[0]==200;settle()
-    state=json('api/state')[1];assert state.message.startsWith('Cancelled') && state.version==1 && slurp.parseText(call('api/results').text).traces.size()==4
+    assert json('api/analyze',[draft:pending,confirmed:true])[0]==200
+    assert json('api/cancel',[:])[0]==200;settle();assert json('api/state')[1].version==1
     session.performAnalysis={rt,input,settings,out,job->throw new IOException('Simulated engine error')}
-    json('api/analyze',[values:typed+[stimulus_start:'3',stimulus_end:'14.5',response_baseline_seconds:'2.5'],confirmed:true,kcl:false]);settle()
-    state=json('api/state')[1];assert state.message.contains('Simulated engine error') && state.tone=='bad' && state.version==1
-
-    // Measuring again gives the page a new measurement; without one it says so; after stopping nothing answers.
-    server.session=Session.newInstance(data+[key:'second']);state=json('api/state')[1];assert state.key=='second' && state.version==0
+    json('api/analyze',[draft:pending,confirmed:true]);settle();assert json('api/state')[1].tone=='bad' && json('api/state')[1].version==1
+    File incomplete=new File(root,'incomplete');incomplete.mkdirs()
+    try{session.load(incomplete);assert false}catch(IOException expected){assert expected.message.contains('COMPLETE')}
+    assert session.results==fixture && session.version==1
+    // A source generation, recording identity or source hash change requires a new browser session.
+    assert Settings.identity(data+[recording:'Another recording'])!=session.measurementIdentity
+    assert Settings.identity(data+[inputHash:'different'])!=session.measurementIdentity
+    assert Settings.identity(data+[measurementId:'new measurement'])!=session.measurementIdentity
+    server.session=Session.newInstance(data+[key:'second']);assert json('api/state')[1].key!=about.key && json('api/state')[1].version==0
     server.session=null;assert json('api/state')[0]==409 && call('').status==200
-    assert Settings.check([sampling_hz:'2',baseline_start:'1',baseline_end:'5',stimulus:'S',stimulus_start:'3',stimulus_end:'14',response_baseline_seconds:'2',amplitude_floor:'0.1',noise_multiplier:'3',consecutive_samples:'2'],true,false,[frames:30,recording:'R']).kcl_enabled=='false'
-    server.stop()
-    try {call('api/state');assert false : 'The server must stop answering'} catch(IOException expected) { }
-    println 'PASS: Step 4 page served from the embedded copy on this computer only, access key and host check, session facts, settings rules with exact untouched values, results JSON, movie frames, cancel, failure and re-measurement'
+    server.stop();try{call('api/state');assert false}catch(IOException expected){}
+    println 'PASS: local browser HTTP/token, versioned draft protocol, exact values/uploads, pre-analysis recording transport, applied snapshots, all result tables, failure/cancel and measurement identity'
 } catch(Throwable t){t.printStackTrace();System.exit(1)}
 finally {server.stop();recording.close();picture.close()}
 System.exit(0)

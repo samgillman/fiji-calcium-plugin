@@ -7,7 +7,8 @@ try {Runtime.platform('Windows 11','aarch64');assert false}catch(IOException exp
 def root=new File('build/analysis-bridge').absoluteFile;root.mkdirs()
 def engine=Engine.unpack(root)
 assert new File(engine,'upstream/LICENSE').isFile()
-assert new File(engine,'provenance.tsv').text.contains('a472f2460075343d5b97c8bac32ddf3da0c77386')
+assert new File(engine,'provenance.tsv').bytes==new File('analysis/provenance.tsv').bytes
+assert new File(engine,'upstream/response_protocols.R').isFile()
 def csv=new File(root,'quoted.csv');csv.text='"Cell","Reason"\n"Cell1","line 1,\nline ""2"""\n'
 assert Csv.read(csv)==[['Cell','Reason'],['Cell1','line 1,\nline "2"']]
 def python=System.getenv('CALCIUM_TEST_PYTHON')?:'python3'

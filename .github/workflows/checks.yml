@@ -36,6 +36,42 @@ jobs:
         if: runner.os == 'Windows'
         run: python tools/run_tests.py --gui-only
 
+  browser:
+    name: Step 4 browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Install pinned Playwright and Chromium
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/calcium-playwright-browsers
+        run: |
+          npm install --prefix "$RUNNER_TEMP/calcium-playwright" --no-save --package-lock=false --no-fund --no-audit playwright@1.62.1
+          "$RUNNER_TEMP/calcium-playwright/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Exercise the Step 4 page and movie controls
+        env:
+          NODE_PATH: ${{ runner.temp }}/calcium-playwright/node_modules
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/calcium-playwright-browsers
+        run: python tools/run_tests.py --browser
+      - name: Save browser screenshots
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: step4-browser-screenshots
+          path: build/web-step4/*.png
+          if-no-files-found: warn
+          retention-days: 14
+
   analysis-runtime:
     name: SimpleCa runtime (${{ matrix.os }})
     strategy:
