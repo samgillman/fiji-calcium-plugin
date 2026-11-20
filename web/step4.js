@@ -5,12 +5,12 @@
   const $ = (id) => document.getElementById(id);
   const CALL = { responded: '#177465', not: '#925223', other: '#8A94A0' };
   const ON_PICTURE = { responded: '#3ddbb5', not: '#ffa24a', other: '#aeb8c2' };
-  const GROUPS = ['All cells', 'Responded', 'Did not respond', 'Excluded or unscorable'];
+  const GROUPS = ['All cells', 'Responded', 'Did not respond', 'Excluded', 'Unscorable', 'Needs quality review'];
   const kind = (call) => call === 'Responded' ? 'responded' : call === 'Did not respond' ? 'not' : 'other';
-  const inGroup = (call, group) => group === 0 || (group === 1 && call === 'Responded') || (group === 2 && call === 'Did not respond') ||
-    (group === 3 && call !== 'Responded' && call !== 'Did not respond');
+  const inGroup = (call, group, name) => group === 0 || (group === 1 && call === 'Responded') || (group === 2 && call === 'Did not respond') ||
+    (group === 3 && call === 'Excluded') || (group === 4 && call === 'Unscorable') || (group === 5 && qualityFor(name).length > 0);
   const S = { info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'raw', viewChosen: false,
-    every: true, outlines: true, order: 'call', palette: 'signed', range: 'robust', tall: false, timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false };
+    every: true, outlines: true, order: 'call', palette: 'signed', range: 'robust', tall: false, timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false };
   const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, hover: null, geom: null, scrubbing: false, drawn: [] };
   const Pic = { base: null, shown: null, zoom: 1, panX: 0, panY: 0, pending: null, loading: false, drag: null, moved: false, shownFrame: null, error: null };
   const Heat = { geom: null, names: [] };
@@ -63,7 +63,7 @@
   const clone = (v) => JSON.parse(JSON.stringify(v));
   const fmt = (v) => finite(Number(v)) && v !== '' && v !== null ? String(+Number(v).toPrecision(7)) : (v == null ? '' : String(v));
   function exactInput(box, value, scale) {
-    const shown = scale ? fmt(Number(value) * scale) : fmt(value);
+    const shown = box.id === 'sampling_hz' ? String(value == null ? '' : value) : scale ? fmt(Number(value) * scale) : fmt(value);
     box.value = shown; box.dataset.shown = shown; box._exact = value; box._scale = scale || 1;
     box.title = value == null ? '' : 'Stored value: ' + value + '. Untouched fields keep their full precision.';
   }
@@ -110,6 +110,7 @@
       section.appendChild(details); container.appendChild(section);
     });
     $('control').checked = S.draft.protocol.windows.length > 1;
+    $('control-help').hidden = !$('control').checked;
     updateProtocolControls();
   }
   function updateProtocolControls() {
@@ -161,6 +162,97 @@
     renderWindows();
   }
   function fileNote(key) { const file = S.draft[key]; $(key + '-name').textContent = file ? file.name : 'No file selected'; $(key + '-clear').hidden = !file; }
+  // Draft validation reports errors without changing settings, saved calls or the applied movie clock.
+  function validateDraft(draft) {
+    const errors = [], warnings = [], fields = new Set(), add = (field, message) => { errors.push(message); if (field) fields.add(field); };
+    const numeric = (v) => v !== null && v !== '' && typeof v !== 'boolean' && Number.isFinite(Number(v));
+    const value = draft.values, n = S.info.frames;
+    if (!draft.timestamps && (!numeric(value.sampling_hz) || Number(value.sampling_hz) <= 0)) add('sampling_hz', 'Frame rate must be a positive number, or supply valid timestamps.');
+    if (!numeric(value.baseline_start) || !Number.isInteger(Number(value.baseline_start)) || Number(value.baseline_start) < 1) add('baseline_start', 'First baseline frame must be a whole number from 1.');
+    if (!numeric(value.baseline_end) || !Number.isInteger(Number(value.baseline_end)) || Number(value.baseline_end) < Number(value.baseline_start) || Number(value.baseline_end) >= n) add('baseline_end', 'Last baseline frame must follow the first and be before frame ' + n + '.');
+    const legacy = draft.protocol.schema_version === 1, names = new Set();
+    draft.protocol.windows.forEach((original, index) => {
+      const row = expandWindow(original, legacy), prefix = 'window-' + index + '-', label = index ? 'Control: ' : 'Stimulus: ';
+      const required = NUMBERS.filter((key) => !['Max_gap_s', 'Expected_interval_s'].includes(key));
+      for (const key of required) if (!numeric(row[key])) add(prefix + key, label + key.replace(/_/g, ' ') + ' needs a number.');
+      const name = String(row.Stimulus || '').trim().toLowerCase();
+      if (!name || names.has(name)) add(prefix + 'Stimulus', label + 'use a nonempty, distinct name.'); names.add(name);
+      if (numeric(row.Baseline_start_s) && Number(row.Baseline_start_s) < 0) add(prefix + 'Baseline_start_s', label + 'baseline cannot start before 0 s.');
+      for (const [left, right, strict, message] of [
+        ['Baseline_start_s', 'Baseline_end_s', true, 'baseline end must follow baseline start.'],
+        ['Baseline_end_s', 'Stimulus_onset_s', false, 'baseline must finish at or before stimulus addition.'],
+        ['Stimulus_onset_s', 'Start_s', false, 'scoring cannot start before stimulus addition.'],
+        ['Start_s', 'End_s', true, 'response end must follow response start.']]) {
+        if (numeric(row[left]) && numeric(row[right]) && (strict ? Number(row[right]) <= Number(row[left]) : Number(row[right]) < Number(row[left]))) add(prefix + right, label + message);
+      }
+      for (const key of ['Floor_local_fraction', 'SD_multiplier', 'Noise_floor_local_fraction']) if (numeric(row[key]) && Number(row[key]) < 0) add(prefix + key, label + 'thresholds cannot be negative.');
+      if (numeric(row.Floor_local_fraction) && numeric(row.SD_multiplier) && Number(row.Floor_local_fraction) === 0 && Number(row.SD_multiplier) === 0) add(prefix + 'Floor_local_fraction', label + 'specify an amplitude or noise threshold.');
+      if (legacy && numeric(row.Floor_local_fraction) && Number(row.Floor_local_fraction) <= 0) add(prefix + 'Floor_local_fraction', label + 'legacy mode requires a positive minimum rise.');
+      if (numeric(row.Min_duration_s) && Number(row.Min_duration_s) <= 0) add(prefix + 'Min_duration_s', label + 'duration must be positive.');
+      for (const [key, minimum] of [['Consecutive_samples', 1], ['Min_baseline_samples', 2]]) if (numeric(row[key]) && (!Number.isInteger(Number(row[key])) || Number(row[key]) < minimum)) add(prefix + key, label + key.replace(/_/g, ' ') + ' must be a whole number ≥ ' + minimum + '.');
+      for (const key of ['Max_gap_s', 'Expected_interval_s']) if (row[key] !== null && row[key] !== '' && (!numeric(row[key]) || Number(row[key]) <= 0)) add(prefix + key, label + key.replace(/_/g, ' ') + ' must be positive or blank.');
+      if (!draft.timestamps && numeric(value.sampling_hz) && Number(value.sampling_hz) > 0) {
+        const interval = 1 / Number(value.sampling_hz), end = (n - 1) * interval;
+        if (numeric(row.Start_s) && Number(row.Start_s) >= end) add(prefix + 'Start_s', label + 'response must start before the recording ends at ' + fmt(end) + ' s.');
+        if (numeric(row.End_s) && Number(row.End_s) > end) warnings.push(label + 'response end exceeds this recording; complete-window rules may mark cells unscorable.');
+        if (!legacy && row.Duration_mode === 'seconds' && numeric(row.Min_duration_s) && Number(row.Min_duration_s) < interval) warnings.push(label + 'minimum duration (' + row.Min_duration_s + ' s) is shorter than the frame interval (' + fmt(interval) + ' s). Timing is coarsely resolved.');
+        if (!index && numeric(row.Stimulus_onset_s) && numeric(value.baseline_end) && (Number(value.baseline_end) - 1) * interval >= Number(row.Stimulus_onset_s)) warnings.push('The trace F₀ baseline includes the stimulus onset or later frames. Review the resting baseline.');
+      }
+    });
+    if (!String(draft.protocol.name || '').trim()) add('protocol-name', 'Enter a protocol name.');
+    if (draft.protocol.field_overrides !== null && !Array.isArray(draft.protocol.field_overrides)) add('field-overrides', 'Field overrides must be a valid JSON array.');
+    const signature = JSON.stringify(draft);
+    if (signature === S.draftAck && S.state && S.state.validation) {
+      errors.push(...S.state.validation.errors); warnings.push(...S.state.validation.warnings);
+    }
+    for (const box of document.querySelectorAll('#side [aria-invalid]')) box.removeAttribute('aria-invalid');
+    for (const id of fields) if ($(id)) $(id).setAttribute('aria-invalid', 'true');
+    const box = $('validation'); box.hidden = !errors.length && !warnings.length; box.replaceChildren();
+    for (const [messages, className] of [[errors, ''], [warnings, 'warning']]) if (messages.length) {
+      const list = document.createElement('ul'); list.className = className;
+      for (const message of new Set(messages)) { const li = document.createElement('li'); li.textContent = message; list.appendChild(li); }
+      box.appendChild(list);
+    }
+    return { errors, warnings };
+  }
+  function qualityFor(name) {
+    if (!S.results || !name) return [];
+    const q = S.quality[name] || {}, row = callRow(name), flags = new Set();
+    for (const text of [q.QC_flags, row.QC_flags]) for (const flag of String(text || '').split(/[;|,]/)) if (flag.trim()) flags.add(flag.trim());
+    if ((S.results.traces[name] || []).some((v) => finite(v) && v < -1)) flags.add('TRACE_BELOW_MINUS_ONE');
+    const metric = S.metrics[name] || {}, peak = number(metric.Peak_dFF0), noise = number(metric.Baseline_SD);
+    if (finite(peak) && finite(noise) && peak > 0 && 0.1 * peak < noise && finite(number(metric.Rise_Time))) flags.add('RISE_START_BELOW_BASELINE_SD');
+    return Array.from(flags);
+  }
+  const FLAG_TEXT = {
+    DURATION_BELOW_SAMPLE_INTERVAL: 'Minimum response duration is shorter than one frame interval; timing is coarsely resolved',
+    reference_below_3_baseline_sd_review: 'Low F₀ relative to baseline noise; review fractional amplitudes and the response call',
+    TRACE_BELOW_MINUS_ONE: 'ΔF/F₀ falls below −1; corrected fluorescence becomes negative relative to its positive reference. Review background and baseline stability',
+    RISE_START_BELOW_BASELINE_SD: 'The legacy 10% rise level is below baseline SD; the rise-time estimate is sensitive to baseline noise'
+  };
+  const flagText = (flag) => FLAG_TEXT[flag] || flag.replace(/_/g, ' ');
+  function showQuality() {
+    if (!S.results) return;
+    const summary = $('quality-summary'), list = $('quality-list'), counts = new Map(); let affected = 0, responders = 0;
+    for (const name of S.info.names) { const flags = qualityFor(name); if (flags.length) { affected++; if (callOf(name) === 'Responded') responders++; }
+      for (const flag of flags) { const item = counts.get(flag) || { total: 0, responders: 0 }; item.total++; if (callOf(name) === 'Responded') item.responders++; counts.set(flag, item); }
+    }
+    const notices = [], window = selectedCall(), baseline = S.results.baselineFrames;
+    if (baseline && S.results.time[baseline[1] - 1] >= number(window.Stimulus_onset_s || window.Start_s)) notices.push('The saved trace F₀ baseline includes the stimulus onset or later frames. These results keep their original settings; review timing before rerunning.');
+    if (window.Window_warning) notices.push(window.Window_warning);
+    $('quality-review').hidden = !affected && !notices.length;
+    summary.textContent = affected ? 'Quality review: ' + affected + ' cells flagged, including ' + responders + ' responders' : 'Review the applied timing';
+    list.replaceChildren();
+    for (const [flag, count] of counts) { const li = document.createElement('li'); li.textContent = count.total + ' cells (' + count.responders + ' responders): ' + flagText(flag) + '.'; list.appendChild(li); }
+    for (const message of new Set(notices)) { const li = document.createElement('li'); li.textContent = message; list.appendChild(li); }
+    $('quality-filter').disabled = !affected;
+  }
+  function showMetricTable() {
+    const key = $('metrics-table').value;
+    $('metric-help').textContent = key === 'metrics' ? 'Legacy metrics: AUC is the signed net integral over the whole recording; negative drift can make it negative. Peak time is a recording timestamp. Rise time is the 10–90% crossing interval after the display baseline and can be noise-sensitive. For stimulus-specific values, choose Response-window metrics (including Peak_latency_s and Window_AUC_fraction_s).' : key === 'windowMetrics' ? 'Stimulus-window metrics use the local prestimulus reference. Peak_latency_s is relative to stimulus onset; Window_AUC_fraction_s covers the declared response window.' : '';
+    table('table-metrics', S.results.tables[key]);
+  }
+
   function draftChanged() {
     if (!S.draft) return;
     S.revision++; S.note = null;
@@ -187,7 +279,8 @@
   async function start() {
     S.info = await api('session');
     $('recording').textContent = S.info.recording; $('recording').title = S.info.recording;
-    document.title = 'SimpleCa²⁺ · ' + S.info.recording; $('version').textContent = 'Calcium imaging plugin ' + S.info.pluginVersion;
+    document.title = S.info.names.length + ' cells · SimpleCa²⁺ · ' + S.info.recording + ' · ' + S.info.key.slice(0, 6); $('version').textContent = 'Calcium imaging plugin ' + S.info.pluginVersion;
+    S.initialDraft = clone(S.info.draft);
     S.revision = Math.max(0, Number(S.info.draftRevision) || 0); fillDraft(S.info.draft); S.draftAck = JSON.stringify(collectDraft());
     $('time').max = Math.max(1, S.info.frames);
     for (const option of Array.from($('view').options)) if ((option.value === 'picture' && !S.info.hasPicture) || (option.value !== 'picture' && !S.info.hasMovie)) option.remove();
@@ -199,9 +292,9 @@
     listCells(); setFrame(1); await poll(); setInterval(poll, 600);
   }
   async function poll() {
-    if (S.polling) return; S.polling = true;
+    if (S.polling || S.closed) return; S.polling = true;
     try {
-      const state = await api('state'); S.lost = 0; $('lost').classList.remove('on');
+      const state = await api('state'); if (S.closed) return; S.lost = 0; $('lost').classList.remove('on');
       if (S.info && state.key !== S.info.key) { location.reload(); return; }
       const wasBusy = S.state && S.state.busy; if (!acceptState(state)) return;
       if (wasBusy && !state.busy) S.note = null;
@@ -213,11 +306,16 @@
   function showState() {
     const state = S.state; if (!state) return;
     const engine = $('engine'); engine.textContent = state.engineReady ? 'Analysis engine ready' : 'First run: set up analysis engine'; engine.className = 'pill ' + (state.engineReady ? 'good' : 'warn');
-    $('analyze').disabled = state.busy || S.saving || !state.engineReady; $('cancel').disabled = !state.busy; $('log').disabled = !state.logAvailable;
+    const validation = validateDraft(collectDraft());
+    $('analyze').disabled = state.busy || S.saving || !state.engineReady || validation.errors.length > 0 || JSON.stringify(collectDraft()) !== S.draftAck || S.closed; $('cancel').disabled = !state.busy; $('log').disabled = !state.logAvailable;
     $('setup').hidden = state.engineReady; $('setup').disabled = state.busy; $('setup').classList.toggle('primary', !state.engineReady);
     $('analyze').textContent = state.busy ? 'Analysis in progress…' : S.results ? (hasPending() ? 'Apply changes & reanalyze' : 'Run analysis again') : 'Run analysis';
     for (const box of document.querySelectorAll('#side input,#side select,#side textarea,#protocol-export')) box.disabled = state.busy || S.saving;
     updateProtocolControls();
+    $('sampling_hz').disabled = state.busy || S.saving || !!S.draft.timestamps;
+    $('close-page').disabled = state.busy || S.saving || S.closed;
+    $('discard').hidden = JSON.stringify(collectDraft()) === JSON.stringify((S.results && S.results.appliedDraft) || S.initialDraft);
+    $('discard').disabled = state.busy || S.saving;
     const progress = $('progress'); progress.hidden = !state.busy; progress.classList.toggle('busy', state.busy && state.installing && !(state.percent > 0));
     $('bar').style.width = Math.max(3, state.percent || 0) + '%';
     const status = $('status');
@@ -240,6 +338,8 @@
   // ---------------------------------------------------------------- saved results; selecting a window never recalculates a call
   async function loadResults() {
     S.results = await api('results'); const r = S.results;
+    const records = (data) => Object.fromEntries(((data && data.rows) || []).map((row) => [row[data.header.indexOf('Cell')], Object.fromEntries(data.header.map((key, i) => [key, row[i]]))]));
+    S.quality = records(r.tables.quality); S.metrics = records(r.tables.metrics);
     const windows = r.windows && r.windows.length ? r.windows : [{ key: 'Stimulus::' + (r.counts.Stimulus || 'Stimulus'), role: 'Stimulus', stimulus: r.counts.Stimulus || 'Stimulus' }];
     const selector = $('response-window'); selector.innerHTML = '';
     for (const w of windows) { const o = document.createElement('option'); o.value = w.key; o.textContent = w.stimulus + (w.role === 'Control' ? ' · control' : ' · primary'); selector.appendChild(o); }
@@ -251,26 +351,26 @@
     for (const id of ['result-tiles', 'plot-card', 'group-label', 'window-select-label', 'every-label', 'call-legend']) $(id).hidden = false;
     for (const tab of document.querySelectorAll('.tab')) tab.disabled = false;
     const tables = $('metrics-table'); tables.innerHTML = '';
-    const titles = { metrics: 'Cell metrics', quality: 'Cell quality', registry: 'Registered cells', windowMetrics: 'Response-window metrics', replicates: 'Biological-replicate counts', groups: 'Condition counts', unassigned: 'Unassigned biological units', cohort: 'Cohort flow', recordingMetadata: 'Recording details', sensitivityCalls: 'Sensitivity: cell calls', sensitivityCounts: 'Sensitivity: responder counts', negativeControlCalls: 'Negative controls: cell calls', negativeControlCounts: 'Negative controls: responder counts' };
+    const titles = { metrics: 'Legacy whole-recording metrics', quality: 'Cell quality', registry: 'Registered cells', windowMetrics: 'Response-window metrics', replicates: 'Biological-replicate counts', groups: 'Condition counts', unassigned: 'Unassigned biological units', cohort: 'Cohort flow', recordingMetadata: 'Recording details', sensitivityCalls: 'Sensitivity: cell calls', sensitivityCounts: 'Sensitivity: responder counts', negativeControlCalls: 'Negative controls: cell calls', negativeControlCounts: 'Negative controls: responder counts' };
     for (const key of Object.keys(r.tables || {})) if (!['calls', 'counts'].includes(key) && r.tables[key].header.length) { const o = document.createElement('option'); o.value = key; o.textContent = titles[key] || key.replace(/_/g, ' '); tables.appendChild(o); }
-    if (r.tables.metrics) tables.value = 'metrics'; table('table-metrics', r.tables[tables.value]);
+    if (r.tables.windowMetrics && r.tables.windowMetrics.rows.length) tables.value = 'windowMetrics'; else if (r.tables.metrics) tables.value = 'metrics'; showMetricTable();
     table('table-calls', r.tables.calls); table('table-counts', r.tables.counts);
     for (const id of ['save-plot', 'save-heatmap']) $(id).disabled = false;
     Plot.x0 = Plot.x1 = null; updateWindow(); setFrame(S.frame); showState();
   }
   function updateWindow() {
     const group = $('group'); group.innerHTML = '';
-    GROUPS.forEach((name, i) => { const o = document.createElement('option'); o.value = i; o.textContent = name + ' (' + S.info.names.filter((n) => inGroup(callOf(n), i)).length + ')'; group.appendChild(o); });
-    group.value = S.group; Plot.dirty = true; listCells(); drawHeatmap();
+    GROUPS.forEach((name, i) => { const o = document.createElement('option'); o.value = i; o.textContent = name + ' (' + S.info.names.filter((n) => inGroup(callOf(n), i, n)).length + ')'; group.appendChild(o); });
+    group.value = S.group; showQuality(); Plot.dirty = true; listCells(); drawHeatmap();
   }
   /** Lists the cells of the chosen group, and draws only those on the picture and behind the mean. */
   function listCells() {
     const names = S.info.names;
-    S.listed = S.results ? names.filter((n) => inGroup(callOf(n), S.group)) : names.slice();
+    S.listed = S.results ? names.filter((n) => inGroup(callOf(n), S.group, n)) : names.slice();
     const select = $('cell'); select.innerHTML = '';
     for (const name of S.listed) { const o = document.createElement('option'); o.value = name; o.textContent = name; select.appendChild(o); }
     $('previous').disabled = $('next').disabled = S.listed.length < 2;
-    for (const tile of document.querySelectorAll('.tile')) tile.classList.toggle('on', !!S.results && ((tile.id === 'tile-responding' && S.group === 1) || (tile.id === 'tile-registered' && S.group === 0) || ((tile.id === 'tile-excluded' || tile.id === 'tile-unscorable') && S.group === 3)));
+    for (const tile of document.querySelectorAll('.tile')) tile.classList.toggle('on', !!S.results && ((tile.id === 'tile-responding' && S.group === 1) || (tile.id === 'tile-registered' && S.group === 0) || (tile.id === 'tile-excluded' && S.group === 3) || (tile.id === 'tile-unscorable' && S.group === 4)));
     pick(S.listed.includes(S.cell) ? S.cell : (S.listed[0] || null));
   }
   function showGroup(group) { if (S.group !== group) { S.group = group; $('group').value = group; listCells(); } }
@@ -288,6 +388,7 @@
       verdict.innerHTML = parts.filter(Boolean).join(' · ');
       verdict.title = 'Rise and threshold are shown as percentages of local prestimulus fluorescence. The saved call table stores the corresponding fractions.';
     }
+    const flags = qualityFor(name); $('cell-quality').hidden = !flags.length; $('cell-quality').textContent = flags.map(flagText).join(' · ');
     $('zoom-cell').disabled = !name || !(S.info.hasPicture || S.info.hasMovie);
     for (const row of document.querySelectorAll('tbody tr')) row.classList.toggle('on', row.dataset.cell === name);
     if (Pic.zoom > 1 && name) centreOn(S.info.names.indexOf(name));
@@ -394,7 +495,7 @@
     const stroke = (path, colour, width, dash) => { ctx.setLineDash(dash ? [4 / at.z, 3 / at.z] : []); ctx.strokeStyle = colour; ctx.lineWidth = width / at.z; ctx.stroke(path); };
     if (S.outlines) S.paths.forEach((path, i) => {
       if (i === selected) return;
-      const call = callOf(S.info.names[i]); if (known && !inGroup(call, S.group)) return;
+      const call = callOf(S.info.names[i]); if (known && !inGroup(call, S.group, S.info.names[i])) return;
       const which = kind(call);
       stroke(path, 'rgba(0,0,0,0.55)', which === 'responded' ? 2.8 : 2.2, false);
       if (!known) stroke(path, '#ffffff', 1.3, false); else stroke(path, ON_PICTURE[which], which === 'responded' ? 1.5 : 1.1, which === 'other');
@@ -652,18 +753,29 @@
   // ---------------------------------------------------------------- tables (the saved tables themselves; long decimals are shortened for reading only)
   function table(id, data) {
     const element = $(id); element.innerHTML = ''; if (!data || !data.header) return;
+    const core = ['Cell', 'Role', 'Stimulus', 'Status', 'Reason', 'QC_flags', 'Baseline_mean', 'Baseline_SD', 'Threshold_increase', 'Peak_increase', 'Response_latency_s', 'Peak_latency_s', 'Run_duration_s', 'Run_samples', 'Window_peak_local_fraction', 'Window_AUC_fraction_s'];
+    let columns = data.header.map((name, index) => ({ name, index }));
+    if (id === 'table-calls' && !$('all-call-columns').checked) columns = core.filter((name) => data.header.includes(name)).map((name) => ({ name, index: data.header.indexOf(name) }));
+    columns = [...columns.filter((c) => c.name === 'Cell'), ...columns.filter((c) => c.name !== 'Cell')];
+    const labels = { Time_to_Peak: 'Peak timestamp from recording start (s)', AUC: 'Whole-recording signed AUC', Rise_Time: 'Legacy 10–90% rise time (s)' };
     const cellColumn = data.header.indexOf('Cell'), numeric = data.header.map((_, c) => data.rows.some((row) => row[c] !== '' && row[c] !== undefined) && data.rows.every((row) => row[c] === '' || row[c] === undefined || isFinite(Number(row[c]))));
     const head = element.createTHead().insertRow(), body = element.createTBody(); let sorted = -1, direction = 1;
-    const fill = (rows) => { body.innerHTML = ''; for (const row of rows) { const tr = body.insertRow(); if (cellColumn >= 0) { tr.dataset.cell = row[cellColumn]; tr.classList.toggle('on', row[cellColumn] === S.cell); }
-      row.forEach((value, c) => { const td = tr.insertCell(); if (numeric[c] && value !== '') { const v = Number(value); td.className = 'num'; td.textContent = Number.isInteger(v) ? String(v) : String(+v.toPrecision(4)); td.title = value; } else td.textContent = value; }); } };
-    data.header.forEach((name, c) => { const th = document.createElement('th'); th.textContent = name; head.appendChild(th);
-      th.addEventListener('click', () => { direction = sorted === c ? -direction : 1; sorted = c; for (const other of head.children) other.className = ''; th.className = direction > 0 ? 'up' : 'down';
+    const fill = (rows) => { body.innerHTML = '';
+      if (!rows.length) { const td = body.insertRow().insertCell(); td.colSpan = Math.max(1, columns.length); td.className = 'empty-table'; td.textContent = 'No rows were saved for this table.'; return; }
+      for (const row of rows) { const tr = body.insertRow(); if (cellColumn >= 0) { tr.dataset.cell = row[cellColumn]; tr.classList.toggle('on', row[cellColumn] === S.cell); }
+        for (const { name, index: c } of columns) { const value = row[c] == null ? '' : row[c], td = tr.insertCell();
+          if (numeric[c] && value !== '') { const v = Number(value); td.className = 'num'; td.textContent = Number.isInteger(v) ? String(v) : String(+v.toPrecision(4)); td.title = value; } else td.textContent = value;
+          if (name === 'Cell') td.classList.add('cell-column');
+        }
+      }
+    };
+    columns.forEach(({ name, index: c }) => { const th = document.createElement('th'); th.textContent = labels[name] || name; th.title = 'Saved column: ' + name; if (name === 'Cell') th.classList.add('cell-column'); head.appendChild(th);
+      th.addEventListener('click', () => { direction = sorted === c ? -direction : 1; sorted = c; for (const other of head.children) other.classList.remove('up', 'down'); th.classList.add(direction > 0 ? 'up' : 'down');
         fill(data.rows.slice().sort((a, b) => direction * (numeric[c] ? (Number(a[c] === '' ? NaN : a[c]) || 0) - (Number(b[c] === '' ? NaN : b[c]) || 0) : String(a[c]).localeCompare(String(b[c]))))); }); });
     body.addEventListener('click', (event) => { const tr = event.target.closest('tr'); if (tr && tr.dataset.cell) pick(tr.dataset.cell); });
     fill(data.rows);
   }
 
-  // ---------------------------------------------------------------- controls
   function showTab(name) {
     for (const tab of document.querySelectorAll('.tab')) tab.classList.toggle('on', tab.dataset.tab === name);
     for (const panel of document.querySelectorAll('.panel')) panel.hidden = panel.id !== 'panel-' + name;
@@ -701,9 +813,8 @@
     $('control').addEventListener('change', () => {
       const draft = collectDraft();
       if ($('control').checked) {
-        const legacy = draft.protocol.schema_version === 1, first = expandWindow(draft.protocol.windows[0], legacy), times = frameTimes(), end = times.length ? times[times.length - 1] : Number(first.End_s);
-        const start = Number(first.End_s), width = Math.max(1, Number(first.Baseline_s));
-        draft.protocol.windows.push(Object.assign({}, first, { Role: 'Control', Stimulus: 'KCl', Baseline_start_s: Math.max(0, start - width), Baseline_end_s: start, Baseline_s: Math.min(start, width), Stimulus_onset_s: start, Start_s: start, End_s: Math.max(start + 1, end) }));
+        const legacy = draft.protocol.schema_version === 1, first = expandWindow(draft.protocol.windows[0], legacy);
+        draft.protocol.windows.push(Object.assign({}, first, { Role: 'Control', Stimulus: legacy ? 'KCl' : 'Positive control', Baseline_start_s: null, Baseline_end_s: null, Baseline_s: null, Stimulus_onset_s: null, Start_s: null, End_s: null }));
       } else draft.protocol.windows = draft.protocol.windows.slice(0, 1);
       fillDraft(draft); draftChanged();
     });
@@ -711,13 +822,18 @@
       const wanted = Number($('protocol-mode').value), previous = S.draft.protocol.schema_version;
       $('protocol-mode').value = previous; const draft = collectDraft();
       if (wanted === 1 && (draft.protocol.field_overrides || draft.sensitivity || draft.negative_control)) { S.note = 'Remove field timing overrides and diagnostic files before selecting the legacy rule. They require a version 2 protocol.'; showState(); return; }
-      draft.protocol.windows = draft.protocol.windows.map((w, i) => {
-        const row = expandWindow(w, previous === 1);
-        if (wanted === 1) { row.Duration_mode = 'samples'; row.Baseline_end_s = row.Start_s; row.Stimulus_onset_s = row.Start_s; row.Baseline_s = row.Start_s - row.Baseline_start_s; if (i === 1) row.Stimulus = 'KCl'; }
-        return row;
-      });
-      draft.protocol.schema_version = wanted; draft.protocol.validation_status = wanted === 1 ? 'legacy_unvalidated' : 'user_defined';
-      draft.protocol.name = wanted === 1 ? 'Legacy consecutive-sample protocol' : 'Custom response protocol';
+      S.protocolDrafts[previous] = clone(draft.protocol);
+      if (S.protocolDrafts[wanted]) draft.protocol = clone(S.protocolDrafts[wanted]);
+      else {
+        draft.protocol.windows = draft.protocol.windows.map((w, i) => {
+          const row = expandWindow(w, previous === 1);
+          if (wanted === 1) { row.Duration_mode = 'samples'; row.Baseline_end_s = row.Start_s; row.Stimulus_onset_s = row.Start_s; row.Baseline_s = row.Start_s - row.Baseline_start_s; if (i === 1) row.Stimulus = 'KCl'; }
+          else row.Duration_mode = 'seconds';
+          return row;
+        });
+        draft.protocol.schema_version = wanted; draft.protocol.validation_status = wanted === 1 ? 'legacy_unvalidated' : 'user_defined';
+        draft.protocol.name = wanted === 1 ? 'Legacy consecutive-sample protocol' : 'Custom response protocol';
+      }
       fillDraft(draft); draftChanged();
     });
     for (const key of FILES) {
@@ -730,7 +846,7 @@
     }
     $('protocol-import').addEventListener('change', async () => {
       const file = $('protocol-import').files[0]; if (!file) return;
-      try { const result = await api('protocol', { protocol: await file.text() }); const draft = collectDraft(); draft.protocol = result.protocol; fillDraft(draft); $('confirmed').checked = false; draftChanged(); }
+      try { const result = await api('protocol', { protocol: await file.text() }); const draft = collectDraft(); draft.protocol = result.protocol; S.protocolDrafts = {}; fillDraft(draft); $('confirmed').checked = false; draftChanged(); }
       catch (error) { draftError(error); }
       finally { $('protocol-import').value = ''; }
     });
@@ -739,6 +855,7 @@
       catch (error) { draftError(error); }
     });
     $('analyze').addEventListener('click', async () => {
+      if (validateDraft(collectDraft()).errors.length) { $('validation').scrollIntoView({ block: 'nearest' }); return; }
       if (!$('confirmed').checked) { S.note = 'Confirm the frame rate or timestamps, baseline and stimulus timing using the checkbox above.'; showState(); $('confirmed').focus(); return; }
       if (!S.state.engineReady) { S.note = 'Choose “Set up analysis engine” once, then run the analysis.'; showState(); $('setup').focus(); return; }
       S.saving = true; S.note = null; showState();
@@ -747,10 +864,21 @@
       finally { S.saving = false; showState(); }
     });
     $('setup').addEventListener('click', () => send('setup')); $('cancel').addEventListener('click', () => send('cancel'));
-    $('log').addEventListener('click', () => api('open', { what: 'log' }).catch(draftError));
-    $('open-folder').addEventListener('click', () => api('open', { what: 'folder' }).catch(draftError));
+    const openFile = async (what) => { $('open-feedback').textContent = 'Opening ' + what + ' on the Fiji computer…';
+      try { const result = await api('open', { what }); $('open-feedback').textContent = 'Opened ' + result.opened + ' on the Fiji computer.'; }
+      catch (error) { $('open-feedback').textContent = error.message; }
+    };
+    $('log').addEventListener('click', () => openFile('log'));
+    $('open-folder').addEventListener('click', () => openFile('folder'));
+    $('close-page').addEventListener('click', async () => {
+      try { await api('close', {}); S.closed = true; play(false); $('lost').textContent = 'This analysis page is closed. Saved results remain in the results folder. You can close this tab.'; $('lost').classList.add('on'); showState(); }
+      catch (error) { draftError(error); }
+    });
+    $('discard').addEventListener('click', () => { S.protocolDrafts = {}; fillDraft((S.results && S.results.appliedDraft) || S.initialDraft); $('confirmed').checked = false; for (const key of FILES) $(key + '-file').value = ''; draftChanged(); });
+    $('quality-filter').addEventListener('click', () => { showGroup(5); showTab('review'); });
+    $('all-call-columns').addEventListener('change', () => table('table-calls', S.results.tables.calls));
     $('response-window').addEventListener('change', () => { S.window = $('response-window').value; updateWindow(); });
-    $('metrics-table').addEventListener('change', () => table('table-metrics', S.results.tables[$('metrics-table').value]));
+    $('metrics-table').addEventListener('change', showMetricTable);
     $('group').addEventListener('change', () => { S.group = Number($('group').value); listCells(); });
     $('cell').addEventListener('change', () => pick($('cell').value));
     $('previous').addEventListener('click', () => stepCell(-1)); $('next').addEventListener('click', () => stepCell(1));

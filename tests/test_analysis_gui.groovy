@@ -43,7 +43,7 @@ try {
             assert precise.fields.sampling_hz.text=='1'
             assert precise.fields.sampling_hz.toolTipText.contains('1.0000537066691941')
             def startColumn=Protocol.COLUMNS.indexOf('Start_s'),endColumn=Protocol.COLUMNS.indexOf('End_s')
-            assert precise.windowModel.getValueAt(0,startColumn)==73/1.0000537066691941d
+            assert precise.windowModel.getValueAt(0,startColumn)==74/1.0000537066691941d
             assert precise.windowModel.getValueAt(0,endColumn)==299/1.0000537066691941d
             def Settings=loader.loadClass('CalciumAnalysisSettings')
             def offered=Settings.suggested([frames:300,hz:1.0000537066691941d,baselineStart:55,baselineEnd:74])
@@ -52,7 +52,7 @@ try {
             assert webDraft.protocol.windows[0].Start_s==precise.windowModel.getValueAt(0,startColumn)
             precise.confirmed.selected=true
             def sent=precise.settings(),p=new groovy.json.JsonSlurper().parseText(sent.protocol_json)
-            assert sent.sampling_hz=='1.0000537066691941' && p.windows[0].Start_s==73/1.0000537066691941d && p.windows[0].End_s==299/1.0000537066691941d
+            assert sent.sampling_hz=='1.0000537066691941' && p.windows[0].Start_s==74/1.0000537066691941d && p.windows[0].End_s==299/1.0000537066691941d
             assert p.windows[0].Floor_local_fraction==0.10d && p.windows[0].SD_multiplier==3d && sent.baseline_start=='55' && sent.baseline_end=='74'
             precise.windowModel.setValueAt(80d,0,startColumn)
             assert new groovy.json.JsonSlurper().parseText(precise.settings().protocol_json).windows[0].Start_s==80d

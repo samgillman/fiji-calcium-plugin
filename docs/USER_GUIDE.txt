@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.4.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.5.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -375,3 +375,15 @@ while an update check is running, including when offline. During installation, w
 the completion message; save your work and restart Fiji to use the installed version.
 A failed installation leaves the controls available to retry. Your recording and folder
 choices stay in place. The first screen scrolls if needed; Next and Cancel stay visible.
+
+STEP 4 SETTINGS AND QUALITY REVIEW (2026.11.20.5)
+Invalid settings show inline errors and must be corrected before analysis. Rule types keep
+separate drafts; Discard pending changes restores the completed-run settings, including files.
+A positive control needs its actual timing entered. Review the suggested primary onset and
+keep the inclusive F0 baseline before stimulation; overlap produces a visible warning.
+Quality warnings are available above the results and beside the selected cell, with a Needs
+quality review filter. Warnings do not automatically exclude cells or change saved calls.
+Legacy whole-recording AUC, peak timestamp and rise time are labelled separately from the
+stimulus-window metrics. See docs/SIMPLECA.md for the definitions.
+Each measurement has a separate review page and preserved inputs. Keep Fiji open; you may
+close the cell-selection window. Close analysis releases that page's temporary inputs.
