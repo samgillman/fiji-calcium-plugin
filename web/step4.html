@@ -29,8 +29,8 @@
       <h2>1. Check the recording time</h2>
       <label class="row"><span>Frames per second</span><input id="sampling_hz" inputmode="decimal" aria-describedby="time-help"></label>
       <p class="fine help" id="time-help">Seconds are estimates until you confirm the frame rate or supply recorded timestamps.</p>
-      <div class="row"><span>Resting baseline frames</span><span class="pair"><input id="baseline_start" inputmode="numeric" aria-label="Baseline first frame"><i>to</i><input id="baseline_end" inputmode="numeric" aria-label="Baseline last frame"></span></div>
-      <p class="fine help">These frames define F₀ for the trace display. Each stimulus has its own response baseline below.</p>
+      <div class="row"><span>F₀ frames (set the ΔF/F₀ zero)</span><span class="pair"><input id="baseline_start" inputmode="numeric" aria-label="Baseline first frame"><i>to</i><input id="baseline_end" inputmode="numeric" aria-label="Baseline last frame"></span></div>
+      <p class="fine help">F₀ frames set the zero for ΔF/F₀. The noise baseline of each stimulus, below, sets how large a rise must be.</p>
       <details><summary>Use recorded timestamps</summary><p class="fine">A CSV with a Time_s column in seconds, one row per frame. It takes priority over the frame rate.</p>
         <label class="file-label">Timestamp CSV <input id="timestamps-file" type="file" accept=".csv,text/csv"></label>
         <div class="file-note"><span id="timestamps-name">No file selected</span><button id="timestamps-clear" class="ghost small" type="button" hidden>Remove</button></div>
@@ -103,7 +103,7 @@
       <div class="timebar" id="transport" aria-label="Recording playback">
         <button class="primary" id="play" type="button" disabled>▶ Play</button>
         <button id="frame-back" type="button" aria-label="Previous frame" title="Previous frame" disabled>‹</button>
-        <input type="range" id="time" min="1" max="1" step="1" value="1" aria-label="Recording frame" disabled>
+        <span class="time-wrap"><input type="range" id="time" min="1" max="1" step="1" value="1" aria-label="Recording frame" disabled><span id="time-windows" aria-hidden="true"></span></span>
         <button id="frame-forward" type="button" aria-label="Next frame" title="Next frame" disabled>›</button>
         <label class="speed-label">Speed<select id="speed" aria-label="Playback speed"><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10" selected>10×</option><option value="20">20×</option><option value="50">50×</option></select></label>
         <span id="time-label" aria-live="off">Frame 1</span>

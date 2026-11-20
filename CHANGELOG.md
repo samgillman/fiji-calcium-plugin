@@ -94,6 +94,14 @@ Plugin:
 - The plugin window no longer floats over other programs when the plugin is started while another program is in front. It stays above Fiji's own windows only while Fiji is in use, and drops back within about two seconds when it is not.
 - A copy newer than the latest release (a test build) now says so on the first screen instead of "You are up to date".
 - Measurements, background rules, response thresholds and Step 4 are unchanged. The response-assisted and all-frames detection pictures are unchanged (checked byte for byte against the saved P3 Run2 picture).
+- Fix a false Step 4 warning introduced in 2026.11.20.6: "the response baseline holds 0 samples … every cell will be unscorable" appeared for any baseline. Baseline samples are now counted as the analysis engine counts them (baseline start ≤ frame time < baseline end), and the warning names the frames.
+- Step 4 stimulus timing: **Noise baseline to** and **Score response from** now follow **Stimulus added at** by default and are shown as "= stimulus time". Changing the stimulus time, or pressing **Use frame N**, moves them with it, using the identical stored number. **Set separately** gives a field its own value and **Link to stimulus time** reverses it. A protocol whose values differ opens with those fields separate. The protocol file format is unchanged. The legacy rule works the same way, with the stimulus time as the one editable field.
+- Step 4: each window shows the frames it will use, for example "F₀: frames 1–20. Noise baseline: frames 1–20 (20 samples). Stimulus: between frames 20 and 21. Scoring: frames 21–300.", and the noise baseline, stimulus and scored frames of the primary stimulus are drawn under the frame slider.
+- Step 4: when two time fields disagree, both are marked and one message sits beside the field to change, stating both values and offering the repair, for example "Set to 20 s". A problem is described once: the plugin's general message is not added to the page's specific one.
+- Step 4: a typed time that reads the same as a frame's time is stored as that frame's exact time, so a retyped value no longer differs from an untouched one by a hidden fraction of a second.
+- Step 4: the warning that the F₀ frames reach the stimulus offers **Use frames 1–N**. The starting stimulus time is labelled as a suggestion until it is changed. "Resting baseline frames" is now **F₀ frames (set the ΔF/F₀ zero)** and "Response baseline" is **Noise baseline**; the fields are in the order they occur in time.
+- The plugin window now stays above the picture being worked on only. Any other Fiji window that is clicked, such as Brightness/Contrast or the ROI Manager, comes in front of it.
+
 
 ## 2026.11.20.6
 

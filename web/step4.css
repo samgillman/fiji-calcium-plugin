@@ -302,3 +302,20 @@ body.has-results .workspace-heading { display: none; }
 .caption.dark .save-note { color: #7fe0b5; } .caption.dark .save-note button { color: #9fd3ff; }
 .toolbar.dark select.quiet { background: transparent; border-color: transparent; color: #9AA5B1; padding: 3px 4px; font-size: 12px; max-width: 120px; }
 .toolbar.dark select.quiet:hover, .toolbar.dark select.quiet:focus { border-color: #33404d; color: #E6EBF0; }
+
+/* stimulus timing: linked fields, messages beside the field, the frames each window uses, and the windows under the slider */
+.window-editor .row.linked input { display: none; }
+.window-editor .row .link-text { display: none; color: var(--gray-600); font-size: 12px; text-align: right; }
+.window-editor .row.linked .link-text { display: inline; }
+.window-editor .row.linked:has([aria-invalid]) .link-text { color: var(--bad); }
+.link-toggle { display: block; margin: -3px 0 6px auto; font-size: 11px; }
+.field-error { color: var(--bad); font-size: 12px; margin: -2px 0 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; text-align: right; }
+.validation .repair { margin-left: 4px; }
+.frames-preview { margin: 6px 0; font-size: 12px; color: var(--gray-600); font-variant-numeric: tabular-nums; }
+.suggestion { margin: -4px 0 8px; text-align: right; }
+.time-wrap { flex: 1 1 auto; min-width: 0; position: relative; display: flex; align-items: center; }
+.time-wrap input[type=range] { width: 100%; }
+#time-windows { position: absolute; left: 8px; right: 8px; bottom: -4px; height: 3px; pointer-events: none; }
+#time-windows i { position: absolute; top: 0; height: 100%; border-radius: 2px; }
+#time-windows .baseline { background: #9AA5B1; } #time-windows .scoring { background: #E08A1E; }
+#time-windows .stimulus { width: 2px; height: 9px; top: -3px; margin-left: -1px; background: #1F2933; }
