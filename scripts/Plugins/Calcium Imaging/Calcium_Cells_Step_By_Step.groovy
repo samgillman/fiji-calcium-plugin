@@ -1182,7 +1182,8 @@ class CalciumLocalJob {
     static String engineError(File log) {
         try {
             if (log == null || !log.isFile()) return null
-            List<String> lines = log.readLines('UTF-8')
+            // Windows line endings leave a blank line after every line of the log, so blank lines are skipped
+            List<String> lines = log.readLines('UTF-8').findAll { it.trim() }
             int at = lines.findLastIndexOf { it ==~ /^Error( in .*)?\s*:.*/ }
             if (at < 0) return null
             String first = lines[at].replaceFirst(/^Error( in .*?)?\s*:\s*/, '').trim()

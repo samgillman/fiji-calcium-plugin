@@ -43,6 +43,9 @@ job=Job.newInstance(logFile:new File(root,'engine-error.log'))
 try {job.run([python,failing.path],root);assert false}catch(IOException expected){assert expected.message=="The analysis engine stopped: Each stimulus requires a baseline outside the other stimulus's response interval." : expected.message}
 def plain=new File(root,'plain-error.log');plain.text='Error: cannot open file\n';assert Job.engineError(plain)=='cannot open file'
 plain.text='nothing useful\n';assert Job.engineError(plain)==null
+// Windows line endings reach the log as a blank line after every line; the message is still found.
+plain.text="Error in responder_validate_protocol(protocol) : \n\n  Each stimulus requires a baseline\n\n  outside the other window.\n\nCalls: a -> b\n\n"
+assert Job.engineError(plain)=='Each stimulus requires a baseline outside the other window.'
 // A run in which no cell could be scored is reported as such, with the commonest reason, not as a green "Complete".
 def Settings=loader.loadClass('CalciumAnalysisSettings')
 def empty=new File(root,'no-evaluable');empty.mkdirs()
