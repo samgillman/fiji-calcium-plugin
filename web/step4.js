@@ -8,7 +8,7 @@
   const GROUPS = ['All cells', 'Responded', 'Did not respond', 'Excluded', 'Unscorable', 'Needs quality review'];
   const kind = (call) => call === 'Responded' ? 'responded' : call === 'Did not respond' ? 'not' : 'other';
   const inGroup = (call, group, name) => group === 0 || (group === 1 && call === 'Responded') || (group === 2 && call === 'Did not respond') ||
-    (group === 3 && call === 'Excluded') || (group === 4 && call === 'Unscorable') || (group === 5 && qualityFor(name).length > 0);
+    (group === 3 && call === 'Excluded') || (group === 4 && call === 'Unscorable') || (group === 5 && qualityFor(name).length > 0 && (!S.qualityFlag || qualityFor(name).includes(S.qualityFlag)));
   const S = { info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'raw', viewChosen: false,
     every: true, outlines: true, order: 'call', palette: 'signed', range: 'robust', tall: false, timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false };
   const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, hover: null, geom: null, scrubbing: false, drawn: [] };
@@ -98,7 +98,11 @@
       const heading = document.createElement('h3'); heading.textContent = index === 0 ? 'Primary stimulus' : 'Positive control'; section.appendChild(heading);
       const add = (target, key, title, opts) => { const label = windowInput(index, key, title, opts); target.appendChild(label); const box = label.lastChild;
         if (box.tagName === 'SELECT' || key === 'Stimulus') box.value = w[key] == null ? '' : String(w[key]); else exactInput(box, w[key], opts && opts.scale); return box; };
-      add(section, 'Stimulus', 'Name'); add(section, 'Stimulus_onset_s', 'Stimulus added at (s)');
+      add(section, 'Stimulus', 'Name'); const onsetBox = add(section, 'Stimulus_onset_s', 'Stimulus added at (s)');
+      const fromFrame = document.createElement('button'); fromFrame.type = 'button'; fromFrame.className = 'ghost small from-frame'; fromFrame.textContent = 'Use frame on screen'; fromFrame.disabled = onsetBox.disabled;
+      fromFrame.title = 'Set this to the time of the movie frame shown now. Scrub the movie to the frame where the stimulus arrives first.';
+      fromFrame.addEventListener('click', () => { const t = frameTimes()[S.frame - 1]; if (!finite(t)) return; exactInput(onsetBox, t); onsetBox.dispatchEvent(new Event('input', { bubbles: true })); onsetBox.dispatchEvent(new Event('change', { bubbles: true })); });
+      onsetBox.closest('label').after(fromFrame);
       add(section, 'Baseline_start_s', 'Response baseline from (s)'); add(section, 'Baseline_end_s', 'Response baseline to (s)');
       add(section, 'Start_s', 'Score response from (s)'); add(section, 'End_s', 'Score response to (s)');
       const summary = document.createElement('p'); summary.className = 'rule-summary'; summary.id = 'rule-summary-' + index; section.appendChild(summary);
@@ -218,21 +222,30 @@
     }
     return { errors, warnings };
   }
+  /** Cells measured since 2026.11.20.5 are named by a long stable ID. Show them as "Cell N" (their measured order), with the
+   *  ID in tooltips; the tables and exports keep the IDs. Short names, such as Cell001, are shown as they are. */
+  function shortName(name) { if (!name) return ''; const i = S.info.names.indexOf(name); return name.length > 14 && i >= 0 ? 'Cell ' + (i + 1) : name; }
+  const fullName = (name) => shortName(name) === name ? name : shortName(name) + ' (' + name + ')';
   function qualityFor(name) {
     if (!S.results || !name) return [];
     const q = S.quality[name] || {}, row = callRow(name), flags = new Set();
-    for (const text of [q.QC_flags, row.QC_flags]) for (const flag of String(text || '').split(/[;|,]/)) if (flag.trim()) flags.add(flag.trim());
+    for (const text of [q.QC_flags, row.QC_flags]) for (const flag of String(text || '').split(/[;|,]/)) if (flag.trim() && !RECORDING_FLAGS.has(flag.trim())) flags.add(flag.trim());
     if ((S.results.traces[name] || []).some((v) => finite(v) && v < -1)) flags.add('TRACE_BELOW_MINUS_ONE');
     const metric = S.metrics[name] || {}, peak = number(metric.Peak_dFF0), noise = number(metric.Baseline_SD);
     if (finite(peak) && finite(noise) && peak > 0 && 0.1 * peak < noise && finite(number(metric.Rise_Time))) flags.add('RISE_START_BELOW_BASELINE_SD');
     return Array.from(flags);
   }
+  // Set on every cell by the engine whenever the window has the matching Window_warning: a property of the protocol and frame
+  // rate, shown once as a notice for the recording instead of flagging every cell.
+  const RECORDING_FLAGS = new Set(['DURATION_BELOW_SAMPLE_INTERVAL']);
   const FLAG_TEXT = {
+    BASELINE_SD_AT_LEAST_ONE_THIRD_LOCAL_F0: 'Baseline noise is at least a third of the local F₀, so the fractional rise threshold is dominated by noise',
     DURATION_BELOW_SAMPLE_INTERVAL: 'Minimum response duration is shorter than one frame interval; timing is coarsely resolved',
     reference_below_3_baseline_sd_review: 'Low F₀ relative to baseline noise; review fractional amplitudes and the response call',
     TRACE_BELOW_MINUS_ONE: 'ΔF/F₀ falls below −1; corrected fluorescence becomes negative relative to its positive reference. Review background and baseline stability',
     RISE_START_BELOW_BASELINE_SD: 'The legacy 10% rise level is below baseline SD; the rise-time estimate is sensitive to baseline noise'
   };
+  const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
   const flagText = (flag) => FLAG_TEXT[flag] || flag.replace(/_/g, ' ');
   function showQuality() {
     if (!S.results) return;
@@ -243,10 +256,19 @@
     const notices = [], window = selectedCall(), baseline = S.results.baselineFrames;
     if (baseline && S.results.time[baseline[1] - 1] >= number(window.Stimulus_onset_s || window.Start_s)) notices.push('The saved trace F₀ baseline includes the stimulus onset or later frames. These results keep their original settings; review timing before rerunning.');
     if (window.Window_warning) notices.push(window.Window_warning);
+    if (!window.Window_warning && S.info.names.some((name) => { const q = S.quality[name] || {}, row = callRow(name); return [q.QC_flags, row.QC_flags].some((t) => String(t || '').includes('DURATION_BELOW_SAMPLE_INTERVAL')); }))
+      notices.push('Applies to the whole recording: ' + FLAG_TEXT.DURATION_BELOW_SAMPLE_INTERVAL + '.');
+    if (S.qualityFlag && !counts.has(S.qualityFlag)) S.qualityFlag = null;
     $('quality-review').hidden = !affected && !notices.length;
-    summary.textContent = affected ? 'Quality review: ' + affected + ' cells flagged, including ' + responders + ' responders' : 'Review the applied timing';
+    summary.textContent = affected ? 'Quality review: ' + plural(affected, 'cell') + ' flagged, including ' + plural(responders, 'responder') : 'Review the applied timing';
     list.replaceChildren();
-    for (const [flag, count] of counts) { const li = document.createElement('li'); li.textContent = count.total + ' cells (' + count.responders + ' responders): ' + flagText(flag) + '.'; list.appendChild(li); }
+    for (const [flag, count] of counts) {
+      // each flag is a filter of its own, so a small group (for example the cells whose ΔF/F₀ falls below −1) can be isolated
+      const li = document.createElement('li'), link = document.createElement('button'); link.type = 'button'; link.className = 'flag-filter' + (S.qualityFlag === flag ? ' on' : '');
+      link.textContent = plural(count.total, 'cell') + ' (' + plural(count.responders, 'responder') + '): ' + flagText(flag) + '.'; link.title = S.qualityFlag === flag ? 'Show all flagged cells again' : 'Show only these cells';
+      link.addEventListener('click', () => { S.qualityFlag = S.qualityFlag === flag ? null : flag; S.group = 5; $('group').value = 5; showQuality(); listCells(); showTab('review'); });
+      li.appendChild(link); list.appendChild(li);
+    }
     for (const message of new Set(notices)) { const li = document.createElement('li'); li.textContent = message; list.appendChild(li); }
     $('quality-filter').disabled = !affected;
   }
@@ -347,9 +369,6 @@
     const selector = $('response-window'); selector.innerHTML = '';
     for (const w of windows) { const o = document.createElement('option'); o.value = w.key; o.textContent = w.stimulus + (w.role === 'Control' ? ' · control' : ' · primary'); selector.appendChild(o); }
     if (!windows.some((w) => w.key === S.window)) S.window = windows[0].key; selector.value = S.window;
-    const counts = r.counts || {}, whole = (key) => { const v = number(counts[key]); return isFinite(v) ? String(Math.round(v)) : '–'; }, percent = number(counts.Percent_responding);
-    $('tile-responding').innerHTML = '<b>' + (isFinite(percent) ? Math.round(percent) + '%' : '–') + '</b><span>' + escape(counts.Stimulus || windows[0].stimulus) + ': ' + whole('Responded') + ' of ' + whole('Evaluable') + ' evaluable cells</span>';
-    $('tile-registered').firstChild.textContent = whole('Registered'); $('tile-excluded').firstChild.textContent = whole('Excluded'); $('tile-unscorable').firstChild.textContent = whole('Unscorable');
     document.body.classList.add('has-results');
     for (const id of ['result-tiles', 'plot-card', 'group-label', 'window-select-label', 'every-label', 'call-legend']) $(id).hidden = false;
     for (const tab of document.querySelectorAll('.tab')) tab.disabled = false;
@@ -361,7 +380,17 @@
     for (const id of ['save-plot', 'save-heatmap']) $(id).disabled = false;
     Plot.x0 = Plot.x1 = null; updateWindow(); setFrame(S.frame); showState();
   }
+  /** The headline numbers for the selected response window (the primary stimulus or its control), from the saved counts. */
+  function showTiles() {
+    const r = S.results; if (!r) return;
+    const windows = r.windows && r.windows.length ? r.windows : [], chosen = windows.find((w) => w.key === S.window) || windows[0] || {};
+    const counts = (r.countsByWindow && r.countsByWindow[S.window]) || r.counts || {}, whole = (key) => { const v = number(counts[key]); return isFinite(v) ? String(Math.round(v)) : '–'; }, percent = number(counts.Percent_responding);
+    const label = escape(counts.Stimulus || chosen.stimulus || 'Stimulus') + (chosen.role === 'Control' ? ' (control)' : '');
+    $('tile-responding').innerHTML = '<b>' + (isFinite(percent) ? Math.round(percent) + '%' : '–') + '</b><span>' + label + ': ' + whole('Responded') + ' of ' + whole('Evaluable') + ' evaluable cells</span>';
+    $('tile-registered').firstChild.textContent = whole('Registered'); $('tile-excluded').firstChild.textContent = whole('Excluded'); $('tile-unscorable').firstChild.textContent = whole('Unscorable');
+  }
   function updateWindow() {
+    showTiles();
     const group = $('group'); group.innerHTML = '';
     GROUPS.forEach((name, i) => { const o = document.createElement('option'); o.value = i; o.textContent = name + ' (' + S.info.names.filter((n) => inGroup(callOf(n), i, n)).length + ')'; group.appendChild(o); });
     group.value = S.group; showQuality(); Plot.dirty = true; listCells(); drawHeatmap();
@@ -371,7 +400,7 @@
     const names = S.info.names;
     S.listed = S.results ? names.filter((n) => inGroup(callOf(n), S.group, n)) : names.slice();
     const select = $('cell'); select.innerHTML = '';
-    for (const name of S.listed) { const o = document.createElement('option'); o.value = name; o.textContent = name; select.appendChild(o); }
+    for (const name of S.listed) { const o = document.createElement('option'); o.value = name; o.textContent = shortName(name); o.title = name; select.appendChild(o); }
     $('previous').disabled = $('next').disabled = S.listed.length < 2;
     for (const tile of document.querySelectorAll('.tile')) tile.classList.toggle('on', !!S.results && ((tile.id === 'tile-responding' && S.group === 1) || (tile.id === 'tile-registered' && S.group === 0) || (tile.id === 'tile-excluded' && S.group === 3) || (tile.id === 'tile-unscorable' && S.group === 4)));
     pick(S.listed.includes(S.cell) ? S.cell : (S.listed[0] || null));
@@ -383,9 +412,9 @@
     S.cell = name; if (name) $('cell').value = name;
     const verdict = $('verdict'), row = name && S.results ? calls()[name] : null;
     if (!name) verdict.textContent = S.results ? 'No cells in this group.' : '';
-    else if (!row) verdict.innerHTML = S.results ? '<b>' + escape(name) + '</b> · no response call was saved for this cell' : '';
+    else if (!row) verdict.innerHTML = S.results ? '<b>' + escape(shortName(name)) + '</b> · no response call was saved for this cell' : '';
     else {
-      const parts = ['<span class="dot" style="background:' + CALL[kind(row.Status)] + '"></span><b>' + escape(name) + ': ' + escape(row.Status || '') + '</b>', escape((row.Reason || '').toLowerCase())];
+      const parts = ['<span class="dot" style="background:' + CALL[kind(row.Status)] + '"></span><b>' + escape(shortName(name)) + ': ' + escape(row.Status || '') + '</b>', escape((row.Reason || '').toLowerCase())];
       const rise = number(row.Peak_increase), at = number(row.Peak_s), need = number(row.Threshold_increase);
       if (isFinite(rise)) parts.push('largest rise ' + (100 * rise).toFixed(1) + '%' + (isFinite(at) ? ' at ' + at.toFixed(1) + ' s' : '') + (isFinite(need) ? ' (needed ' + (100 * need).toFixed(1) + '%)' : ''));
       verdict.innerHTML = parts.filter(Boolean).join(' · ');
@@ -506,7 +535,7 @@
     if (selected >= 0) { stroke(S.paths[selected], '#000000', 5.5, false); stroke(S.paths[selected], '#5BC0FF', 2.6, false); }
     ctx.restore();
     if (selected >= 0) {
-      const b = S.bounds[selected], name = S.cell; ctx.font = '600 12px ' + getComputedStyle(document.body).fontFamily;
+      const b = S.bounds[selected], name = shortName(S.cell); ctx.font = '600 12px ' + getComputedStyle(document.body).fontFamily;
       const tw = ctx.measureText(name).width, x = Math.max(4, Math.min(w - tw - 12, at.x + b.x1 * at.z + 6)), y = Math.max(16, Math.min(h - 8, at.y + b.y0 * at.z + 12));
       ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.beginPath(); ctx.roundRect(x - 4, y - 13, tw + 8, 18, 6); ctx.fill(); ctx.fillStyle = '#fff'; ctx.fillText(name, x, y);
     }
@@ -555,7 +584,7 @@
     const box = $('legend'), r = S.results; if (!r) { box.innerHTML = ''; return; }
     const chip = (colour, text) => '<span class="chip"><i style="background:' + colour + '"></i>' + escape(text) + '</span>';
     const parts = [chip('#0072B2', 'mean ± SEM')];
-    if (S.cell) parts.push(r.traces[S.cell] ? chip('#1F2933', S.cell) : '<span class="chip" style="color:#9A5B00">' + escape(S.cell) + ': no trace (see Metrics + quality)</span>');
+    if (S.cell) parts.push(r.traces[S.cell] ? chip('#1F2933', shortName(S.cell)) : '<span class="chip" style="color:#9A5B00">' + escape(shortName(S.cell)) + ': no trace (see Metrics + quality)</span>');
     if (S.every) {
       const drawn = S.listed.filter((n) => r.traces[n]), yes = drawn.filter((n) => callOf(n) === 'Responded').length, no = drawn.filter((n) => callOf(n) === 'Did not respond').length;
       if (yes) parts.push(chip(CALL.responded, 'responded (' + yes + ')')); if (no) parts.push(chip(CALL.not, 'did not respond (' + no + ')'));
@@ -632,7 +661,7 @@
     if (isFinite(t) && t >= g.x0 && t <= g.x1) {
       const x = Math.round(X(t)) + 0.5; ctx.strokeStyle = 'rgba(31,41,51,0.8)'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(x, g.T); ctx.lineTo(x, g.T + g.H); ctx.stroke();
       const own = S.cell ? r.traces[S.cell] : null; let text = t.toFixed(1) + ' s';
-      if (own && finite(own[S.frame - 1])) { const y = Math.max(g.T, Math.min(g.T + g.H, Y(own[S.frame - 1]))); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, 5, 0, 7); ctx.fill(); ctx.fillStyle = '#1F2933'; ctx.beginPath(); ctx.arc(x, y, 3.2, 0, 7); ctx.fill(); text += ' · ' + S.cell + ' ' + own[S.frame - 1].toFixed(3); }
+      if (own && finite(own[S.frame - 1])) { const y = Math.max(g.T, Math.min(g.T + g.H, Y(own[S.frame - 1]))); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, 5, 0, 7); ctx.fill(); ctx.fillStyle = '#1F2933'; ctx.beginPath(); ctx.arc(x, y, 3.2, 0, 7); ctx.fill(); text += ' · ' + shortName(S.cell) + ' ' + own[S.frame - 1].toFixed(3); }
       ctx.font = '12px ' + getComputedStyle(document.body).fontFamily; const tw = ctx.measureText(text).width + 10, bx = Math.max(g.L, Math.min(g.L + g.W - tw, x - tw / 2));
       ctx.fillStyle = '#1F2933'; ctx.beginPath(); ctx.roundRect(bx, g.T + g.H - 22, tw, 18, 6); ctx.fill(); ctx.fillStyle = '#fff'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.fillText(text, bx + 5, g.T + g.H - 13);
     }
@@ -731,7 +760,7 @@
     const xs = ticks(time[0], time[time.length - 1], Math.max(2, Math.floor(W / 110)));
     for (const v of xs.values) { const x = Math.round(X(v)) + 0.5; ctx.beginPath(); ctx.moveTo(x, TOP + H); ctx.lineTo(x, TOP + H + 5); ctx.stroke(); ctx.fillText(tickText(v, xs.step), x, TOP + H + 8); }
     ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-    if (tall) { ctx.font = '11px ' + family; names.forEach((name, c) => { ctx.fillStyle = name === S.cell ? '#1F2933' : '#65717D'; ctx.fillText(name, LEFT - 13, TOP + (c + 0.5) * rowH); }); }
+    if (tall) { ctx.font = '11px ' + family; names.forEach((name, c) => { ctx.fillStyle = name === S.cell ? '#1F2933' : '#65717D'; ctx.fillText(shortName(name), LEFT - 13, TOP + (c + 0.5) * rowH); }); }
     else { const every = ticks(0, names.length, Math.max(2, Math.floor(H / 60))).step; for (let c = every; c <= names.length; c += every) { const y = Math.round(TOP + (c - 0.5) * rowH) + 0.5; ctx.beginPath(); ctx.moveTo(LEFT - 9.5, y); ctx.lineTo(LEFT - 14, y); ctx.stroke(); ctx.fillText(String(c), LEFT - 17, y); } }
     ctx.font = '600 13px ' + family; ctx.fillStyle = '#1F2933'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillText('Time (s)', LEFT + W / 2, h - 10);
     if (!tall) { ctx.save(); ctx.translate(16, TOP + H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('Cell', 0, 0); ctx.restore(); }
@@ -862,7 +891,7 @@
     $('protocol-import').addEventListener('change', async () => {
       const file = $('protocol-import').files[0]; if (!file) return;
       try { let parsed; try { parsed = JSON.parse(await file.text()); } catch (bad) { throw new Error(file.name + ' is not a valid JSON file (' + bad.message + '). Choose a protocol exported from SimpleCa²⁺ or this page.'); }
-        const result = await api('protocol', { protocol: parsed }); const draft = collectDraft(); draft.protocol = result.protocol; S.protocolDrafts = {}; fillDraft(draft); $('confirmed').checked = false; draftChanged(); }
+        const result = await api('protocol', { protocol: parsed }); const draft = collectDraft(); draft.protocol = result.protocol; S.protocolDrafts = {}; S.note = null; fillDraft(draft); $('confirmed').checked = false; draftChanged(); }
       catch (error) { draftError(error); }
       finally { $('protocol-import').value = ''; }
     });
@@ -890,8 +919,9 @@
       try { await api('close', {}); S.closed = true; play(false); $('lost').textContent = 'This analysis page is closed. Saved results remain in the results folder. You can close this tab.'; $('lost').classList.add('on'); showState(); }
       catch (error) { draftError(error); }
     });
-    $('discard').addEventListener('click', () => { S.protocolDrafts = {}; fillDraft((S.results && S.results.appliedDraft) || S.initialDraft); $('confirmed').checked = false; for (const key of FILES) $(key + '-file').value = ''; draftChanged(); });
-    $('quality-filter').addEventListener('click', () => { showGroup(5); showTab('review'); });
+    $('discard').addEventListener('click', () => { S.note = null; S.protocolDrafts = {}; fillDraft((S.results && S.results.appliedDraft) || S.initialDraft); $('confirmed').checked = false; for (const key of FILES) $(key + '-file').value = ''; draftChanged(); });
+    $('quality-filter').addEventListener('click', () => { S.qualityFlag = null; S.group = -1; showGroup(5); showQuality(); showTab('review'); });
+    $('group').addEventListener('change', () => { if (Number($('group').value) !== 5 && S.qualityFlag) { S.qualityFlag = null; showQuality(); } });
     $('all-call-columns').addEventListener('change', () => table('table-calls', S.results.tables.calls));
     $('response-window').addEventListener('change', () => { S.window = $('response-window').value; updateWindow(); });
     $('metrics-table').addEventListener('change', showMetricTable);
@@ -921,7 +951,7 @@
     window.addEventListener('mouseup', () => { Pic.drag = null; Plot.scrubbing = false; });
     picture.addEventListener('click', (event) => { if (Pic.moved) return; const i = cellAt(event); if (i >= 0) pick(S.info.names[i]); });
     picture.addEventListener('dblclick', () => { Pic.zoom = 1; Pic.panX = Pic.panY = 0; drawPicture(); });
-    picture.addEventListener('mousemove', (event) => { if (Pic.drag) return; const i = cellAt(event); tip(i >= 0 ? S.info.names[i] + (callOf(S.info.names[i]) ? ' · ' + callOf(S.info.names[i]) : '') : '', event.clientX, event.clientY); });
+    picture.addEventListener('mousemove', (event) => { if (Pic.drag) return; const i = cellAt(event); tip(i >= 0 ? fullName(S.info.names[i]) + (callOf(S.info.names[i]) ? ' · ' + callOf(S.info.names[i]) : '') : '', event.clientX, event.clientY); });
     picture.addEventListener('mouseleave', () => tip(''));
 
     const plot = $('plot');
@@ -931,7 +961,7 @@
       }
       const at = traceAt(event); if (!at) { tip(''); if (Plot.hover) { Plot.hover = null; drawPlot(); } return; }
       if (at.name !== Plot.hover) { Plot.hover = at.name; drawPlot(); }
-      tip(at.name ? at.name + ' · ' + S.results.traces[at.name][at.index].toFixed(3) + ' at ' + S.results.time[at.index].toFixed(1) + ' s' + (callOf(at.name) ? ' · ' + callOf(at.name) : '') : '', event.clientX, event.clientY);
+      tip(at.name ? fullName(at.name) + ' · ' + S.results.traces[at.name][at.index].toFixed(3) + ' at ' + S.results.time[at.index].toFixed(1) + ' s' + (callOf(at.name) ? ' · ' + callOf(at.name) : '') : '', event.clientX, event.clientY);
     });
     plot.addEventListener('pointerleave', () => { tip(''); if (Plot.hover) { Plot.hover = null; drawPlot(); } });
     plot.addEventListener('pointerdown', (event) => { const at = traceAt(event); if (!at) return; event.preventDefault(); if (at.name && at.name !== S.cell) pick(at.name); Plot.scrubbing = true; plot.setPointerCapture(event.pointerId); seek(at.time); });
@@ -945,7 +975,7 @@
     const heatmap = $('heatmap');
     heatmap.addEventListener('click', (event) => { const at = heatmapAt(event); if (at) { pick(at.name); if (at.inside) setFrame(at.frame + 1, true); showTab('review'); } });
     heatmap.addEventListener('mousemove', (event) => { const at = heatmapAt(event); if (!at) { tip(''); return; } const trace = S.results.traces[at.name], v = trace ? trace[at.frame] : null;
-      tip(at.name + (callOf(at.name) ? ' · ' + callOf(at.name) : '') + (at.inside ? ' · ' + (at.gap ? 'acquisition gap; nearest frame' : finite(v) ? v.toFixed(3) : 'no value') + ' at ' + S.results.time[at.frame].toFixed(1) + ' s' : ''), event.clientX, event.clientY); });
+      tip(fullName(at.name) + (callOf(at.name) ? ' · ' + callOf(at.name) : '') + (at.inside ? ' · ' + (at.gap ? 'acquisition gap; nearest frame' : finite(v) ? v.toFixed(3) : 'no value') + ' at ' + S.results.time[at.frame].toFixed(1) + ' s' : ''), event.clientX, event.clientY); });
     heatmap.addEventListener('mouseleave', () => tip(''));
 
     document.addEventListener('keydown', (event) => { const tag = (event.target.tagName || '').toLowerCase(); if (tag === 'input' || tag === 'select' || tag === 'textarea' || $('panel-review').hidden) return;

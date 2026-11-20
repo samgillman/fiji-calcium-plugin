@@ -33,6 +33,10 @@ assert refusal([stimulusTo(250d),control(200d,250d,299d)]).contains('End the ATP
 assert refusal([stimulusTo(260d),control(255d,256d,299d)]).contains('response windows overlap')
 assert refusal([stimulusTo(200d),control(200d,250d,299d)])==null : 'The stress test run that worked still works'
 assert refusal([stimulusTo(299.24d)])==null
+// Edge cases of the same two rules: a control placed before the stimulus, a baseline that only partly overlaps, and touching windows.
+assert refusal([stimulusTo(200d),control(40d,50d,100d)]).contains('ATP baseline (93.12–112.09 s) falls inside the KCl response window (50–100 s)')
+assert refusal([stimulusTo(200d),control(195d,210d,260d)]).contains('KCl baseline (195–210 s) falls inside the ATP response window')
+assert refusal([stimulusTo(200d),control(40d,50d,93.12d)])==null : 'a control window that ends where the stimulus baseline starts is allowed'
 // When the engine does stop, its own message is shown instead of a bare exit code.
 def failing=new File(root,'engine-error.py');failing.text="import sys\nprint('SIMPLECA\\t70\\tValidating')\nprint('Error in responder_validate_protocol(protocol) : ')\nprint(\"  Each stimulus requires a baseline outside the other stimulus's response interval.\")\nprint('Calls: responder_import_protocol -> responder_validate_protocol')\nsys.exit(1)\n"
 job=Job.newInstance(logFile:new File(root,'engine-error.log'))

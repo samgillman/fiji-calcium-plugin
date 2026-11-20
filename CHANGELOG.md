@@ -13,6 +13,11 @@
 - Step 4: a run in which no cell could be scored for the primary stimulus is reported as a warning naming the commonest reason, not as a green "Complete". The saved results are unchanged.
 - Step 4 exports are drawn at least 1600 pixels wide, whatever the window size, and their names include the recording, the cell for trace plots, and the time, for example `Recording_traces_Cell001_20261120-153012.png`. The metadata records the results folder and the time range shown.
 - Step 4: a protocol file that is not valid JSON, or whose name was edited in only one place, gets a plain explanation instead of a parser message. After a cancel, the progress stage is cleared. The positive-control tick box now sits above the control's own fields.
+- Step 4 quality review: the "minimum response duration is shorter than one frame interval" flag, which the engine puts on every cell, is shown once as a notice for the recording and no longer puts every cell into **Needs quality review**. Each flag in the summary is a filter that lists only its cells. Added plain wording for the baseline-noise flag. The saved tables are unchanged.
+- Step 4: the headline tiles follow the response window selected, so the positive control shows its own counts.
+- Step 4: cells with long stable IDs are shown as "Cell N" (their measured order) on the picture, plot, heatmap and lists, with the full ID in tooltips. Tables and exports keep the IDs.
+- Step 4: **Use frame on screen** under "Stimulus added at" sets the onset from the movie frame shown.
+- Step 4: a warning while editing when a response baseline cannot hold the minimum number of baseline samples, which would leave every cell unscorable. Discard and protocol import clear old messages. Field names in number errors use their on-screen labels.
 
 ## 2026.11.20.5
 

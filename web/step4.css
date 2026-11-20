@@ -231,3 +231,9 @@ details[open] > summary { margin-bottom: 8px; }
   .workspace-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
   .tiles { grid-template-columns: 1fr 1fr; }
 }
+
+/* quality flags are filters; the frame button sits under the onset field */
+.flag-filter { background: none; border: 0; padding: 0; color: var(--blue-dark, #1F5F7A); text-align: left; cursor: pointer; font: inherit; }
+.flag-filter:hover { text-decoration: underline; }
+.flag-filter.on { font-weight: 600; }
+.from-frame { display: block; margin: -2px 0 8px auto; }

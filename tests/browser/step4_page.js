@@ -232,10 +232,15 @@ const assert = require('assert/strict');
     assert.equal((await text('#tile-registered')).replace(/\D/g, ''), '6');
     assert.equal(await page.inputValue('#view'), 'raw', 'analysis preserves the selected movie view');
     await page.selectOption('#cell', 'Cell001'); assert.match(await text('#verdict'), /Cell001: Responded/);
-    assert.deepEqual(await page.locator('#group option').allTextContents(), ['All cells (6)', 'Responded (2)', 'Did not respond (1)', 'Excluded (2)', 'Unscorable (1)', 'Needs quality review (6)']);
-    assert.match(await text('#quality-summary'), /6 cells flagged/);
+    // The duration notice is set on every cell by the engine but belongs to the recording: it is shown once and flags no cell.
+    assert.deepEqual(await page.locator('#group option').allTextContents(), ['All cells (6)', 'Responded (2)', 'Did not respond (1)', 'Excluded (2)', 'Unscorable (1)', 'Needs quality review (1)']);
+    assert.match(await text('#quality-summary'), /1 cell flagged, including 1 responder$/);
     await page.selectOption('#cell', 'Cell005'); assert.match(await text('#cell-quality'), /Low F₀/);
-    await page.locator('#quality-review summary').click(); assert.match(await text('#quality-list'), /shorter than one frame interval/);
+    await page.locator('#quality-review summary').click(); assert.match(await text('#quality-list'), /Applies to the whole recording: Minimum response duration is shorter than one frame interval/);
+    await page.locator('#quality-list .flag-filter').first().click();
+    assert.equal(await page.inputValue('#group'), '5'); assert.deepEqual(await page.locator('#cell option').evaluateAll((o) => o.map((x) => x.value)), ['Cell005']);
+    await page.locator('#quality-list .flag-filter').first().click(); assert.equal(await page.evaluate(() => window.calciumStep4.S.qualityFlag), null);
+    await page.selectOption('#group', '0');
     await page.locator('#quality-review summary').click();
     await page.selectOption('#cell', 'Cell001');
     await screenshots('after');
@@ -251,15 +256,16 @@ const assert = require('assert/strict');
     await page.setViewportSize({width:1440,height:900});
 
 
-    // Control calls and thresholds change independently; headline counts stay primary.
+    // Control calls, thresholds and headline counts follow the selected response window.
     await page.selectOption('#response-window', 'Control::Ionomycin');
     assert.match(await text('#verdict'), /Cell001: Did not respond/);
     assert.ok(await page.evaluate(() => Math.abs(window.calciumStep4.referenceLevels().find((r) => r.name === 'required rise').value - 1.1) < 1e-12), 'local .4 threshold on baseline .5 belongs at global 1.1');
-    assert.match(await text('#tile-responding'), /Capsaicin: 2 of 3 evaluable/);
+    assert.match(await text('#tile-responding'), /Ionomycin \(control\): 1 of 3 evaluable/);
     await page.selectOption('#group', '1');
     assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell002']);
     await page.click('#tile-responding');
     assert.equal(await page.inputValue('#response-window'), 'Stimulus::Capsaicin');
+    assert.match(await text('#tile-responding'), /Capsaicin: 2 of 3 evaluable/);
     assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell001', 'Cell005']);
     await page.click('#tile-excluded');
     assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell003', 'Cell004']);
@@ -377,6 +383,15 @@ const assert = require('assert/strict');
     }
     await page.locator('#windows-editor details summary').first().click();
     await page.fill('#window-0-Floor_local_fraction','-1');assert.ok(await page.isDisabled('#analyze'));await page.click('#discard');
+    // The stimulus onset can be taken from the frame on screen; Discard clears it and any old note.
+    await page.evaluate(() => window.calciumStep4.setFrame(9));
+    const onScreen = await page.evaluate(() => window.calciumStep4.frameTimes()[window.calciumStep4.S.frame - 1]);
+    await page.locator('#windows-editor .from-frame').first().click();
+    assert.equal(Number(await page.inputValue('#window-0-Stimulus_onset_s')), onScreen);
+    await page.waitForFunction(() => window.calciumStep4.S.state.settingsPending);
+    await page.evaluate(() => { window.calciumStep4.S.note = 'an old message'; });
+    await page.click('#discard'); await page.waitForFunction(() => !window.calciumStep4.S.state.settingsPending);
+    assert.equal(await page.evaluate(() => window.calciumStep4.S.note), null);
     assert.match(await page.title(), /6 cells · SimpleCa/);
     assert.deepEqual(problems, []);
     console.log('PASS: movie preview and pointer scrubbing, Play/manual seek, static view, stale/error frames, portable protocols/precision, primary/control results, irregular-time heatmap, pending settings, exports and responsive layouts');
