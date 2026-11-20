@@ -19,11 +19,11 @@ Fiji includes Bio-Formats for microscope recordings. Cellpose is optional: you c
 ## Use it
 
 1. Choose the original recording and an output folder.
-2. Choose cells on the colour image. Draw outlines or click **Suggest cells automatically**, then review the suggestions. Automatic detection shows percentage stage progress, a persistent explanation of the current work, total and stage time, saved-outline reuse, image size, CPU/GPU and detection settings. **Progress details** shows recent events; **View detection log** and **Cancel detection** remain available.
+2. Choose cells on the colour image. Draw outlines or click **Suggest cells automatically**, then review the suggestions. Automatic detection shows percentage stage progress, a persistent explanation of the current work, total and stage time, saved-outline reuse, image size, CPU/GPU and detection settings. **Details** shows recent events; **Log** and **Cancel** remain available.
 3. Click **Measure and save** to export raw fluorescence, each cell's local background, corrected traces, ROI outlines, and an analysis log.
-4. Open **Analyze responses** in Step 4. On first use, click **Set up analysis engine** to install a private R runtime. Confirm the frame rate, baseline and stimulus/KCl windows, then analyze. Review native traces, heatmap, metrics and responder counts; selecting a cell also highlights it on a separate review image. See [the integrated analysis guide](docs/SIMPLECA.md).
+4. Open **Analyze responses** in Step 4. On first use, click **Set up analysis engine** to install a private R runtime. Confirm the frame rate, baseline and stimulus/KCl windows, then analyze. Review native traces, heatmap, metrics and responder counts; selecting a cell also highlights it on the cell picture inside the same window. See [the integrated analysis guide](docs/SIMPLECA.md).
 
-Accepted cells use white outlines with a black outer border. Click one to select it, then **Remove selected cell**, or enable **Click cells to remove** to remove cells directly from the picture. **Undo last change** restores removals and reverses additions. Turn removal mode off to accept suggestions again.
+Accepted cells use white outlines with a black outer border. Click one to select it, then **Remove selected**, or enable **Click cells to remove** to remove cells directly from the picture. **Undo** restores removals and reverses additions. Turn removal mode off to accept suggestions again.
 
 You can resize the plugin window. If its contents do not fit, use the mouse wheel or vertical scrollbar; a horizontal scrollbar appears when needed. Controls keep their full size, and status changes preserve your chosen window size.
 
@@ -33,10 +33,10 @@ The progress percentage represents detection stages, not remaining time. Cellpos
 
 ## Get updates
 
-- **Inside the plugin:** startup checks and **Check for updates** offer **Install update** or **Later** when a newer release is available. Install update downloads the plugin, verifies its SHA-256 checksum and version, backs up the previous file, and replaces it safely. Save your work and restart Fiji to load the new version; your running session remains open.
+- **Inside the plugin:** startup checks and **Updates → Check for updates** offer **Install update** or **Later** when a newer release is available. Install update downloads the plugin, verifies its SHA-256 checksum and version, backs up the previous file, and replaces it safely. Save your work and restart Fiji to load the new version; your running session remains open.
 - **Earlier versions:** versions before 2026.11.19.6 need the installer above run once to gain one-click installation. The older update button still opens a release page; choose `Install_Calcium_Plugin.groovy` there instead of copying files manually.
 - **Backup and recovery:** previous scripts are saved with `.groovy.bak` filenames in `calcium-plugin-backups` inside Fiji's folder. To roll back, close Fiji and copy the chosen backup over the installed `.groovy` script. Existing recordings, Cellpose environments, settings and results are preserved.
-- **Preferences:** turn off **Check for updates when this plugin opens** if preferred. Manual checks remain available.
+- **Preferences:** under **Updates**, turn off **Check for updates when this plugin opens** if preferred. Manual checks remain available.
 - **GitHub notifications:** sign in and choose **Watch → Custom → Releases → Apply** on this repository.
 
 Installation happens only after you click Install update or run the standalone installer. Updates are checked and downloaded from GitHub; no recordings, images, traces or results are sent. Failed downloads or verification leave the installed plugin unchanged. If Fiji cannot write to its folder, installation reports the problem and can be retried after correcting folder permissions.

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.11.20.1
+
+- Redesign every plugin window to match SimpleCa²⁺: the computer's own interface font instead of a fixed one, the SimpleCa²⁺ colours, white cards, and one clearly marked main button per step. Measurements, thresholds and saved tables are unchanged.
+- Main window: one card per step. Only one of Steps 2 to 4 is open at a time and finished steps collapse to a one-line summary, so the window fits the screen. The cell count wraps instead of running off the edge, long instructions moved to tooltips, the detection progress area is smaller, and version/update controls sit behind an **Updates** button until an update is found.
+- Step 1 is a single styled dialog with a folder **Browse** button.
+- Step 4: results first, with headline tiles for percent responding, registered, excluded and unscorable cells. Settings are grouped into **Timing** and **Response rule**, show rounded numbers, and hide the KCl boxes until that option is ticked. A box that still shows its rounded suggestion sends the exact value to the analysis, so results do not change.
+- Step 4 plots: axis ticks, units and names, labelled baseline and stimulus bands, a colour key on the heatmap, and previous/next cell buttons.
+- The cell review picture is now inside the Step 4 window, in full colour, with outlines styled by response call. Scroll to zoom, drag to move, double-click to see the whole picture.
+- Windows no longer cover each other: the colour picture is fitted into the space left of the main window, and the Step 4 window opens in that space too.
+
 ## 2026.11.19.8
 
 - Add Step 4, SimpleCa²⁺ analysis inside Fiji: confirmed timing/baseline controls, native traces and heatmap, cell-linked image review, metrics, stimulus/KCl responder calls and CSV/PNG export.

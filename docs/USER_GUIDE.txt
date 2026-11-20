@@ -1,12 +1,12 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.19.8.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.1.
 
 NEW: STEP 4 — SIMPLECA ANALYSIS INSIDE FIJI
 After Measure and save, open Analyze responses. On first use, click Set up analysis engine
 (internet required). The same interface supports 64-bit Windows, Mac and x64 Linux.
 Confirm the recording frame rate, baseline frames and stimulus times before running analysis.
 Traces, heatmap, metrics, cell response calls and counts open inside Fiji. Selecting a trace,
-table cell or heatmap row highlights its outline on a separate review image.
+table cell or heatmap row highlights its outline on the cell picture inside the same window.
 Step 4 uses the UNLIFTED background-corrected fluorescence. It keeps invalid-baseline and
 unscorable cells in the quality/count tables and reports the evaluable denominator explicitly.
 The older "every cell kept" export below is retained for compatibility; Step 4 never uses it.
@@ -53,8 +53,9 @@ HOW TO USE IT
   1. Empty the ROI Manager if it holds outlines from other work (the plugin uses whatever is in it).
   2. Choose  Plugins > Calcium Imaging > Calcium Cells Step By Step.
   3. In the first window pick the recording: one that is open in Fiji, or "Choose a file from disk...".
-     Pick the original recording, not a processed copy. Choose a folder for the results. Press OK.
-  4. The colour picture opens, and a window with the three steps stays on top.
+     Pick the original recording, not a processed copy. Choose a folder for the results. Press Next.
+  4. The colour picture opens on the left, and a window with one card per step stays on top at the
+     right. Step 2 is open; click the title of another step to open it (the open one closes).
        - To click: press "Suggest cells automatically", wait (about 20 seconds on a computer with a
          graphics chip Cellpose can use, several minutes without one: see "How long the suggestions
          take"), then click once inside each outline that is a real cell. (If the window says Cellpose is not installed,
@@ -64,28 +65,28 @@ HOW TO USE IT
              grey dashes   unsure
              orange        very bright: probably precipitate
          Move the mouse over an outline to read the measurements behind its grade and to see its
-         gray value over time. "Accept all likely ones" takes every cyan outline at once; go
+         gray value over time. "Accept likely" takes every cyan outline at once; go
          through them afterwards and remove the wrong ones.
-       - To draw: press Oval or Freehand, draw around a cell, then press "Add drawn outline" (or t).
+       - To draw: press Oval or Freehand, draw around a cell, then press "Add outline" (or t).
          Drawing and clicking can be mixed freely.
        - Accepted cells have WHITE outlines with a thick BLACK outer border, distinct from all
          suggestion colours. Edge cells that are left out still use dashed outlines.
-       - To remove a cell: click inside its white outline, then "Remove selected cell". The selected
+       - To remove a cell: click inside its white outline, then "Remove selected". The selected
          outline becomes thicker. This also works with suggestions hidden, or for hand-drawn cells.
        - To remove several cells quickly: turn on "Click cells to remove", then click inside each
          unwanted white outline. Turn it off before accepting more suggestions. Oval/Freehand also
          turns it off. Empty space and unaccepted suggestions are not removed or accepted in this mode.
-       - "Undo last change" restores deleted cells or reverses additions (including Accept all).
+       - "Undo" restores deleted cells or reverses additions (including Accept likely).
          Up to 20 plugin edits can be undone, preserving cell order and names. Edits made directly in
          the ROI Manager, including adding with t, clear this history rather than being overwritten.
-         To remove a group, select several cells in the ROI Manager and press Remove selected cell.
+         To remove a group, select several cells in the ROI Manager and press Remove selected.
      Each cell's background area appears in blue. Click a cell to see only its own background.
-       - "Leave out cells at the picture's edge (within 40 px)" is ticked at the start. While it is
+       - "Leave out cells within 40 px of the edge" is ticked at the start. While it is
          ticked, suggestions at the edge are not shown, a drawn outline at the edge is not added,
          and edge outlines already in the ROI Manager are drawn dashed and not measured. Untick it
          to treat edge cells like all others. See "Cells at the edge of the picture" below.
-  5. Press "Measure and save". The window then shows how many cells were measured, how many show a
-     clear rise, and which file to use.
+  5. Press "Continue to measure" (or click the Step 3 title), then "Measure and save". The window
+     then shows how many cells were measured and how many show a clear rise, and Step 4 opens.
 
 
 WHAT IT SAVES
@@ -269,16 +270,18 @@ WINDOW SIZE AND SCROLLING
 The plugin window can be resized. Smaller windows show scrollbars instead of compressing the
 controls. Use the mouse wheel or vertical scrollbar to reach lower sections; use the horizontal
 scrollbar when the window is too narrow. Detection, results, and update messages preserve the
-window size you chose. The initial window fits within the screen.
+window size you chose. The initial window fits within the screen. The colour picture is fitted
+into the free space to the left of the plugin window, and the Step 4 window opens there too, so
+the windows do not cover each other.
 
 STEP 2 PROGRESS AND GITHUB UPDATES
 The progress panel shows percentage stage progress, a persistent explanation of the current stage,
 total and stage time, image dimensions, CPU/GPU, attempt number, detection settings, download
-percentage when supplied, and the count of outlines checked. Progress details opens a scrollable
+percentage when supplied, and the count of outlines checked. Details opens a scrollable
 history of recent events and Cellpose messages. Saved-outline reuse is clearly labelled. Quiet
 periods keep the stage explanation and show whether the Cellpose process is still running. It advances when
 work or reported stages complete, not merely as time passes. Cellpose can be silent during
-inference. Use View detection log or Cancel detection during long runs. The bar reaches 100%
+inference. Use Log or Cancel during long runs. The bar reaches 100%
 only after the outlines are read, graded, and saved. Setup is a separate operation and disables
 cancellation until installation returns.
 

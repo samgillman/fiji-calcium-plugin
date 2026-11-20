@@ -23,11 +23,36 @@ def binding = new Binding([
     row:{ java.awt.Component... children -> def p = new JPanel(); children.each{p.add(it)}; p },
 ])
 def hooks, frame, progress
+// Step 1: the styled dialog returns the recording, the response choice and the folder, or nothing when cancelled.
+def Start = loader.loadClass('CalciumStartDialog')
+def everything; everything = { c -> [c] + (c instanceof java.awt.Container ? c.components.collectMany { everything(it) } : []) }
+def answerStep1 = { Closure act ->
+    def answer = 'not answered'
+    def asking = Thread.start { answer = Start.ask(['1:  movie.tif   (300 frames, 16-bit)', 'Choose a file from disk...'], 'Choose a file from disk...', 'default folder') }
+    def dialog = null
+    long limit = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+    while (dialog == null && System.nanoTime() < limit) { Thread.sleep(20); dialog = java.awt.Window.getWindows().find { it instanceof JDialog && it.visible && it.modal } }
+    assert dialog != null : 'Step 1 dialog did not open'
+    SwingUtilities.invokeAndWait { act(everything(dialog)) }
+    asking.join(5000); assert !asking.alive && !dialog.displayable
+    answer
+}
+assert answerStep1 { parts ->
+    def choice = parts.find { it instanceof JComboBox }; assert choice.selectedItem == 'Choose a file from disk...'
+    choice.selectedIndex = 0
+    parts.find { it instanceof JTextField }.text = 'chosen folder'
+    parts.find { it instanceof JCheckBox }.doClick()
+    assert parts.findAll { it instanceof JButton }*.text.containsAll(['Browse…', 'Cancel', 'Next'])
+    parts.find { it instanceof JButton && it.text == 'Next' }.doClick()
+} == [recording: '1:  movie.tif   (300 frames, 16-bit)', look: false, folder: 'chosen folder']
+assert answerStep1 { parts -> parts.find { it instanceof JButton && it.text == 'Cancel' }.doClick() } == null
 try {
     SwingUtilities.invokeAndWait {
         frame = Window.newInstance('Calcium UI regression test')
         def root = new JPanel(); root.setLayout(new BoxLayout(root,BoxLayout.Y_AXIS))
         binding.setVariable('frame',frame); binding.setVariable('root',root)
+        def updatesCard = loader.loadClass('CalciumCard').newInstance('', 'Updates', true); root.add(updatesCard)
+        binding.setVariable('updatesCard',updatesCard)
         def fragment = source.substring(source.indexOf('def updateBtn ='),source.indexOf('frame.pack(); frame.setAlwaysOnTop'))
         hooks = new GroovyShell(loader,binding).evaluate('import ij.IJ\nimport ij.Prefs\n'+fragment+'\nreturn [check:checkUpdates, controller:updateCheck, button:updateBtn, note:updateNote, checkbox:autoUpdateBox, install:installBtn, busy:installBusy, bar:installBar, start:startInstall, setInstaller:{ Closure c -> installRelease = c }]')
         frame.pack()
@@ -92,7 +117,7 @@ try {
         assert new File(testDirectory,'calcium-plugin-backups').listFiles().size()==1
         assert !hooks.button.enabled
     }
-    println 'PASS: actual Install update button, retry after error, background verified replacement, backup, restart feedback, Later and offline startup'
+    println 'PASS: Step 1 dialog answer and cancel, actual Install update button, retry after error, background verified replacement, backup, restart feedback, Later and offline startup'
 } finally {
     SwingUtilities.invokeAndWait { progress?.close(); hooks?.controller?.close(); frame?.dispose() }
     testDirectory.deleteDir()

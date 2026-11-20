@@ -1,4 +1,4 @@
-// Calcium imaging: cells step by step                                                    version 2026.11.19.8
+// Calcium imaging: cells step by step                                                    version 2026.11.20.1
 // One plugin for the whole job on one recording:
 //   1. choose the recording (already open in Fiji, or a file) and a folder for the results
 //   2. the plugin makes the cells visible: all-frames picture, response (found automatically, if there is one), and a
@@ -86,7 +86,7 @@ class CalciumSteps {
     /** Steps 1-2: pictures. The movie is only read. */
     void prepare(ImagePlus imp, boolean lookForResponse) {
         movie = imp; n = imp.getStackSize(); w = imp.getWidth(); h = imp.getHeight()
-        say("Calcium imaging plugin, version 2026.11.19.8")
+        say("Calcium imaging plugin, version 2026.11.20.1")
         say("Recording: " + imp.getTitle() + " (" + n + " frames, " + w + " x " + h + ", " + imp.getBitDepth() + "-bit)")
         ImagePlus sum = ZProjector.run(imp, "sum")                                   // Image > Stacks > Z Project, Sum Slices
         FloatProcessor avg = (FloatProcessor) sum.getProcessor().convertToFloat()
@@ -468,7 +468,7 @@ class CalciumSteps {
 
 /** Release lookup sends no recording data. Installation requires an explicit button click. */
 class CalciumRelease {
-    static final String VERSION = "2026.11.19.8"
+    static final String VERSION = "2026.11.20.1"
     static final String REPOSITORY = "https://github.com/samgillman/fiji-calcium-plugin"
     static final String API = "https://api.github.com/repos/samgillman/fiji-calcium-plugin/releases/latest"
     static final String ASSET = "Calcium_Imaging_Fiji_Plugin.zip"
@@ -791,7 +791,178 @@ class CalciumOutlineTask {
     }
 }
 
-/** One compact Step 2 panel, updated only on Swing's event thread. */
+/** One look for every plugin window: the computer's own interface font and the SimpleCa²⁺ colours. */
+class CalciumTheme {
+    static final Color BLUE = new Color(0x0072B2), BLUE_DARK = new Color(0x004D7A), BLUE_LIGHT = new Color(0xE8F4F8)
+    static final Color PAGE = new Color(0xF7F9FB), CARD = Color.white, LINE = new Color(0xDEE4EA), MUTED = new Color(0x65717D), INK = new Color(0x1F2933)
+    static final Color GOOD = new Color(0x1E7E34), WARN = new Color(0x9A5B00), BAD = new Color(0xB42318), ACCENT = new Color(0xD55E00), FAINT = new Color(0x9AA5B1)
+
+    /** The look and feel's own label font (San Francisco on a Mac, Segoe UI on Windows), never a fixed family. */
+    static java.awt.Font font(int style = java.awt.Font.PLAIN, float delta = 0f) {
+        java.awt.Font f = javax.swing.UIManager.getFont("Label.font") ?: new java.awt.Font(java.awt.Font.DIALOG, java.awt.Font.PLAIN, 13)
+        float size = (float) Math.max(12f, Math.min(14f, f.getSize2D()))
+        return f.deriveFont(style, (float) (size + delta))
+    }
+    static String hex(Color c) { String.format("#%06x", c.getRGB() & 0xFFFFFF) }
+    static void smooth(java.awt.Graphics2D g) {
+        g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
+        def hints = null
+        try { hints = java.awt.Toolkit.getDefaultToolkit().getDesktopProperty("awt.font.desktophints") } catch (Throwable ignored) { }
+        if (hints instanceof Map) g.addRenderingHints((Map) hints)
+        else g.setRenderingHint(java.awt.RenderingHints.KEY_TEXT_ANTIALIASING, java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
+    }
+    static javax.swing.JButton button(String text, boolean primary = false) { def b = new javax.swing.JButton(text); style(b, primary); b }
+    static void style(javax.swing.AbstractButton b, boolean primary) { b.setUI(new CalciumButtonUI(primary: primary)) }
+    static javax.swing.JLabel label(String text, Color colour = INK, int style = java.awt.Font.PLAIN, float delta = 0f) {
+        def l = new javax.swing.JLabel(text); l.setFont(font(style, delta)); l.setForeground(colour); l.setAlignmentX(0f); l
+    }
+    static void plain(javax.swing.JComponent c) { c.setFont(font()); c.setOpaque(false); c.setAlignmentX(0f) }
+    /** Text that fits the given width, ending in an ellipsis when it had to be cut. */
+    static String fit(String text, java.awt.FontMetrics fm, int width) {
+        if (text == null || width <= 0) return ""
+        if (fm.stringWidth(text) <= width) return text
+        String s = text
+        while (s.length() > 1 && fm.stringWidth(s + "…") > width) s = s.substring(0, s.length() - 1)
+        return s.length() > 1 ? s + "…" : ""
+    }
+    /** Round positions for the ticks of a plot axis. */
+    static List<Double> ticks(double lo, double hi, int about) {
+        if (!(hi > lo) || !Double.isFinite(lo) || !Double.isFinite(hi)) return [lo]
+        double raw = (hi - lo) / Math.max(1, about), power = Math.pow(10d, Math.floor(Math.log10(raw))), unit = raw / power
+        double step = (unit <= 1.5d ? 1d : unit <= 3d ? 2d : unit <= 7d ? 5d : 10d) * power
+        List<Double> out = []
+        for (double v = Math.ceil(lo / step - 1e-9d) * step; v <= hi + step * 1e-9d; v += step) out << (Math.abs(v) < step * 1e-9d ? 0d : v)
+        return out
+    }
+    static String tick(double v, double step) {
+        int decimals = step >= 1d ? 0 : (int) Math.min(6, Math.ceil(-Math.log10(step) - 1e-9d))
+        return String.format(Locale.US, "%." + decimals + "f", v)
+    }
+    /** A number for a settings box: at most three decimals, no trailing zeros. The exact value is kept separately. */
+    static String shortNumber(double v) {
+        if (!Double.isFinite(v)) return ""
+        def format = new java.text.DecimalFormat("0.###", java.text.DecimalFormatSymbols.getInstance(Locale.US))
+        return format.format(v)
+    }
+    /** Puts a picture window in the free space to the left of a control window, so neither covers the other. */
+    static void beside(ImagePlus picture, java.awt.Window panel) {
+        try {
+            def window = picture?.getWindow(); if (window == null || panel == null) return
+            def configuration = panel.getGraphicsConfiguration(); def bounds = configuration.getBounds()
+            def insets = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(configuration)
+            int left = (int) bounds.getX() + insets.left + 8, top = (int) bounds.getY() + insets.top + 8
+            int freeWidth = panel.getX() - left - 8, freeHeight = (int) bounds.getHeight() - insets.top - insets.bottom - 16
+            int chromeWidth = Math.max(0, window.getWidth() - picture.getCanvas().getWidth()), chromeHeight = Math.max(0, window.getHeight() - picture.getCanvas().getHeight())
+            if (freeWidth - chromeWidth < 240 || freeHeight - chromeHeight < 180) return
+            double zoom = Math.min(1d, Math.min((freeWidth - chromeWidth) / (double) picture.getWidth(), (freeHeight - chromeHeight) / (double) picture.getHeight()))
+            window.setLocationAndSize(left, top, (int) (picture.getWidth() * zoom) + chromeWidth, (int) (picture.getHeight() * zoom) + chromeHeight)
+        } catch (Throwable ignored) { } // Tidy window placement is a convenience; never stop the plugin for it.
+    }
+}
+
+/** Flat, rounded buttons that look the same on Mac, Windows and Linux. A primary button is filled blue. */
+class CalciumButtonUI extends javax.swing.plaf.basic.BasicButtonUI {
+    boolean primary = false
+    void installUI(javax.swing.JComponent c) {
+        super.installUI(c)
+        def b = (javax.swing.AbstractButton) c
+        b.setOpaque(false); b.setContentAreaFilled(false); b.setBorderPainted(false); b.setFocusPainted(false); b.setRolloverEnabled(true)
+        b.setMargin(new java.awt.Insets(0, 0, 0, 0)); b.setBorder(javax.swing.BorderFactory.createEmptyBorder(5, 12, 5, 12))
+        b.setFont(CalciumTheme.font(primary ? java.awt.Font.BOLD : java.awt.Font.PLAIN))
+    }
+    void paint(java.awt.Graphics g0, javax.swing.JComponent c) {
+        def b = (javax.swing.AbstractButton) c; def m = b.getModel()
+        def g = (java.awt.Graphics2D) g0.create()
+        try {
+            CalciumTheme.smooth(g)
+            int w = c.getWidth(), h = c.getHeight()
+            Color fill, line, ink
+            if (!m.isEnabled()) { fill = primary ? new Color(0xB7D3E3) : CalciumTheme.PAGE; line = primary ? fill : CalciumTheme.LINE; ink = primary ? Color.white : CalciumTheme.FAINT }
+            else if (primary) { fill = m.isArmed() && m.isPressed() ? CalciumTheme.BLUE_DARK : m.isRollover() ? new Color(0x0064A0) : CalciumTheme.BLUE; line = fill; ink = Color.white }
+            else { fill = m.isArmed() && m.isPressed() ? new Color(0xD3E6F0) : m.isRollover() ? CalciumTheme.BLUE_LIGHT : Color.white; line = m.isRollover() ? CalciumTheme.BLUE : new Color(0xC5CED8); ink = CalciumTheme.INK }
+            g.setColor(fill); g.fillRoundRect(0, 0, w - 1, h - 1, 10, 10)
+            g.setColor(line); g.drawRoundRect(0, 0, w - 1, h - 1, 10, 10)
+            if (b.isFocusOwner() && m.isEnabled()) { g.setColor(new Color(0, 114, 178, 110)); g.setStroke(new java.awt.BasicStroke(2f)); g.drawRoundRect(1, 1, w - 3, h - 3, 9, 9) }
+            g.setFont(b.getFont()); def fm = g.getFontMetrics(); String text = b.getText() ?: ""
+            g.setColor(ink); g.drawString(text, (int) ((w - fm.stringWidth(text)) / 2), (int) ((h - fm.getHeight()) / 2) + fm.getAscent())
+        } finally { g.dispose() }
+    }
+}
+
+/** The clickable title line of a card: number, title, a short summary and an open/closed arrow. */
+class CalciumCardHeader extends javax.swing.JComponent {
+    CalciumCard card; boolean hover = false
+    CalciumCardHeader(CalciumCard owner) {
+        card = owner; setAlignmentX(0f); setOpaque(false)
+        addMouseListener(new java.awt.event.MouseAdapter() {
+            void mouseEntered(java.awt.event.MouseEvent e) { hover = true; repaint() }
+            void mouseExited(java.awt.event.MouseEvent e) { hover = false; repaint() }
+            void mouseReleased(java.awt.event.MouseEvent e) { if (card.collapsible && javax.swing.SwingUtilities.isLeftMouseButton(e) && contains(e.getPoint())) card.onToggle.call(card) }
+        })
+    }
+    java.awt.Dimension getPreferredSize() { new java.awt.Dimension(220, 38) }
+    java.awt.Dimension getMinimumSize() { new java.awt.Dimension(120, 38) }
+    java.awt.Dimension getMaximumSize() { new java.awt.Dimension(Integer.MAX_VALUE, 38) }
+    protected void paintComponent(java.awt.Graphics g0) {
+        def g = (java.awt.Graphics2D) g0.create()
+        try {
+            CalciumTheme.smooth(g)
+            int w = getWidth(), h = getHeight(), x = 12
+            if (hover && card.collapsible) { g.setColor(CalciumTheme.BLUE_LIGHT); g.fillRoundRect(2, 2, w - 5, h - 4, 10, 10) }
+            if (card.badge) {
+                g.setColor(card.done ? CalciumTheme.GOOD : card.expanded ? CalciumTheme.BLUE : CalciumTheme.FAINT); g.fillOval(x, (int) ((h - 22) / 2), 22, 22)
+                g.setColor(Color.white)
+                if (card.done) { g.setStroke(new java.awt.BasicStroke(2f, java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND)); int cy = (int) (h / 2); g.drawPolyline([x + 6, x + 10, x + 16] as int[], [cy, cy + 4, cy - 4] as int[], 3) }
+                else { g.setFont(CalciumTheme.font(java.awt.Font.BOLD, -1f)); def fm = g.getFontMetrics(); g.drawString(card.badge, x + (int) ((22 - fm.stringWidth(card.badge)) / 2), (int) ((h - fm.getHeight()) / 2) + fm.getAscent()) }
+                x += 30
+            }
+            g.setFont(CalciumTheme.font(java.awt.Font.BOLD, 1f)); def fm = g.getFontMetrics(); int baseline = (int) ((h - fm.getHeight()) / 2) + fm.getAscent()
+            g.setColor(CalciumTheme.INK); g.drawString(card.title, x, baseline); x += fm.stringWidth(card.title) + 12
+            int right = w - 12
+            if (card.collapsible) {
+                g.setColor(CalciumTheme.MUTED); g.setStroke(new java.awt.BasicStroke(1.6f, java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND)); int cx = w - 20, cy = (int) (h / 2)
+                if (card.expanded) g.drawPolyline([cx - 4, cx, cx + 4] as int[], [cy - 2, cy + 2, cy - 2] as int[], 3) else g.drawPolyline([cx - 2, cx + 2, cx - 2] as int[], [cy - 4, cy, cy + 4] as int[], 3)
+                right = w - 32
+            }
+            if (card.summary && !(card.collapsible && card.expanded && !card.summaryWhenOpen)) {
+                g.setFont(CalciumTheme.font()); fm = g.getFontMetrics(); String s = CalciumTheme.fit(card.summary, fm, right - x)
+                g.setColor(CalciumTheme.MUTED); g.drawString(s, right - fm.stringWidth(s), baseline)
+            }
+        } finally { g.dispose() }
+    }
+}
+
+/** A white card with a numbered title. Clicking the title opens or closes what is inside. */
+class CalciumCard extends javax.swing.JPanel {
+    String badge = "", title = "", summary = ""
+    boolean collapsible = true, expanded = true, done = false, summaryWhenOpen = false
+    javax.swing.JPanel body = new javax.swing.JPanel()
+    CalciumCardHeader header
+    Closure onToggle = { CalciumCard card -> card.setExpanded(!card.expanded) }
+    CalciumCard(String badge, String title, boolean collapsible = true) {
+        this.badge = badge ?: ""; this.title = title; this.collapsible = collapsible
+        setLayout(new java.awt.BorderLayout()); setOpaque(false); setAlignmentX(0f)
+        setBorder(javax.swing.BorderFactory.createEmptyBorder(1, 1, 1, 1))
+        body.setLayout(new javax.swing.BoxLayout(body, javax.swing.BoxLayout.Y_AXIS)); body.setOpaque(false)
+        body.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, 12, 10, 12))
+        header = new CalciumCardHeader(this); header.setToolTipText(collapsible ? "Click to open or close this step" : null)
+        add(header, java.awt.BorderLayout.NORTH); add(body, java.awt.BorderLayout.CENTER)
+    }
+    void setExpanded(boolean value) { expanded = value; body.setVisible(value); revalidate(); repaint() }
+    void setSummary(String value) { summary = value ?: ""; header?.repaint() }
+    void setDone(boolean value) { done = value; header?.repaint() }
+    java.awt.Dimension getMaximumSize() { new java.awt.Dimension(Integer.MAX_VALUE, (int) getPreferredSize().height) }
+    protected void paintComponent(java.awt.Graphics g0) {
+        def g = (java.awt.Graphics2D) g0.create()
+        try {
+            CalciumTheme.smooth(g)
+            g.setColor(CalciumTheme.CARD); g.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12)
+            g.setColor(CalciumTheme.LINE); g.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 12, 12)
+        } finally { g.dispose() }
+    }
+}
+
+/** One compact Step 2 panel, updated only on Swing's event thread: a slim bar, the stage in plain words, and buttons for the details. */
 class CalciumOutlineProgress extends javax.swing.JPanel {
     javax.swing.JProgressBar bar = new javax.swing.JProgressBar(0, 100)
     javax.swing.JLabel text = new javax.swing.JLabel()
@@ -809,16 +980,20 @@ class CalciumOutlineProgress extends javax.swing.JPanel {
     static String escape(String value) { value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") }
     CalciumOutlineProgress() {
         setLayout(new javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS)); setAlignmentX(0f)
-        bar.setStringPainted(true); bar.setString("0% - Stage progress"); bar.setAlignmentX(0f)
-        bar.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 22))
+        bar.setString("0% - Stage progress"); bar.setAlignmentX(0f)   // the percentage is written next to the stage name below, not over the bar
+        bar.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 14))
         bar.setToolTipText("Progress through detection stages, not a time estimate. It can pause while Cellpose runs.")
-        text.setAlignmentX(0f); text.setFont(new java.awt.Font("SansSerif", java.awt.Font.PLAIN, 12))
+        setOpaque(false)
+        text.setAlignmentX(0f); text.setFont(CalciumTheme.font()); text.setForeground(CalciumTheme.INK); text.setVerticalAlignment(javax.swing.SwingConstants.TOP)
         // Reserve space for a quiet/long-running message without growing beyond the screen mid-run.
-        text.setPreferredSize(new java.awt.Dimension(400, 180))
-        text.setMinimumSize(new java.awt.Dimension(400, 180))
-        text.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 180))
-        def buttons = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 4, 2)); buttons.setAlignmentX(0f)
-        [cancelButton, detailsButton, logButton].each { it.setFont(text.getFont()); it.setMargin(new java.awt.Insets(2, 8, 2, 8)); buttons.add(it) }
+        text.setPreferredSize(new java.awt.Dimension(330, 118))
+        text.setMinimumSize(new java.awt.Dimension(330, 118))
+        text.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 118))
+        text.setBorder(javax.swing.BorderFactory.createEmptyBorder(6, 0, 0, 0))
+        def buttons = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 4, 2)); buttons.setAlignmentX(0f); buttons.setOpaque(false)
+        cancelButton.setText("Cancel"); detailsButton.setText("Details"); logButton.setText("Log")
+        cancelButton.setToolTipText("Stop the detection"); detailsButton.setToolTipText("Everything the detection has reported so far"); logButton.setToolTipText("Open Cellpose's own messages")
+        [cancelButton, detailsButton, logButton].each { CalciumTheme.style(it, false); buttons.add(it) }
         add(bar); add(text); add(buttons)
         detailsText.setEditable(false); detailsText.setLineWrap(true); detailsText.setWrapStyleWord(true)
         detailsText.setFont(text.getFont()); detailsText.setMargin(new java.awt.Insets(8, 8, 8, 8))
@@ -852,7 +1027,7 @@ class CalciumOutlineProgress extends javax.swing.JPanel {
         })
         task.began = started
         task.report(0, "Preparing cell detection", "Checking Cellpose and looking for saved outlines.")
-        bar.setValue(0); cancelButton.setText("Cancel detection"); cancelButton.setEnabled(true)
+        bar.setValue(0); cancelButton.setText("Cancel"); cancelButton.setEnabled(true)
         setVisible(true); render(); clock.start()
         return task
     }
@@ -871,7 +1046,9 @@ class CalciumOutlineProgress extends javax.swing.JPanel {
             (task.process?.isAlive() ? "Cellpose is still running; no measurable progress reported." : "Waiting for the current stage to report progress.")
         if (running && seconds >= 600) quietMessage += " Over 10 minutes so far; check the log."
         String context = state.context ?: ""
-        text.setText("<html><body style='width:300px'><b>" + escape(state.stage) + "</b><br>" + escape(elapsed) + "<br>" + escape(context) + "<br>" + escape(message) +
+        String muted = CalciumTheme.hex(CalciumTheme.MUTED)
+        text.setText("<html><body style='width:300px'><b>" + escape(state.stage) + "</b> &nbsp;<font color='" + muted + "'>" + state.percent + " %</font><br><font color='" + muted + "'>" + escape(elapsed) +
+            (context ? " &nbsp;·&nbsp; " + escape(context) : "") + "</font><br>" + escape(message) +
             (quietMessage ? "<br><font color='#865000'>" + escape(quietMessage) + "</font>" : "") + "</body></html>")
         String details = state.stage + " (" + state.percent + "%)\n" + elapsed + "\n" + context + "\n" + message + "\n" + quietMessage +
             "\n\nPercentages mark completed stages, not remaining time. Cellpose does not report a reliable percentage while finding cells in one image.\n\nRecent events (up to 120; full output is in View detection log):\n" + (state.history ?: "")
@@ -1146,38 +1323,57 @@ class CalciumCsv {
 /** Native Fiji trace view; missing samples remain gaps. */
 class CalciumAnalysisPlot extends javax.swing.JPanel {
     double[] time=[], mean=[], sem=[], selected=[]
-    String caption='Run analysis to see traces', cell=''
+    String caption='Run the analysis to see traces', cell=''
     double baselineStart=0, baselineEnd=0, stimulusStart=0, stimulusEnd=0
-    CalciumAnalysisPlot() {setPreferredSize(new java.awt.Dimension(650,300)); setBackground(Color.white)}
+    CalciumAnalysisPlot() {setPreferredSize(new java.awt.Dimension(520,320)); setMinimumSize(new java.awt.Dimension(260,200)); setBackground(Color.white)}
     protected void paintComponent(java.awt.Graphics graphics) {
         super.paintComponent(graphics)
         def g=(java.awt.Graphics2D)graphics.create()
         try {
-            g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
-            g.setColor(Color.darkGray); g.drawString(caption.take(105),15,20)
-            if(time.length<2) return
-            int l=62,t=38,w=Math.max(1,getWidth()-82),h=Math.max(1,getHeight()-90)
+            CalciumTheme.smooth(g); g.setFont(CalciumTheme.font(java.awt.Font.PLAIN,-1f)); def fm=g.getFontMetrics()
+            if(time.length<2) {g.setColor(CalciumTheme.MUTED);String s=CalciumTheme.fit(caption,fm,getWidth()-24);g.drawString(s,(int)((getWidth()-fm.stringWidth(s))/2),(int)(getHeight()/2));return}
+            int l=62,t=40,w=Math.max(1,getWidth()-l-18),h=Math.max(1,getHeight()-t-46)
             def values=[]; mean.eachWithIndex {v,i->if(Double.isFinite(v)) {values<<v;if(i<sem.length&&Double.isFinite(sem[i])) {values<<v-sem[i];values<<v+sem[i]}}}
             selected.each {if(Double.isFinite(it)) values<<it}; values<<0d
             double lo=values.min() as double,hi=values.max() as double
             if(hi-lo<0.001) hi=lo+1
             double pad=(hi-lo)*0.08;lo-=pad;hi+=pad
-            def X={double x->l+(int)((x-time[0])/(time[-1]-time[0])*w)}
-            def Y={double y->t+(int)((hi-y)/(hi-lo)*h)}
-            g.setColor(new Color(235,235,235));g.fillRect(X(baselineStart),t,Math.max(1,X(baselineEnd)-X(baselineStart)),h)
-            g.setColor(new Color(255,238,215));g.fillRect(X(stimulusStart),t,Math.max(1,X(stimulusEnd)-X(stimulusStart)),h)
-            g.setColor(Color.lightGray);g.drawLine(l,Y(0d),l+w,Y(0d));g.drawRect(l,t,w,h)
-            g.setColor(new Color(70,130,210,65))
+            double t0=time[0],t1=time[-1]
+            def X={double x->l+(int)Math.round((x-t0)/(t1-t0)*w)}
+            def Y={double y->t+(int)Math.round((hi-y)/(hi-lo)*h)}
+            // the baseline and the stimulus window, each named inside its band
+            [[baselineStart,baselineEnd,new Color(0xEEF1F4),'baseline'],[stimulusStart,stimulusEnd,new Color(0xFFF0DC),'stimulus']].each { band ->
+                int x0=Math.max(l,X(band[0] as double)),x1=Math.min(l+w,X(band[1] as double))
+                if(x1>x0) {g.setColor(band[2] as Color);g.fillRect(x0,t,x1-x0,h);String name=CalciumTheme.fit(band[3] as String,fm,x1-x0-6);g.setColor(CalciumTheme.MUTED);g.drawString(name,x0+4,t+fm.getAscent()+2)}
+            }
+            def yTicks=CalciumTheme.ticks(lo,hi,5); double yStep=yTicks.size()>1?yTicks[1]-yTicks[0]:1d
+            yTicks.each { double v -> int y=Y(v);g.setColor(v==0d?new Color(0xAEB8C2):CalciumTheme.LINE);g.drawLine(l,y,l+w,y)
+                String s=CalciumTheme.tick(v,yStep);g.setColor(CalciumTheme.MUTED);g.drawString(s,l-8-fm.stringWidth(s),y+(int)(fm.getAscent()/2)-1) }
+            def xTicks=CalciumTheme.ticks(t0,t1,Math.max(2,(int)(w/90))); double xStep=xTicks.size()>1?xTicks[1]-xTicks[0]:1d
+            xTicks.each { double v -> int x=X(v);g.setColor(CalciumTheme.LINE);g.drawLine(x,t+h,x,t+h+4)
+                String s=CalciumTheme.tick(v,xStep);g.setColor(CalciumTheme.MUTED);g.drawString(s,x-(int)(fm.stringWidth(s)/2),t+h+6+fm.getAscent()) }
+            g.setColor(new Color(0xC5CED8));g.drawRect(l,t,w,h)
+            def clip=g.getClip();g.clipRect(l,t,w+1,h+1)
+            g.setColor(new Color(0,114,178,50))
             for(int i=1;i<time.length;i++) if(i<mean.length&&i<sem.length&&[mean[i-1],mean[i],sem[i-1],sem[i]].every{Double.isFinite((double)it)}) {
                 g.fillPolygon([X(time[i-1]),X(time[i]),X(time[i]),X(time[i-1])] as int[],[Y(mean[i-1]-sem[i-1]),Y(mean[i]-sem[i]),Y(mean[i]+sem[i]),Y(mean[i-1]+sem[i-1])] as int[],4)
             }
-            [[mean,new Color(35,90,175),2f],[selected,new Color(160,30,130),2f]].each { entry ->
-                double[] y=entry[0] as double[];g.setColor((Color)entry[1]);g.setStroke(new java.awt.BasicStroke((float)entry[2]))
+            [[selected,CalciumTheme.ACCENT,1.5f],[mean,CalciumTheme.BLUE,2.2f]].each { entry ->
+                double[] y=entry[0] as double[];g.setColor((Color)entry[1]);g.setStroke(new java.awt.BasicStroke((float)entry[2],java.awt.BasicStroke.CAP_ROUND,java.awt.BasicStroke.JOIN_ROUND))
                 for(int i=1;i<Math.min(time.length,y.length);i++) if(Double.isFinite(y[i-1])&&Double.isFinite(y[i])) g.drawLine(X(time[i-1]),Y(y[i-1]),X(time[i]),Y(y[i]))
             }
-            g.setColor(Color.darkGray);g.drawString(String.format(Locale.US,'%.3g',hi),4,t+10);g.drawString(String.format(Locale.US,'%.3g',lo),4,t+h)
-            g.drawString('0',l,t+h+18);g.drawString(String.format(Locale.US,'%.3g s',time[-1]),l+w-40,t+h+18)
-            g.drawString('ΔF/F₀: blue = cell mean ± SEM; purple = '+cell, l,getHeight()-12)
+            g.setClip(clip);g.setStroke(new java.awt.BasicStroke(1f))
+            // key above the plot, axis names beside it
+            int kx=l,ky=t-16
+            g.setColor(CalciumTheme.BLUE);g.setStroke(new java.awt.BasicStroke(2.2f));g.drawLine(kx,ky,kx+18,ky);g.setStroke(new java.awt.BasicStroke(1f))
+            g.setColor(CalciumTheme.INK);g.drawString('mean ± SEM of cells',kx+24,ky+4);kx+=24+fm.stringWidth('mean ± SEM of cells')+18
+            if(cell) {
+                boolean have=selected.length>0
+                if(have) {g.setColor(CalciumTheme.ACCENT);g.setStroke(new java.awt.BasicStroke(1.5f));g.drawLine(kx,ky,kx+18,ky);g.setStroke(new java.awt.BasicStroke(1f));kx+=24}
+                String s=CalciumTheme.fit(have?cell:cell+': no trace (see Metrics + quality)',fm,l+w-kx);g.setColor(have?CalciumTheme.INK:CalciumTheme.WARN);g.drawString(s,kx,ky+4)
+            }
+            g.setColor(CalciumTheme.MUTED);String xl='Time (s)';g.drawString(xl,l+(int)((w-fm.stringWidth(xl))/2),getHeight()-8)
+            def turned=(java.awt.Graphics2D)g.create();try{turned.rotate(-Math.PI/2);String yl='ΔF/F₀';turned.drawString(yl,-(t+(int)((h+fm.stringWidth(yl))/2)),14)}finally{turned.dispose()}
         } finally {g.dispose()}
     }
 }
@@ -1192,15 +1388,24 @@ class CalciumAnalysisHeatmap extends javax.swing.JPanel {
     protected void paintComponent(java.awt.Graphics graphics) {
         super.paintComponent(graphics);def g=(java.awt.Graphics2D)graphics.create()
         try {
-            g.setColor(Color.darkGray);g.drawString('ΔF/F₀ heatmap · blue < 0 · white = 0 · red > 0 · gray = unavailable; click a row',10,18)
-            if(names.isEmpty()||time.length<2)return
+            CalciumTheme.smooth(g);g.setFont(CalciumTheme.font(java.awt.Font.PLAIN,-1f));def fm=g.getFontMetrics()
+            if(names.isEmpty()||time.length<2){g.setColor(CalciumTheme.MUTED);String s='Run the analysis to see the heatmap';g.drawString(s,(int)((getWidth()-fm.stringWidth(s))/2),(int)(getHeight()/2));return}
             double scale=0
             traces.each{it.each{v->if(Double.isFinite(v))scale=Math.max(scale,Math.abs(v))}}
             if(scale==0)scale=1
+            g.setColor(CalciumTheme.INK);g.drawString('ΔF/F₀ of every cell · click a row to see its trace',10,19)
+            // colour key: blue below zero, white at zero, red above; gray where there is no value
+            int kw=120,kx=getWidth()-kw-52
+            if(kx>320) {
+                for(int i=0;i<kw;i++){double v=(i/(double)(kw-1))*2-1;int fade=(int)(255*(1-Math.abs(v)));g.setColor(v>=0?new Color(255,fade,fade):new Color(fade,fade,255));g.drawLine(kx+i,9,kx+i,20)}
+                g.setColor(CalciumTheme.LINE);g.drawRect(kx,9,kw-1,11);g.setColor(CalciumTheme.MUTED)
+                String low=String.format(Locale.US,'−%.2g',scale),high=String.format(Locale.US,'+%.2g',scale)
+                g.drawString(low,kx-6-fm.stringWidth(low),19);g.drawString(high,kx+kw+6,19)
+            }
             int w=Math.max(1,getWidth()-85),h=Math.max(1,getHeight()-55)
             for(int c=0;c<names.size();c++) {
                 int y=30+(int)(h*c/names.size()),y2=30+(int)(h*(c+1)/names.size())
-                if(y2-y>=11){g.setColor(Color.darkGray);g.drawString(names[c],2,y+10)}
+                if(y2-y>=11){g.setColor(CalciumTheme.MUTED);g.drawString(names[c],6,y+10)}
                 for(int f=0;f<time.length;f++) {
                     double v=traces[c][f];int fade=Double.isFinite(v)?(int)(255*(1-Math.min(1,Math.abs(v)/scale))):170
                     g.setColor(!Double.isFinite(v)?new Color(170,170,170):v>=0?new Color(255,fade,fade):new Color(fade,fade,255))
@@ -1208,9 +1413,99 @@ class CalciumAnalysisHeatmap extends javax.swing.JPanel {
                     g.fillRect(x,y,Math.max(1,x2-x),Math.max(1,y2-y))
                 }
             }
-            g.setColor(Color.darkGray);g.drawString('0 s',75,getHeight()-5);g.drawString(String.format(Locale.US,'%.3g s; scale ±%.3g',time[-1],scale),getWidth()-190,getHeight()-5)
+            g.setColor(CalciumTheme.LINE);g.drawRect(75,30,w-1,h-1)
+            def ticks=CalciumTheme.ticks(time[0],time[-1],Math.max(2,(int)(w/110)));double step=ticks.size()>1?ticks[1]-ticks[0]:1d
+            g.setColor(CalciumTheme.MUTED)
+            ticks.each{double v->int x=75+(int)((v-time[0])/(time[-1]-time[0])*w);g.drawLine(x,30+h,x,33+h);String s=CalciumTheme.tick(v,step)+' s';g.drawString(s,Math.min(getWidth()-fm.stringWidth(s)-4,x-(int)(fm.stringWidth(s)/2)),getHeight()-7)}
         } finally {g.dispose()}
     }
+}
+
+/** The measured cells on the colour picture, shown inside the analysis window. Click a cell to see its trace. */
+class CalciumCellPicture extends javax.swing.JPanel {
+    java.awt.image.BufferedImage image; Roi[] rois=new Roi[0]; List<String> names=[]; Map<String,String> calls=[:]
+    int selected=-1; Closure choose={int i->}
+    double magnify=1d, panX=0d, panY=0d   // wheel zoom and drag offset, on top of "fit the panel"
+    private java.awt.Point dragFrom; private boolean dragged=false
+    CalciumCellPicture() {
+        setBackground(new Color(0x10161C));setPreferredSize(new java.awt.Dimension(340,260));setMinimumSize(new java.awt.Dimension(160,120))
+        setToolTipText('Click a cell to see its trace. Scroll to zoom, drag to move, double-click to see the whole picture.')
+        def mouse=new java.awt.event.MouseAdapter(){
+            void mousePressed(java.awt.event.MouseEvent e){dragFrom=e.getPoint();dragged=false}
+            void mouseDragged(java.awt.event.MouseEvent e){
+                if(dragFrom==null||image==null)return
+                if(Math.abs(e.x-dragFrom.x)+Math.abs(e.y-dragFrom.y)>3)dragged=true
+                if(dragged){panX+=e.x-dragFrom.x;panY+=e.y-dragFrom.y;dragFrom=e.getPoint();repaint()}
+            }
+            void mouseReleased(java.awt.event.MouseEvent e){
+                if(!javax.swing.SwingUtilities.isLeftMouseButton(e)||image==null||dragged)return
+                if(e.getClickCount()>=2){magnify=1d;panX=0d;panY=0d;repaint();return}
+                double[] f=frame();int x=(int)Math.floor((e.x-f[0])/f[2]),y=(int)Math.floor((e.y-f[1])/f[2])
+                int i=(rois as List).findIndexOf{it.contains(x,y)}
+                if(i>=0)choose.call(i)
+            }
+            void mouseWheelMoved(java.awt.event.MouseWheelEvent e){
+                if(image==null)return
+                double[] before=frame();double ix=(e.x-before[0])/before[2],iy=(e.y-before[1])/before[2]
+                magnify=Math.max(1d,Math.min(12d,magnify*Math.pow(1.2d,-e.getPreciseWheelRotation())))
+                if(magnify==1d){panX=0d;panY=0d} else {double[] after=frame();panX+=e.x-(after[0]+ix*after[2]);panY+=e.y-(after[1]+iy*after[2])}
+                repaint()
+            }
+        }
+        addMouseListener(mouse);addMouseMotionListener(mouse);addMouseWheelListener(mouse)
+    }
+    /** Where the picture is drawn: left, top and zoom, keeping its shape and leaving room for the key below. */
+    double[] frame() {
+        double fit=Math.min((getWidth()-8)/(double)image.getWidth(),(getHeight()-30)/(double)image.getHeight());if(!(fit>0))fit=0.01d
+        double zoom=fit*magnify
+        return [(getWidth()-image.getWidth()*zoom)/2d+panX,4d+(getHeight()-30-image.getHeight()*zoom)/2d+panY,zoom] as double[]
+    }
+    /** Brings a cell into view when the picture is zoomed in. */
+    void reveal(int index) {
+        if(image==null||index<0||index>=rois.length||magnify==1d)return
+        def b=rois[index].getBounds();double[] f=frame()
+        panX+=getWidth()/2d-(f[0]+b.getCenterX()*f[2]);panY+=(getHeight()-30)/2d-(f[1]+b.getCenterY()*f[2])
+    }
+    protected void paintComponent(java.awt.Graphics graphics) {
+        super.paintComponent(graphics);if(image==null)return
+        def g=(java.awt.Graphics2D)graphics.create()
+        try {
+            CalciumTheme.smooth(g);g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION,java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+            double[] f=frame();g.drawImage(image,(int)f[0],(int)f[1],(int)(image.getWidth()*f[2]),(int)(image.getHeight()*f[2]),null)
+            def outline={Roi roi->def p=roi.getPolygon();def path=new java.awt.geom.Path2D.Double()
+                for(int i=0;i<p.npoints;i++){double x=f[0]+p.xpoints[i]*f[2],y=f[1]+p.ypoints[i]*f[2];if(i==0)path.moveTo(x,y) else path.lineTo(x,y)};path.closePath();path}
+            def dashed=new java.awt.BasicStroke(1.4f,java.awt.BasicStroke.CAP_BUTT,java.awt.BasicStroke.JOIN_ROUND,10f,[4f,3f] as float[],0f)
+            rois.eachWithIndex{Roi roi,int i->if(i==selected)return
+                String call=calls[i<names.size()?names[i]:'']; def shape=outline(roi)
+                g.setColor(new Color(0,0,0,170));g.setStroke(new java.awt.BasicStroke(call=='Responded'?3.6f:2.6f));g.draw(shape)
+                if(call==null||call=='Responded'){g.setColor(Color.white);g.setStroke(new java.awt.BasicStroke(call==null?1.4f:2f))}
+                else if(call=='Did not respond'){g.setColor(new Color(0xAEB8C2));g.setStroke(new java.awt.BasicStroke(1.2f))}
+                else {g.setColor(new Color(0xAEB8C2));g.setStroke(dashed)}
+                g.draw(shape)}
+            if(selected>=0&&selected<rois.length) {
+                def shape=outline(rois[selected]);g.setColor(Color.black);g.setStroke(new java.awt.BasicStroke(6f));g.draw(shape)
+                g.setColor(new Color(0x5BC0FF));g.setStroke(new java.awt.BasicStroke(3f));g.draw(shape)
+                if(selected<names.size()) {g.setFont(CalciumTheme.font(java.awt.Font.BOLD,-1f));def fm=g.getFontMetrics();def b=shape.getBounds();String s=names[selected]
+                    int x=(int)Math.max(2,Math.min(getWidth()-fm.stringWidth(s)-8,b.x+b.width+6)),y=(int)Math.max(fm.getAscent()+4,b.y+fm.getAscent())
+                    g.setColor(new Color(0,0,0,190));g.fillRoundRect(x-4,y-fm.getAscent()-2,fm.stringWidth(s)+8,fm.getHeight()+3,8,8);g.setColor(Color.white);g.drawString(s,x,y)}
+            }
+            g.setFont(CalciumTheme.font(java.awt.Font.PLAIN,-2f));g.setColor(new Color(0xC5CED8));def fm=g.getFontMetrics()
+            String key=calls.isEmpty()?'Click a cell to see its trace':'thick white: responded · gray: did not respond · dashed: excluded or unscorable'
+            g.setColor(getBackground());g.fillRect(0,getHeight()-24,getWidth(),24)
+            g.setColor(new Color(0xC5CED8));g.drawString(CalciumTheme.fit(key,fm,getWidth()-12),6,getHeight()-9)
+        } finally {g.dispose()}
+    }
+}
+
+/** One headline number with a short caption under it. */
+class CalciumStat extends javax.swing.JPanel {
+    javax.swing.JLabel value=CalciumTheme.label('–',CalciumTheme.INK,java.awt.Font.BOLD,7f), caption=CalciumTheme.label(' ',CalciumTheme.MUTED,java.awt.Font.PLAIN,-1f)
+    CalciumStat(String text,Color colour=CalciumTheme.INK) {
+        setLayout(new javax.swing.BoxLayout(this,javax.swing.BoxLayout.Y_AXIS));setOpaque(false)
+        setBorder(javax.swing.BorderFactory.createEmptyBorder(8,12,8,12));value.setForeground(colour);caption.setText(text);add(value);add(caption)
+    }
+    void show(String number,String text){value.setText(number);caption.setText(text)}
+    protected void paintComponent(java.awt.Graphics g0){def g=(java.awt.Graphics2D)g0.create();try{CalciumTheme.smooth(g);g.setColor(CalciumTheme.CARD);g.fillRoundRect(0,0,getWidth()-1,getHeight()-1,12,12);g.setColor(CalciumTheme.LINE);g.drawRoundRect(0,0,getWidth()-1,getHeight()-1,12,12)}finally{g.dispose()}}
 }
 
 /** Step 4 uses the measured ROI snapshot, never the intensity-lifted export. */
@@ -1222,70 +1517,108 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
     boolean busy=false, closed=false
     File results
     Map<String,javax.swing.JTextField> fields=[:]
-    def setup=new javax.swing.JButton('Set up analysis engine (one time)')
-    def runButton=new javax.swing.JButton('Analyze responses')
-    def cancelButton=new javax.swing.JButton('Cancel')
-    def logButton=new javax.swing.JButton('View log')
-    def folderButton=new javax.swing.JButton('Open analysis folder')
-    def savePlots=new javax.swing.JButton('Save plots as PNG')
-    def status=new javax.swing.JLabel('Measure cells, check the settings, then analyze.')
+    Map<String,List<String>> exact=[:]   // box name -> [what is shown, the exact value]: an untouched box still sends the exact value
+    def setup=CalciumTheme.button('Set up analysis engine (one time)')
+    def runButton=CalciumTheme.button('Analyze responses',true)
+    def cancelButton=CalciumTheme.button('Cancel')
+    def logButton=CalciumTheme.button('View log')
+    def folderButton=CalciumTheme.button('Open analysis folder')
+    def savePlots=CalciumTheme.button('Save plots as PNG')
+    def previousCell=CalciumTheme.button('‹'), nextCell=CalciumTheme.button('›')
+    def status=new javax.swing.JTextArea('Check the settings, tick the box, then analyze.',3,24)
     def progress=new javax.swing.JProgressBar(0,100)
-    def confirmed=new javax.swing.JCheckBox('I checked the frame rate, baseline and stimulus times',false)
+    def confirmed=new javax.swing.JCheckBox("<html><body style='width:230px'>I checked the frame rate, baseline and stimulus times</body></html>",false)
     def kcl=new javax.swing.JCheckBox('Also score a separate KCl window',false)
     def cells=new javax.swing.JComboBox<String>()
     def plot=new CalciumAnalysisPlot()
     def heatmap=new CalciumAnalysisHeatmap()
+    def cellPicture=new CalciumCellPicture()
+    def responding=new CalciumStat('responding',CalciumTheme.BLUE), registered=new CalciumStat('cells registered'), excluded=new CalciumStat('excluded'), unscorable=new CalciumStat('unscorable')
     def metrics=new javax.swing.JTable()
     def calls=new javax.swing.JTable()
     def counts=new javax.swing.JTable()
     def tabs=new javax.swing.JTabbedPane()
     Map<String,double[]> traces=[:]
-    java.awt.event.MouseListener pictureListener
     javax.swing.Timer clock
     long started
     String stage=''
     CalciumAnalysisWindow(Map data) {
         super('Step 4 · SimpleCa²⁺ analysis in Fiji');measurement=new LinkedHashMap(data)
         if(data.picture!=null) {
-            ImagePlus review=new ImagePlus('Analysis cells · '+data.recording,(data.picture as ImagePlus).getProcessor().duplicate())
-            def overlay=new Overlay();data.rois.each{CalciumCellAppearance.add(overlay,it,false,false)};review.setOverlay(overlay);review.show()
-            measurement.picture=review
+            // A private copy of the colour picture: selecting a cell here never touches the Step 2 picture or its outlines.
+            def snapshot=(data.picture as ImagePlus).getBufferedImage()
+            measurement.picture=new ImagePlus('Analysis cells · '+data.recording,new ij.process.ColorProcessor(snapshot))
+            cellPicture.image=snapshot;cellPicture.rois=(data.rois?:new Roi[0]) as Roi[];cellPicture.names=(data.names?:[]) as List<String>
         }
         setDefaultCloseOperation(javax.swing.WindowConstants.DISPOSE_ON_CLOSE)
-        def root=new javax.swing.JPanel(new java.awt.BorderLayout(6,6));root.setBorder(javax.swing.BorderFactory.createEmptyBorder(8,8,8,8))
-        def settings=new javax.swing.JPanel(new java.awt.GridLayout(0,4,6,4))
+        def root=new javax.swing.JPanel(new java.awt.BorderLayout(12,12));root.setBorder(javax.swing.BorderFactory.createEmptyBorder(12,12,12,12));root.setBackground(CalciumTheme.PAGE)
         int n=data.frames as int, end=Math.min(n-1,Math.max(3,(data.baselineEnd?:20) as int))
-        double rate=(data.hz?:Double.NaN) as double
-        def add={String key,String label,Object value->settings.add(new javax.swing.JLabel(label));def field=new javax.swing.JTextField(''+value,9);fields[key]=field;settings.add(field)}
-        add('sampling_hz','Frames per second',Double.isFinite(rate)&&rate>0?rate:'')
-        add('baseline_start','Baseline first frame',data.baselineStart?:1)
-        add('baseline_end','Baseline last frame',end)
-        add('stimulus','Stimulus name','Stimulus')
-        add('stimulus_start','Stimulus start (s)',Double.isFinite(rate)&&rate>0?(end-1)/rate:'')
-        add('stimulus_end','Stimulus end (s)',Double.isFinite(rate)&&rate>0?(n-1)/rate:'')
-        add('response_baseline_seconds','Prestimulus baseline (s)',Double.isFinite(rate)&&rate>0?(end-1)/rate:'')
-        add('amplitude_floor','Minimum rise (fraction)',0.10)
-        add('noise_multiplier','Baseline SD multiplier',3)
-        add('consecutive_samples','Consecutive samples',2)
-        add('kcl_start','KCl start (s)','');add('kcl_end','KCl end (s)','')
-        def top=new javax.swing.JPanel();top.setLayout(new javax.swing.BoxLayout(top,javax.swing.BoxLayout.Y_AXIS))
-        top.add(new javax.swing.JLabel('Uses unlifted, background-corrected fluorescence. No second background subtraction.'))
-        top.add(settings);top.add(kcl);top.add(confirmed)
-        def buttons=new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT))
-        [setup,runButton,cancelButton,logButton].each{buttons.add(it)};top.add(buttons)
-        progress.setStringPainted(true);top.add(progress);top.add(status)
-        root.add(top,java.awt.BorderLayout.NORTH)
-        def tracePanel=new javax.swing.JPanel(new java.awt.BorderLayout());tracePanel.add(cells,java.awt.BorderLayout.NORTH);tracePanel.add(plot)
+        double rate=(data.hz?:Double.NaN) as double; boolean timed=Double.isFinite(rate)&&rate>0
+        def box={String key,Object value,String tip->
+            String full=value==null?'':''+value, shown=(value instanceof Double||value instanceof BigDecimal||value instanceof Float)?CalciumTheme.shortNumber(value as double):full
+            def f=new javax.swing.JTextField(shown,5);f.setFont(CalciumTheme.font());f.setToolTipText(shown!=full?tip+' (exact value: '+full+')':tip)
+            if(shown!=full)exact[key]=[shown,full]
+            fields[key]=f;f}
+        def form={->def p=new javax.swing.JPanel(new java.awt.GridBagLayout());p.setOpaque(false);p.setAlignmentX(0f);p}
+        def line={javax.swing.JPanel p,String label,java.awt.Component... parts->
+            def c=new java.awt.GridBagConstraints();c.gridy=p.getComponentCount();c.gridx=0;c.anchor=java.awt.GridBagConstraints.WEST;c.insets=new java.awt.Insets(3,0,3,8);c.weightx=1d;c.fill=java.awt.GridBagConstraints.HORIZONTAL
+            def name=CalciumTheme.label(label);p.add(name,c)
+            def holder=new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT,4,0));holder.setOpaque(false);parts.each{holder.add(it)}
+            c.gridx=1;c.weightx=0d;c.fill=java.awt.GridBagConstraints.NONE;c.anchor=java.awt.GridBagConstraints.EAST;c.insets=new java.awt.Insets(3,0,3,0);p.add(holder,c)}
+        def to={->CalciumTheme.label('to',CalciumTheme.MUTED)}
+        def timing=new CalciumCard('','Timing',false);def timingForm=form()
+        line(timingForm,'Frames per second',box('sampling_hz',timed?rate:'','From the recording; check it against the acquisition settings'))
+        line(timingForm,'Baseline frames',box('baseline_start',data.baselineStart?:1,'First frame of the resting level (frame 1 is the first)'),to(),box('baseline_end',end,'Last frame of the resting level'))
+        def stimulusName=box('stimulus','Stimulus','Name used in the tables');stimulusName.setColumns(10)
+        line(timingForm,'Stimulus name',stimulusName)
+        line(timingForm,'Stimulus window (s)',box('stimulus_start',timed?(end-1)/rate:'','Start of the window that is scored, in seconds'),to(),box('stimulus_end',timed?(n-1)/rate:'','End of the window that is scored, in seconds'))
+        line(timingForm,'Baseline before it (s)',box('response_baseline_seconds',timed?(end-1)/rate:'','Seconds just before the stimulus used as the local reference'))
+        timing.body.add(timingForm)
+        def rule=new CalciumCard('','Response rule',false);def ruleForm=form()
+        line(ruleForm,'Minimum rise (fraction)',box('amplitude_floor',0.10,'Smallest rise that counts, as a fraction of the local reference'))
+        line(ruleForm,'Baseline SD multiplier',box('noise_multiplier',3,'The rise must also exceed this many standard deviations of the local reference'))
+        line(ruleForm,'Consecutive samples',box('consecutive_samples',2,'Samples in a row that must be above the threshold'))
+        def kclForm=form();line(kclForm,'KCl window (s)',box('kcl_start','','Start of the KCl window, in seconds'),to(),box('kcl_end','','End of the KCl window, in seconds'))
+        kclForm.setVisible(false)
+        [kcl,confirmed].each{CalciumTheme.plain(it)}
+        kcl.addActionListener({kclForm.setVisible(kcl.selected);root.revalidate();root.repaint()} as java.awt.event.ActionListener)
+        rule.body.add(ruleForm);rule.body.add(kcl);rule.body.add(kclForm)
+        def row={java.awt.Component... parts->def p=new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT,6,3));p.setOpaque(false);p.setAlignmentX(0f);parts.each{p.add(it)}
+            p.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE,(int)p.getPreferredSize().height));p}
+        status.setEditable(false);status.setLineWrap(true);status.setWrapStyleWord(true);status.setOpaque(false);status.setFocusable(false);status.setBorder(null)
+        status.setFont(CalciumTheme.font());status.setForeground(CalciumTheme.INK);status.setAlignmentX(0f)
+        status.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE,(int)status.getPreferredSize().height))
+        progress.setAlignmentX(0f);progress.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE,14))
+        def side=new javax.swing.JPanel();side.setLayout(new javax.swing.BoxLayout(side,javax.swing.BoxLayout.Y_AXIS));side.setOpaque(false)
+        def heading=CalciumTheme.label('Analyze responses',CalciumTheme.INK,java.awt.Font.BOLD,5f)
+        def recording=CalciumTheme.label(''+(data.recording?:''),CalciumTheme.MUTED);recording.setToolTipText(''+(data.recording?:''))
+        recording.setMaximumSize(new java.awt.Dimension(300,24));recording.setPreferredSize(new java.awt.Dimension(300,(int)recording.getPreferredSize().height))
+        def source=CalciumTheme.label("<html><body style='width:270px'>Uses the background-corrected fluorescence as measured: no lift, no second background subtraction.</body></html>",CalciumTheme.MUTED,java.awt.Font.PLAIN,-1f)
+        [heading,recording,javax.swing.Box.createVerticalStrut(8),timing,javax.swing.Box.createVerticalStrut(8),rule,javax.swing.Box.createVerticalStrut(8),confirmed,
+         row(runButton,cancelButton),javax.swing.Box.createVerticalStrut(4),progress,javax.swing.Box.createVerticalStrut(4),status,row(setup,logButton),source,javax.swing.Box.createVerticalGlue()].each{side.add(it)}
+        root.add(side,java.awt.BorderLayout.WEST)
+        def stats=new javax.swing.JPanel(new java.awt.GridBagLayout());stats.setOpaque(false)
+        [responding,registered,excluded,unscorable].eachWithIndex{tile,i->def c=new java.awt.GridBagConstraints();c.gridx=i;c.fill=java.awt.GridBagConstraints.BOTH;c.weightx=i==0?2.2d:1d;c.insets=new java.awt.Insets(0,0,0,i<3?8:0)
+            tile.setPreferredSize(new java.awt.Dimension(i==0?220:100,(int)tile.getPreferredSize().height));stats.add(tile,c)}
+        def picker=row(CalciumTheme.label('Cell'),cells,previousCell,nextCell);cells.setFont(CalciumTheme.font())
+        previousCell.setToolTipText('Previous cell');nextCell.setToolTipText('Next cell')
+        def tracePanel=new javax.swing.JPanel(new java.awt.BorderLayout());tracePanel.setBackground(Color.white);picker.setOpaque(true);picker.setBackground(Color.white);tracePanel.add(picker,java.awt.BorderLayout.NORTH)
+        if(cellPicture.image!=null) {
+            def split=new javax.swing.JSplitPane(javax.swing.JSplitPane.VERTICAL_SPLIT,plot,cellPicture);split.setResizeWeight(0.5d);split.setBorder(null);split.setContinuousLayout(true);tracePanel.add(split)
+        } else tracePanel.add(plot)
+        tabs.setFont(CalciumTheme.font())
         tabs.addTab('Traces',tracePanel);tabs.addTab('Heatmap',new javax.swing.JScrollPane(heatmap))
-        [metrics,calls,counts].each{it.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_OFF);it.setAutoCreateRowSorter(true);it.setSelectionMode(javax.swing.ListSelectionModel.SINGLE_SELECTION)}
+        [metrics,calls,counts].each{it.setAutoResizeMode(javax.swing.JTable.AUTO_RESIZE_OFF);it.setAutoCreateRowSorter(true);it.setSelectionMode(javax.swing.ListSelectionModel.SINGLE_SELECTION)
+            it.setFont(CalciumTheme.font(java.awt.Font.PLAIN,-1f));it.setRowHeight(22);it.setGridColor(CalciumTheme.LINE);it.getTableHeader().setFont(CalciumTheme.font(java.awt.Font.BOLD,-1f))}
         tabs.addTab('Metrics + quality',new javax.swing.JScrollPane(metrics));tabs.addTab('Cell response calls',new javax.swing.JScrollPane(calls));tabs.addTab('Responder counts',new javax.swing.JScrollPane(counts))
-        root.add(tabs,java.awt.BorderLayout.CENTER)
-        def bottom=new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT));bottom.add(folderButton);bottom.add(savePlots)
-        bottom.add(new javax.swing.JLabel('Counts describe chosen cells; cell N is not animal N.'));root.add(bottom,java.awt.BorderLayout.SOUTH)
-        setContentPane(new javax.swing.JScrollPane(root));root.setMinimumSize(new java.awt.Dimension(740,650));root.setPreferredSize(new java.awt.Dimension(850,740))
-        setSize(920,800);setMinimumSize(new java.awt.Dimension(360,300))
+        def bottom=row(folderButton,savePlots,CalciumTheme.label('Counts describe chosen cells; cell N is not animal N.',CalciumTheme.MUTED,java.awt.Font.PLAIN,-1f))
+        def main=new javax.swing.JPanel(new java.awt.BorderLayout(0,10));main.setOpaque(false)
+        main.add(stats,java.awt.BorderLayout.NORTH);main.add(tabs,java.awt.BorderLayout.CENTER);main.add(bottom,java.awt.BorderLayout.SOUTH)
+        root.add(main,java.awt.BorderLayout.CENTER)
+        setContentPane(new javax.swing.JScrollPane(root));root.setMinimumSize(new java.awt.Dimension(860,600));root.setPreferredSize(new java.awt.Dimension(1040,700))
+        setSize(1100,770);setMinimumSize(new java.awt.Dimension(360,300))
         def bounds=getGraphicsConfiguration().getBounds();setSize(Math.min(getWidth(),(int)bounds.getWidth()-50),Math.min(getHeight(),(int)bounds.getHeight()-80))
-        cancelButton.enabled=false;folderButton.enabled=false;savePlots.enabled=false;logButton.enabled=false
+        cancelButton.enabled=false;folderButton.enabled=false;savePlots.enabled=false;logButton.enabled=false;previousCell.enabled=false;nextCell.enabled=false
         setup.addActionListener({beginSetup()} as java.awt.event.ActionListener)
         runButton.addActionListener({beginAnalysis()} as java.awt.event.ActionListener)
         cancelButton.addActionListener({job?.cancel();stage='Cancelling...';status.setText(stage)} as java.awt.event.ActionListener)
@@ -1293,28 +1626,30 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         folderButton.addActionListener({if(results!=null)java.awt.Desktop.getDesktop().open(results)} as java.awt.event.ActionListener)
         savePlots.addActionListener({exportPlots()} as java.awt.event.ActionListener)
         cells.addActionListener({selectCell(cells.selectedItem as String,true)} as java.awt.event.ActionListener)
+        def step={int by->int count=cells.getItemCount();if(count>0)cells.setSelectedIndex((int)(((cells.getSelectedIndex()+by)%count+count)%count))}
+        previousCell.addActionListener({step(-1)} as java.awt.event.ActionListener);nextCell.addActionListener({step(1)} as java.awt.event.ActionListener)
         heatmap.choose={int i->cells.setSelectedItem(heatmap.names[i]);tabs.selectedIndex=0}
+        cellPicture.choose={int i->if(!busy&&!closed&&cells.getItemCount()>0)cells.setSelectedItem(measurement.names[i])}
         [metrics,calls].each{table->table.selectionModel.addListSelectionListener({e->
             if(!e.valueIsAdjusting&&table.selectedRow>=0) {
                 int col=(0..<table.columnCount).find{table.getColumnName(it)=='Cell'} ?: 0
                 cells.setSelectedItem(table.getValueAt(table.selectedRow,col).toString())
             }
         } as javax.swing.event.ListSelectionListener)}
-        def canvas=(measurement.picture as ImagePlus)?.getCanvas()
-        if(canvas!=null) {
-            pictureListener=new java.awt.event.MouseAdapter(){void mouseReleased(java.awt.event.MouseEvent e){
-                if(!javax.swing.SwingUtilities.isLeftMouseButton(e)||busy)return
-                int x=canvas.offScreenX(e.x),y=canvas.offScreenY(e.y)
-                int i=measurement.rois.findIndexOf{it.contains(x,y)}
-                if(i>=0)javax.swing.SwingUtilities.invokeLater{if(!closed)cells.setSelectedItem(measurement.names[i])}
-            }}
-            canvas.addMouseListener(pictureListener)
-        }
         clock=new javax.swing.Timer(500,{e->if(busy)status.setText(stage+' · '+(long)((System.currentTimeMillis()-started)/1000)+' s elapsed')} as java.awt.event.ActionListener)
-        addWindowListener(new java.awt.event.WindowAdapter(){void windowClosed(java.awt.event.WindowEvent e){closed=true;job?.cancel();clock.stop();if(canvas!=null)canvas.removeMouseListener(pictureListener);(measurement.picture as ImagePlus)?.close()}})
+        addWindowListener(new java.awt.event.WindowAdapter(){void windowClosed(java.awt.event.WindowEvent e){closed=true;job?.cancel();clock.stop();(measurement.picture as ImagePlus)?.close()}})
+    }
+    /** Uses the free space to the left of the Step 1-3 window, so the two never cover each other. */
+    void besideControls(java.awt.Window panel) {
+        try {
+            def configuration=panel.getGraphicsConfiguration();def bounds=configuration.getBounds();def insets=java.awt.Toolkit.getDefaultToolkit().getScreenInsets(configuration)
+            int left=(int)bounds.getX()+insets.left+8,top=(int)bounds.getY()+insets.top+8,free=panel.getX()-left-8,tall=(int)bounds.getHeight()-insets.top-insets.bottom-16
+            if(free>=760)setBounds(left,top,Math.min(free,1240),Math.min(tall,820))
+        } catch(Throwable ignored) { }
     }
     Map settings() {
-        def values=fields.collectEntries{k,v->[k,v.text.trim()]}
+        // A box that still shows its rounded suggestion sends the exact value behind it; an edited box sends what was typed.
+        def values=fields.collectEntries{k,v->String typed=v.text.trim();[k,exact[k]!=null&&exact[k][0]==typed?exact[k][1]:typed]}
         if(!confirmed.selected)throw new IllegalArgumentException('Confirm the frame rate, baseline and stimulus times first.')
         def number={key->double v=CalciumCsv.number(values[key]);if(!Double.isFinite(v))throw new IllegalArgumentException('Enter a number for '+key);v}
         double hz=number('sampling_hz'),first=number('baseline_start'),last=number('baseline_end'),start=number('stimulus_start'),end=number('stimulus_end'),pre=number('response_baseline_seconds')
@@ -1331,8 +1666,9 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         busy=true;started=System.currentTimeMillis();stage=installing?'Preparing R setup':'Preparing analysis'
         setup.enabled=false;runButton.enabled=false;cancelButton.enabled=true;progress.value=0;progress.indeterminate=installing
         fields.values().each{it.enabled=false};confirmed.enabled=false;kcl.enabled=false;savePlots.enabled=false
+        status.setForeground(CalciumTheme.INK);status.setText(stage)
         job=new CalciumLocalJob(logFile:new File(runtime.home,installing?'setup.log':'analysis.log'))
-        job.progress={int p,String message->javax.swing.SwingUtilities.invokeLater{if(!closed){progress.value=p;progress.setString(p+'% · '+message);stage=message;logButton.enabled=job.logFile.isFile()}}}
+        job.progress={int p,String message->javax.swing.SwingUtilities.invokeLater{if(!closed){progress.value=p;progress.setString(p+'% · '+message);stage=p+' % · '+message;logButton.enabled=job.logFile.isFile()}}}
         clock.start()
         Thread.startDaemon('SimpleCa analysis'){
             File output=null;String error=null
@@ -1343,22 +1679,37 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
                 progress.indeterminate=false;cancelButton.enabled=false;setup.enabled=true;runButton.enabled=true
                 fields.values().each{it.enabled=true};confirmed.enabled=true;kcl.enabled=true;logButton.enabled=job.logFile.isFile()
                 savePlots.enabled=results!=null
-                if(failure){status.setText(failure);progress.setString('Not completed');return}
+                if(failure){status.setForeground(failure.startsWith('Cancelled')?CalciumTheme.INK:CalciumTheme.BAD);status.setText(failure);progress.setString('Not completed');return}
                 if(installing){progress.value=100;status.setText('R is ready. Check the settings, then Analyze responses.');return}
-                try {loadResults(answer);status.setText('Complete. Tables and settings saved in '+answer.name);progress.value=100;progress.setString('Complete')}
-                catch(Throwable t){status.setText('Could not display results: '+t.message);progress.setString('Display error; see saved outputs')}
+                try {loadResults(answer);status.setForeground(CalciumTheme.GOOD);status.setText('Complete. Tables and settings saved in '+answer.name);progress.value=100;progress.setString('Complete')}
+                catch(Throwable t){status.setForeground(CalciumTheme.BAD);status.setText('Could not display results: '+t.message);progress.setString('Display error; see saved outputs')}
             }
         }
     }
     void beginSetup(){launch(true){task->runtime.setup(task)}}
     void beginAnalysis(){
         try {Map s=settings();launch(false){task->performAnalysis.call(runtime,measurement.csv,s,measurement.folder,task)}}
-        catch(Throwable t){status.setText(t.message?:t.toString())}
+        catch(Throwable t){status.setForeground(CalciumTheme.WARN);status.setText(t.message?:t.toString())}
     }
     void table(javax.swing.JTable target,File file) {
         def rows=CalciumCsv.read(file)
         def model=new javax.swing.table.DefaultTableModel(rows.drop(1).collect{it as Object[]} as Object[][],rows[0] as Object[]){boolean isCellEditable(int r,int c){false}}
         target.setModel(model);for(int i=0;i<target.columnCount;i++)target.columnModel.getColumn(i).preferredWidth=140
+    }
+    /** The headline numbers and the per-cell calls, read from the tables the analysis just saved. Display only. */
+    void summarize(File dir) {
+        def countRows=CalciumCsv.read(new File(dir,'responder_counts.csv')),callRows=CalciumCsv.read(new File(dir,'responder_calls.csv'))
+        def column={List rows,String name->(rows[0] as List).findIndexOf{it==name}}
+        int role=column(countRows,'Role')
+        def row=countRows.drop(1).find{role<0||it[role]=='Stimulus'}
+        def cell={String name->int i=column(countRows,name);row!=null&&i>=0?''+row[i]:''}
+        def whole={String name->double v=CalciumCsv.number(cell(name));Double.isFinite(v)?''+(long)Math.round(v):'–'}
+        double percent=CalciumCsv.number(cell('Percent_responding'))
+        responding.show(Double.isFinite(percent)?String.format(Locale.US,'%.0f %%',percent):'–','responding: '+whole('Responded')+' of '+whole('Evaluable')+' evaluable cells')
+        registered.show(whole('Registered'),'cells registered');excluded.show(whole('Excluded'),'excluded');unscorable.show(whole('Unscorable'),'unscorable')
+        int callRole=column(callRows,'Role'),callCell=column(callRows,'Cell'),callStatus=column(callRows,'Status');Map<String,String> found=[:]
+        if(callCell>=0&&callStatus>=0)callRows.drop(1).each{if(callRole<0||it[callRole]=='Stimulus')found[''+it[callCell]]=''+it[callStatus]}
+        cellPicture.calls=found;cellPicture.repaint()
     }
     void loadResults(File dir) {
         results=dir;table(metrics,new File(dir,'metrics.csv'));table(calls,new File(dir,'responder_calls.csv'));table(counts,new File(dir,'responder_counts.csv'))
@@ -1373,8 +1724,9 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         heatmap.names=measurement.names as List;heatmap.time=plot.time
         heatmap.traces=heatmap.names.collect{traces[it]?:new double[plot.time.length].collect{Double.NaN} as double[]} as double[][]
         heatmap.setPreferredSize(new java.awt.Dimension(650,Math.max(260,heatmap.names.size()*12+55)));heatmap.revalidate();heatmap.repaint()
+        try {summarize(dir)} catch(Throwable ignored) { } // The tables below stay the record; a missing headline must not hide them.
         cells.removeAllItems();measurement.names.each{cells.addItem(it)}
-        folderButton.enabled=true;savePlots.enabled=true
+        folderButton.enabled=true;savePlots.enabled=true;previousCell.enabled=true;nextCell.enabled=true
     }
     void selectCell(String name,boolean highlight) {
         if(name==null)return
@@ -1383,6 +1735,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         plot.repaint()
         int index=measurement.names.findIndexOf{it==name}
         if(highlight&&index>=0&&measurement.picture!=null){Roi roi=(Roi)measurement.rois[index].clone();roi.setStrokeColor(Color.white);roi.setStrokeWidth(4);(measurement.picture as ImagePlus).setRoi(roi)}
+        cellPicture.selected=highlight?index:-1;cellPicture.reveal(cellPicture.selected);cellPicture.repaint()
     }
     void exportPlots() {
         if(results==null)return
@@ -1527,24 +1880,79 @@ class CalciumWindow extends javax.swing.JFrame {
 /** Small plot of one outline's gray value over time (background removed). */
 class CalciumTracePanel extends javax.swing.JPanel {
     double[] vals = null; String caption = "Move the mouse over a cell or a suggestion to see its trace"; int band0 = 0, band1 = 0
-    CalciumTracePanel() { setPreferredSize(new java.awt.Dimension(330, 96)); setBackground(Color.white) }
+    CalciumTracePanel() { setPreferredSize(new java.awt.Dimension(330, 118)); setBackground(Color.white); setBorder(javax.swing.BorderFactory.createLineBorder(CalciumTheme.LINE)) }
     void show(double[] v, String cap, int b0, int b1) { vals = v; caption = cap; band0 = b0; band1 = b1; repaint() }
     protected void paintComponent(java.awt.Graphics g0) {
         super.paintComponent(g0)
-        def g = (java.awt.Graphics2D) g0
-        g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
-        int W = getWidth(), H = getHeight(), L = 30, T = 16, B = 6
-        g.setFont(getFont().deriveFont(10f)); g.setColor(new Color(90, 90, 90)); g.drawString(caption, 6, 11)
-        g.setColor(new Color(225, 225, 225)); g.drawRect(L, T, W - L - 6, H - T - B)
-        if (vals == null || vals.length < 2) return
-        double lo = vals.min(), hi = vals.max(); if (hi - lo < 1) { hi = lo + 1 }
-        def X = { int f -> L + (int) ((W - L - 6) * f / (double) (vals.length - 1)) }
-        def Y = { double v -> T + (int) ((H - T - B) * (1 - (v - lo) / (hi - lo))) }
-        if (band1 > band0) { g.setColor(new Color(255, 225, 255)); g.fillRect(X(band0 - 1), T + 1, Math.max(2, X(band1 - 1) - X(band0 - 1)), H - T - B - 1) }
-        if (lo < 0 && hi > 0) { g.setColor(new Color(200, 200, 200)); g.drawLine(L, Y(0d), W - 6, Y(0d)) }
-        g.setColor(new Color(40, 40, 40))
-        for (int f = 1; f < vals.length; f++) g.drawLine(X(f - 1), Y(vals[f - 1]), X(f), Y(vals[f]))
-        g.setColor(new Color(110, 110, 110)); g.drawString(String.format(Locale.US, "%.0f", hi), 4, T + 9); g.drawString(String.format(Locale.US, "%.0f", lo), 4, H - B)
+        def g = (java.awt.Graphics2D) g0.create()
+        try {
+            CalciumTheme.smooth(g)
+            int W = getWidth(), H = getHeight(), L = 38, T = 22, B = 20, R = 10
+            g.setFont(CalciumTheme.font(java.awt.Font.PLAIN, -2f)); def fm = g.getFontMetrics()
+            g.setColor(CalciumTheme.MUTED); g.drawString(CalciumTheme.fit(caption, fm, W - 12), 8, 14)
+            if (vals == null || vals.length < 2) return
+            double lo = vals.min(), hi = vals.max(); if (hi - lo < 1) { hi = lo + 1 }
+            double pad = (hi - lo) * 0.06d; lo -= pad; hi += pad
+            def X = { int f -> L + (int) ((W - L - R) * f / (double) (vals.length - 1)) }
+            def Y = { double v -> T + (int) ((H - T - B) * (1 - (v - lo) / (hi - lo))) }
+            if (band1 > band0) { g.setColor(new Color(0xFBE6FB)); g.fillRect(X(band0 - 1), T, Math.max(2, X(band1 - 1) - X(band0 - 1)), H - T - B) }
+            def ticks = CalciumTheme.ticks(lo, hi, 3); double step = ticks.size() > 1 ? ticks[1] - ticks[0] : 1d
+            ticks.each { double v -> int y = Y(v); g.setColor(v == 0d ? new Color(0xAEB8C2) : CalciumTheme.LINE); g.drawLine(L, y, W - R, y)
+                String s = CalciumTheme.tick(v, step); g.setColor(CalciumTheme.MUTED); g.drawString(s, L - 5 - fm.stringWidth(s), y + (int) (fm.getAscent() / 2) - 1) }
+            g.setColor(new Color(0xC5CED8)); g.drawRect(L, T, W - L - R, H - T - B)
+            g.setColor(CalciumTheme.BLUE); g.setStroke(new java.awt.BasicStroke(1.4f, java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND))
+            for (int f = 1; f < vals.length; f++) g.drawLine(X(f - 1), Y(vals[f - 1]), X(f), Y(vals[f]))
+            g.setColor(CalciumTheme.MUTED); g.drawString("frame 1", L, H - 6)
+            String last = "" + vals.length; g.drawString(last, W - R - fm.stringWidth(last), H - 6)
+            if (band1 > band0) {
+                String s = "response frames"; int x = Math.max(L + fm.stringWidth("frame 1") + 8, Math.min(W - R - fm.stringWidth(last) - fm.stringWidth(s) - 8, X(band0 - 1)))
+                g.setColor(new Color(0x9C4F9C)); g.drawString(s, x, H - 6)
+            }
+        } finally { g.dispose() }
+    }
+}
+
+/** Step 1: which recording, whether to look for a response, and where the results go. */
+class CalciumStartDialog {
+    /** Returns [recording, look, folder], or null when the dialog was cancelled. */
+    static Map ask(List<String> labels, String preselected, String defaultFolder) {
+        Map answer = null
+        def show = {
+            def dialog = new javax.swing.JDialog((java.awt.Frame) null, "Calcium imaging: cells step by step", true)
+            def content = new javax.swing.JPanel(); content.setLayout(new javax.swing.BoxLayout(content, javax.swing.BoxLayout.Y_AXIS))
+            content.setBorder(javax.swing.BorderFactory.createEmptyBorder(18, 20, 14, 20)); content.setBackground(CalciumTheme.PAGE)
+            def hint = { String text -> CalciumTheme.label(text, CalciumTheme.MUTED, java.awt.Font.PLAIN, -1f) }
+            content.add(CalciumTheme.label("Step 1 of 4", CalciumTheme.MUTED, java.awt.Font.PLAIN, -1f))
+            content.add(CalciumTheme.label("Choose the recording", CalciumTheme.INK, java.awt.Font.BOLD, 5f)); content.add(javax.swing.Box.createVerticalStrut(12))
+            def recording = new CalciumCard("", "Recording", false)
+            def choice = new javax.swing.JComboBox<String>(labels as String[]); choice.setSelectedItem(preselected); choice.setFont(CalciumTheme.font()); choice.setAlignmentX(0f)
+            choice.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, (int) choice.getPreferredSize().height))
+            def look = new javax.swing.JCheckBox("Look for a response and show it in magenta", true); CalciumTheme.plain(look)
+            [choice, javax.swing.Box.createVerticalStrut(4), hint("Pick the original movie, not a processed copy."), javax.swing.Box.createVerticalStrut(8), look].each { recording.body.add(it) }
+            def results = new CalciumCard("", "Folder for the results", false)
+            def folder = new javax.swing.JTextField(defaultFolder, 30); folder.setFont(CalciumTheme.font()); def browse = CalciumTheme.button("Browse…")
+            def line = new javax.swing.JPanel(new java.awt.BorderLayout(6, 0)); line.setOpaque(false); line.setAlignmentX(0f); line.add(folder, java.awt.BorderLayout.CENTER); line.add(browse, java.awt.BorderLayout.EAST)
+            line.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, (int) line.getPreferredSize().height))
+            [line, javax.swing.Box.createVerticalStrut(4), hint("A subfolder with the recording's name is made inside this folder.")].each { results.body.add(it) }
+            def next = CalciumTheme.button("Next", true), cancel = CalciumTheme.button("Cancel")
+            def buttons = new javax.swing.JPanel(new java.awt.BorderLayout()); buttons.setOpaque(false); buttons.setAlignmentX(0f)
+            def right = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 6, 0)); right.setOpaque(false); right.add(cancel); right.add(next)
+            buttons.add(CalciumTheme.label("Version " + CalciumRelease.VERSION, CalciumTheme.FAINT, java.awt.Font.PLAIN, -1f), java.awt.BorderLayout.WEST); buttons.add(right, java.awt.BorderLayout.EAST)
+            [recording, javax.swing.Box.createVerticalStrut(10), results, javax.swing.Box.createVerticalStrut(14), buttons].each { content.add(it) }
+            browse.addActionListener({ e ->
+                ij.io.DirectoryChooser.setDefaultDirectory(folder.getText())
+                String chosen = new ij.io.DirectoryChooser("Folder for the results").getDirectory()
+                if (chosen) folder.setText(chosen)
+            } as java.awt.event.ActionListener)
+            next.addActionListener({ e -> answer = [recording: choice.getSelectedItem() as String, look: look.isSelected(), folder: folder.getText()]; dialog.dispose() } as java.awt.event.ActionListener)
+            cancel.addActionListener({ e -> dialog.dispose() } as java.awt.event.ActionListener)
+            dialog.getRootPane().setDefaultButton(next)
+            dialog.getRootPane().registerKeyboardAction({ e -> dialog.dispose() } as java.awt.event.ActionListener, javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0), javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
+            dialog.setContentPane(content); dialog.setDefaultCloseOperation(javax.swing.WindowConstants.DISPOSE_ON_CLOSE)
+            dialog.pack(); dialog.setResizable(false); dialog.setLocationRelativeTo(null); dialog.setVisible(true)
+        }
+        if (javax.swing.SwingUtilities.isEventDispatchThread()) show.call() else javax.swing.SwingUtilities.invokeAndWait(show as Runnable)
+        return answer
     }
 }
 
@@ -1567,18 +1975,11 @@ movies.eachWithIndex { im, i -> if (im == front) pre = labels[i] }
 if (pre == fromDisk && movies.size() > 0) pre = labels[0]
 def defaultDir = Prefs.get("calcium.steps.folder", System.getProperty("user.home") + File.separator + "Documents" + File.separator + "Calcium imaging results")
 
-def gd = new GenericDialog("Calcium imaging: cells step by step  (version 2026.11.19.8)")
-gd.addMessage("STEP 1 of 4:  choose the recording\n \nPick the ORIGINAL movie, not a processed copy.")
-gd.addChoice("Recording:", labels as String[], pre)
-gd.addCheckbox("Look for a response and show it in magenta", true)
-gd.addDirectoryField("Folder for the results:", defaultDir, 40)
-gd.addMessage("A subfolder with the recording's name is made inside that folder.\nNext: the cells are made visible and you choose them (step 2), then they are measured (step 3).")
-gd.setOKLabel("Next")
-gd.showDialog()
-if (gd.wasCanceled()) return
-def picked = gd.getNextChoice()
-boolean look = gd.getNextBoolean()
-def outRoot = gd.getNextString()
+def start = CalciumStartDialog.ask(labels, pre, defaultDir)
+if (start == null) return
+def picked = start.recording
+boolean look = start.look
+def outRoot = start.folder
 if (outRoot == null || outRoot.trim().isEmpty()) outRoot = defaultDir
 Prefs.set("calcium.steps.folder", outRoot)
 
@@ -1607,83 +2008,107 @@ def GRADE_TEXT = ["responds on its own", "likely a cell", "unsure", "very bright
 def GRADE_SHARE = ["about 8 in 10 such outlines were real cells in tests", "about 8 in 10 such outlines were real cells in tests", "about 4 in 10 such outlines were real cells in tests", "about 1 in 10 such outlines were real cells in tests"]
 def CYAN = new Color(0, 220, 255), GREY = new Color(205, 205, 205), ORANGE = new Color(255, 150, 0), BLUE = new Color(40, 150, 255)
 def DASH = new java.awt.BasicStroke(1f, java.awt.BasicStroke.CAP_BUTT, java.awt.BasicStroke.JOIN_MITER, 10f, [4f, 4f] as float[], 0f)
-def small = new java.awt.Font("SansSerif", java.awt.Font.PLAIN, 12), bold = new java.awt.Font("SansSerif", java.awt.Font.BOLD, 13)
+def small = CalciumTheme.font(), bold = CalciumTheme.font(java.awt.Font.BOLD, 1f)
+def MUTED = CalciumTheme.hex(CalciumTheme.MUTED)
 def lineIcon = { Color c, int width, boolean dashed, boolean filled ->
     def bi = new java.awt.image.BufferedImage(30, 14, java.awt.image.BufferedImage.TYPE_INT_ARGB); def g = bi.createGraphics()
-    g.setColor(new Color(40, 40, 40)); g.fillRect(0, 0, 30, 14); g.setColor(c)
-    if (filled) g.fillRect(4, 3, 22, 8)
+    g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
+    g.setColor(new Color(24, 30, 36)); g.fillRoundRect(0, 0, 30, 14, 6, 6); g.setColor(c)
+    if (filled) g.fillRoundRect(5, 3, 20, 8, 3, 3)
     else { g.setStroke(dashed ? DASH : new java.awt.BasicStroke((float) width)); g.drawOval(5, 2, 20, 10) }
     g.dispose(); new javax.swing.ImageIcon(bi)
 }
-def legendRow = { javax.swing.Icon ic, String s -> def l = new javax.swing.JLabel(s, ic, javax.swing.SwingConstants.LEFT); l.setFont(small); l.setIconTextGap(8); l.setAlignmentX(0f); l }
-def section = { String title ->
-    def p = new javax.swing.JPanel(); p.setLayout(new javax.swing.BoxLayout(p, javax.swing.BoxLayout.Y_AXIS)); p.setAlignmentX(0f)
-    def tb = javax.swing.BorderFactory.createTitledBorder(javax.swing.BorderFactory.createLineBorder(new Color(170, 170, 170)), title); tb.setTitleFont(bold)
-    p.setBorder(javax.swing.BorderFactory.createCompoundBorder(tb, javax.swing.BorderFactory.createEmptyBorder(2, 6, 6, 6))); p
-}
-def row = { java.awt.Component... cs -> def p = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 4, 2)); cs.each { p.add(it) }; p.setAlignmentX(0f); p }
-def note = { String s -> def l = new javax.swing.JLabel("<html><body style='width:300px'>" + s + "</body></html>"); l.setFont(small); l.setAlignmentX(0f); l }
-def btn = { String s -> def b = new javax.swing.JButton(s); b.setFont(small); b.setMargin(new java.awt.Insets(2, 8, 2, 8)); b }
-def box = { String s, boolean on -> def b = new javax.swing.JCheckBox(s, on); b.setFont(small); b.setAlignmentX(0f); b }
+def legendRow = { javax.swing.Icon ic, String s -> def l = new javax.swing.JLabel(s, ic, javax.swing.SwingConstants.LEFT); l.setFont(CalciumTheme.font(java.awt.Font.PLAIN, -1f)); l.setForeground(CalciumTheme.MUTED); l.setIconTextGap(6); l.setAlignmentX(0f); l }
+def section = { String number, String title, boolean collapsible = true -> new CalciumCard(number, title, collapsible) }
+def row = { java.awt.Component... cs -> def p = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 3)); p.setOpaque(false); cs.each { p.add(it) }; p.setAlignmentX(0f); p }
+def note = { String s -> def l = new javax.swing.JLabel("<html><body style='width:300px'>" + s + "</body></html>"); l.setFont(small); l.setForeground(CalciumTheme.INK); l.setAlignmentX(0f); l }
+def hint = { String s -> def l = note(s); l.setForeground(CalciumTheme.MUTED); l }
+def btn = { String s -> CalciumTheme.button(s) }
+def box = { String s, boolean on -> def b = new javax.swing.JCheckBox(s, on); b.setFont(small); b.setOpaque(false); b.setAlignmentX(0f); b }
 
 def frame = new CalciumWindow("Calcium imaging: cells step by step")
 frame.setDefaultCloseOperation(javax.swing.WindowConstants.DISPOSE_ON_CLOSE)
-def root = new CalciumScrollPanel(); root.setBorder(javax.swing.BorderFactory.createEmptyBorder(8, 8, 8, 8))
+def root = new CalciumScrollPanel(); root.setBorder(javax.swing.BorderFactory.createEmptyBorder(10, 10, 10, 10)); root.setBackground(CalciumTheme.PAGE); root.setOpaque(true)
 
-def s1 = section("Step 1   Recording   ✓")
-s1.add(note("<b>" + imp.getTitle() + "</b><br>" + steps.n + " frames. " + (steps.found ? "Response found: brightness rises near frame " + steps.onset + " (shown in magenta)." : (look ? "No response found: the picture has no magenta. Every cell is still shown in green." : "Response not looked for."))))
+// One card per step. Step 1 is already done; of steps 2 to 4 only one is open at a time, so the window fits the screen.
+def s1 = section("1", "Recording", false); s1.setDone(true)
+def recordingNote = note("<b>" + imp.getTitle() + "</b><br><font color='" + MUTED + "'>" + steps.n + " frames · " + (steps.found ? "response near frame " + steps.onset + " (magenta)" : (look ? "no response found (no magenta)" : "response not looked for")) + "</font>")
+recordingNote.setToolTipText(steps.found ? "Brightness rises near frame " + steps.onset + "; the response is shown in magenta." : (look ? "No response was found, so the picture has no magenta. Every cell is still shown in green." : "The response was not looked for."))
+s1.body.add(recordingNote)
 
-def s2 = section("Step 2   Choose the cells")
-def suggestBtn = btn("Suggest cells automatically")
-def acceptAllBtn = btn("Accept all likely ones"); acceptAllBtn.setEnabled(false)
-def ovalBtn = btn("Oval"), freeBtn = btn("Freehand"), addBtn = btn("Add drawn outline  (t)")
-def removeBtn = btn("Remove selected cell"), undoBtn = btn("Undo last change"); undoBtn.setEnabled(false)
+def s2 = section("2", "Choose the cells")
+def suggestBtn = CalciumTheme.button("Suggest cells automatically", true)
+suggestBtn.setToolTipText("Cellpose outlines the cells; then click inside each outline that is a real cell")
+def acceptAllBtn = btn("Accept likely"); acceptAllBtn.setEnabled(false)
+acceptAllBtn.setToolTipText("Accept every suggestion graded 'responds' or 'likely a cell'")
+def ovalBtn = btn("Oval"), freeBtn = btn("Freehand"), addBtn = btn("Add outline  (t)")
+addBtn.setToolTipText("Draw around a cell on the picture, then add it here or press t")
+def removeBtn = btn("Remove selected"), undoBtn = btn("Undo"); undoBtn.setEnabled(false)
+removeBtn.setToolTipText("Click a white outline to select it, then remove it"); undoBtn.setToolTipText("Undo the last change to your cells")
 def removeMode = box("Click cells to remove", false)
-def editHint = note("Click a white outline to select it, then Remove. Or turn on <b>Click cells to remove</b>.")
-def showSug = box("Show suggestions", true), showBg = box("Show background (blue)", true)
-def edgeBox = box("Leave out cells at the picture's edge (within " + CalciumSteps.EDGE_MARGIN + " px)", true)
+def editHint = hint("")   // messages about removing and undoing appear here; the how-to is on the buttons' tooltips
+removeMode.setToolTipText("While this is on, clicking a cell on the picture removes it")
+def showSug = box("Show suggestions", true), showBg = box("Show background", true)
+showBg.setToolTipText("The pixels used as each cell's background, in blue")
+def edgeBox = box("Leave out cells within " + CalciumSteps.EDGE_MARGIN + " px of the edge", true)
 edgeBox.setToolTipText("<html>At the edge a cell's background can only be taken from the inner, better-lit side,<br>so the cell comes out too dim. Untick to suggest, accept and measure edge cells like the others.</html>")
-def status = new javax.swing.JLabel("Cells chosen: 0"); status.setFont(bold); status.setAlignmentX(0f)
+def status = new javax.swing.JLabel("<html><body style='width:300px'><b>Cells chosen: 0</b></body></html>"); status.setFont(small); status.setForeground(CalciumTheme.INK); status.setAlignmentX(0f)
 def info = note("&nbsp;")
 def trace = new CalciumTracePanel(); trace.setAlignmentX(0f); trace.setFont(small)
-s2.add(note("<b>Click:</b> press the button, then click inside each outline that is a real cell."))
-def cpLabel = note("&nbsp;")
+def cpLabel = hint("&nbsp;")
 def setupBtn = btn("Set up Cellpose (one time)"); def setupRow = row(setupBtn)
 def detectionProgress = new CalciumOutlineProgress()
-s2.add(row(suggestBtn)); s2.add(detectionProgress); s2.add(cpLabel); s2.add(setupRow); s2.add(row(acceptAllBtn))
-s2.add(note("<b>Or draw:</b> pick a tool, draw around a cell, then add it."))
-s2.add(row(ovalBtn, freeBtn, addBtn))
-def legend = new javax.swing.JPanel(new java.awt.GridLayout(0, 2, 6, 1)); legend.setAlignmentX(0f)
+def continueBtn = btn("Continue to measure  ›")
+s2.body.add(row(suggestBtn, acceptAllBtn)); s2.body.add(detectionProgress); s2.body.add(cpLabel); s2.body.add(setupRow)
+s2.body.add(row(CalciumTheme.label("Or draw:", CalciumTheme.MUTED), ovalBtn, freeBtn, addBtn))
+s2.body.add(row(showSug, showBg)); s2.body.add(row(edgeBox))
+s2.body.add(javax.swing.Box.createVerticalStrut(4)); s2.body.add(status)
+s2.body.add(row(removeBtn, undoBtn, removeMode)); s2.body.add(editHint)
+s2.body.add(info); s2.body.add(trace); s2.body.add(javax.swing.Box.createVerticalStrut(6))
+def legend = new javax.swing.JPanel(new java.awt.GridLayout(0, 3, 6, 2)); legend.setAlignmentX(0f); legend.setOpaque(false)
 def acceptedIcon = new java.awt.image.BufferedImage(30, 14, java.awt.image.BufferedImage.TYPE_INT_ARGB)
 def acceptedGraphics = acceptedIcon.createGraphics()
-acceptedGraphics.setColor(new Color(40, 40, 40)); acceptedGraphics.fillRect(0, 0, 30, 14)
-acceptedGraphics.setColor(Color.black); acceptedGraphics.setStroke(new java.awt.BasicStroke(6f)); acceptedGraphics.drawOval(5, 3, 20, 8)
-acceptedGraphics.setColor(Color.white); acceptedGraphics.setStroke(new java.awt.BasicStroke(2.5f)); acceptedGraphics.drawOval(5, 3, 20, 8); acceptedGraphics.dispose()
-legend.add(legendRow(new javax.swing.ImageIcon(acceptedIcon), "your cells: white + black border"))
-legend.add(legendRow(lineIcon(BLUE, 1, false, true), "background used"))
-legend.add(legendRow(lineIcon(CYAN, 2, false, false), "suggested: responds"))
-legend.add(legendRow(lineIcon(CYAN, 1, false, false), "suggested: likely a cell"))
-legend.add(legendRow(lineIcon(GREY, 1, true, false), "suggested: unsure"))
-legend.add(legendRow(lineIcon(ORANGE, 1, false, false), "probably precipitate"))
-s2.add(legend)
-s2.add(row(showSug, showBg)); s2.add(row(edgeBox))
-s2.add(status); s2.add(row(removeBtn, undoBtn)); s2.add(row(removeMode)); s2.add(editHint)
-s2.add(info); s2.add(trace)
+acceptedGraphics.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
+acceptedGraphics.setColor(new Color(24, 30, 36)); acceptedGraphics.fillRoundRect(0, 0, 30, 14, 6, 6)
+acceptedGraphics.setColor(Color.black); acceptedGraphics.setStroke(new java.awt.BasicStroke(5f)); acceptedGraphics.drawOval(6, 3, 18, 8)
+acceptedGraphics.setColor(Color.white); acceptedGraphics.setStroke(new java.awt.BasicStroke(2f)); acceptedGraphics.drawOval(6, 3, 18, 8); acceptedGraphics.dispose()
+legend.add(legendRow(new javax.swing.ImageIcon(acceptedIcon), "your cells"))
+legend.add(legendRow(lineIcon(CYAN, 2, false, false), "responds"))
+legend.add(legendRow(lineIcon(GREY, 1, true, false), "unsure"))
+legend.add(legendRow(lineIcon(BLUE, 1, false, true), "background"))
+legend.add(legendRow(lineIcon(CYAN, 1, false, false), "likely a cell"))
+legend.add(legendRow(lineIcon(ORANGE, 1, false, false), "precipitate?"))
+legend.setToolTipText("White: your cells. Blue: the background used. The other four are suggestions, by grade.")
+legend.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, (int) legend.getPreferredSize().height))
+s2.body.add(legend); s2.body.add(row(continueBtn))
 
-def s3 = section("Step 3   Measure and save")
-def makeMovie = box("Also open a background-corrected copy of the movie", true)
-def saveMovie = box("... and save that copy as a TIFF (about 1.7 GB for 300 frames)", false)
-def go = new javax.swing.JButton("Measure and save"); go.setFont(bold)
+def s3 = section("3", "Measure and save")
+def makeMovie = box("Also open a background-corrected movie", true)
+def saveMovie = box("Save that movie as a TIFF too (large)", false)
+saveMovie.setToolTipText("About 1.7 GB for 300 frames of 1388 x 1040")
+def go = CalciumTheme.button("Measure and save", true)
 def result = note("Saves the tables in: ..." + File.separator + outDir.getParentFile().getName() + File.separator + outDir.getName()); result.setToolTipText(outDir.getPath())
-def openBtn = btn("Open the results folder"); openBtn.setVisible(false)
+def openBtn = btn("Open results folder"); openBtn.setVisible(false)
 def closeBtn = btn("Close")
-s3.add(makeMovie); s3.add(saveMovie); s3.add(row(go, openBtn, closeBtn)); s3.add(result)
-def s4 = section("Step 4   Analyze responses with SimpleCa²⁺")
-def analyzeBtn = btn("Analyze responses in Fiji"); analyzeBtn.setEnabled(false)
-def analysisNote = note("Measure and save first. Then review traces, metrics and responder counts here. One-time engine setup needs internet.")
+closeBtn.setToolTipText("Close this window; the pictures and saved results stay")
+s3.body.add(makeMovie); s3.body.add(saveMovie); s3.body.add(row(go, openBtn)); s3.body.add(result)
+def s4 = section("4", "Analyze responses")
+def analyzeBtn = CalciumTheme.button("Analyze responses in Fiji", true); analyzeBtn.setEnabled(false)
+def analysisNote = hint("Measure and save first. Then review traces, metrics and responder counts here. One-time engine setup needs internet.")
 Map analysisMeasurement = null
-s4.add(row(analyzeBtn)); s4.add(analysisNote)
-[s1, s2, s3, s4].each { root.add(it); root.add(javax.swing.Box.createVerticalStrut(6)) }
+s4.body.add(row(analyzeBtn)); s4.body.add(analysisNote)
+def stepCards = [s2, s3, s4]
+def openStep = { CalciumCard card -> stepCards.each { it.setExpanded(it.is(card)) }; frame.refreshContents() }
+stepCards.each { it.onToggle = { CalciumCard card -> if (card.expanded) { card.setExpanded(false); frame.refreshContents() } else openStep(card) } }
+s3.setExpanded(false); s4.setExpanded(false); s3.setSummary("after choosing cells"); s4.setSummary("SimpleCa²⁺, after measuring")
+continueBtn.addActionListener({ e -> openStep(s3) } as java.awt.event.ActionListener)
+// Version and update controls stay out of the way until asked for (or until an update is found).
+def updatesCard = new CalciumCard("", "Updates", false); updatesCard.setVisible(false); updatesCard.setSummary("Version " + CalciumRelease.VERSION)
+def updatesBtn = btn("Updates"); updatesBtn.setToolTipText("Check for a newer version of this plugin")
+updatesBtn.addActionListener({ e -> updatesCard.setVisible(!updatesCard.isVisible()); frame.refreshContents() } as java.awt.event.ActionListener)
+[s1, s2, s3, s4].each { root.add(it); root.add(javax.swing.Box.createVerticalStrut(8)) }
+root.add(row(closeBtn, updatesBtn, CalciumTheme.label("Version " + CalciumRelease.VERSION, CalciumTheme.FAINT, java.awt.Font.PLAIN, -1f)))
+root.add(javax.swing.Box.createVerticalStrut(4)); root.add(updatesCard)
 def updateBtn = btn("Check for updates")
 def installBtn = btn("Install update"); installBtn.setVisible(false)
 def releaseBtn = btn("Release notes"); releaseBtn.setVisible(false)
@@ -1699,8 +2124,7 @@ def installRelease = { Map found, Closure progress ->
     String directory = IJ.getDirectory("imagej")
     new CalciumInstaller(applicationDirectory: directory ? new File(directory) : null).install(found, progress)
 }
-root.add(row(new javax.swing.JLabel("Version " + CalciumRelease.VERSION), updateBtn))
-root.add(row(installBtn, releaseBtn)); root.add(autoUpdateBox); root.add(updateNote); root.add(installBar)
+updatesCard.body.add(row(updateBtn, installBtn, releaseBtn)); updatesCard.body.add(autoUpdateBox); updatesCard.body.add(updateNote); updatesCard.body.add(installBar)
 def releasePage = CalciumRelease.REPOSITORY + "/releases/latest"
 def openRelease = { ->
     try { java.awt.Desktop.getDesktop().browse(new java.net.URI(releasePage)) }
@@ -1752,6 +2176,8 @@ def checkUpdates = { boolean automatic ->
         else {
             releasePage = found.page; selectedRelease = found
             installBtn.setVisible(found.newer && found.installable)
+            updatesCard.setSummary(found.newer ? "Update available: " + found.version : "Up to date · " + CalciumRelease.VERSION)
+            if (found.newer) updatesCard.setVisible(true)
             message = found.newer ? "<b>Update available: " + found.version + ".</b> " + (found.installable ? "Click Install update; downloading, backup and replacement are handled for you." : "This release requires installation from its download page.") : "You are up to date (installed " + CalciumRelease.VERSION + "; latest release " + found.version + ")."
         }
         releaseBtn.setVisible(true)
@@ -1788,13 +2214,14 @@ frame.addWindowListener(new java.awt.event.WindowAdapter() {
     void windowClosing(java.awt.event.WindowEvent e) { updateCheck.close() }
 })
 def scroll = new javax.swing.JScrollPane(root, javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED)
-scroll.setBorder(javax.swing.BorderFactory.createEmptyBorder())
+scroll.setBorder(javax.swing.BorderFactory.createEmptyBorder()); scroll.getViewport().setBackground(CalciumTheme.PAGE)
 scroll.setWheelScrollingEnabled(true)
 scroll.getVerticalScrollBar().setUnitIncrement(24)
 scroll.getHorizontalScrollBar().setUnitIncrement(24)
 frame.getContentPane().add(scroll)
 frame.pack(); frame.setAlwaysOnTop(true)
 if (!testGui) { def scr = java.awt.Toolkit.getDefaultToolkit().getScreenSize(); frame.setLocation((int) Math.max(0, scr.width - frame.getWidth() - 12), 40) }
+if (!testGui) CalciumTheme.beside(steps.colourPic, frame)   // the colour picture takes the free space on the left; this window stays on the right
 
 // ---- what the window does ----
 def lastKey = ""; int[][] lastBg = new int[0][]
@@ -1802,7 +2229,7 @@ def proposals = []        // automatic outlines: [roi, grade (0 responds, 1 like
 def cellEdits = new CalciumCellEdits(manager: rm, picture: steps.colourPic)
 def measuredKey = { Roi[] rois -> rois.collect { CalciumInstaller.digest(RoiEncoder.saveAsByteArray(it)) }.join(':') }
 analyzeBtn.addActionListener({ e ->
-    if (analysisMeasurement != null) { def window = new CalciumAnalysisWindow(analysisMeasurement); window.setVisible(true) }
+    if (analysisMeasurement != null) { def window = new CalciumAnalysisWindow(analysisMeasurement); window.besideControls(frame); window.setVisible(true) }
 } as java.awt.event.ActionListener)
 def cellRois = { ->
     def all = rm.getRoisAsArray() as List
@@ -1836,6 +2263,7 @@ def refresh = { boolean force ->
         if (analysisMeasurement != null) {
             boolean current = measuredKey(cells) == analysisMeasurement.key
             analyzeBtn.setEnabled(current && go.isEnabled())
+            s3.setDone(current); s4.setSummary(current ? "ready" : "measure again first")
             analysisNote.setText("<html><body style='width:300px'>" + (current ? "Ready: analyze the last measurement in Fiji." : "Cell outlines changed. Measure and save again before analysis.") + "</body></html>")
         }
         steps.alsoAvoid = edgeCells
@@ -1862,8 +2290,9 @@ def refresh = { boolean force ->
         steps.colourPic.setOverlay(ov)
         int nLikely = left.count { it.grade <= 1 } as int
         int edgeSug = edgeBox.isSelected() ? (proposals.count { it.edge } as int) : 0
-        status.setText("Cells chosen: " + cells.length + (edgeCells.length > 0 ? "   (+" + edgeCells.length + " at the edge, left out)" : "") + (none > 0 ? "   (" + none + " without background)" : "") + (proposals.size() > 0 ? "      suggestions left: " + nLikely + " likely, " + left.count { it.grade == 2 } + " unsure, " + left.count { it.grade == 3 } + " bright" + (edgeSug > 0 ? "; " + edgeSug + " at the edge not shown" : "") : ""))
-        acceptAllBtn.setText("Accept all likely ones (" + nLikely + ")"); acceptAllBtn.setEnabled(nLikely > 0)
+        status.setText("<html><body style='width:300px'><b>Cells chosen: " + cells.length + "</b>" + (edgeCells.length > 0 ? " &nbsp;(+" + edgeCells.length + " at the edge, left out)" : "") + (none > 0 ? " &nbsp;(" + none + " without background)" : "") + (proposals.size() > 0 ? "<br><font color='" + MUTED + "'>Suggestions left: " + nLikely + " likely, " + left.count { it.grade == 2 } + " unsure, " + left.count { it.grade == 3 } + " bright" + (edgeSug > 0 ? "; " + edgeSug + " at the edge not shown" : "") + "</font>" : "") + "</body></html>")
+        s2.setSummary(cells.length + (cells.length == 1 ? " cell chosen" : " cells chosen")); s2.setDone(cells.length > 0 && !s2.expanded)
+        acceptAllBtn.setText("Accept likely (" + nLikely + ")"); acceptAllBtn.setEnabled(nLikely > 0)
         undoBtn.setEnabled(!cellEdits.history.isEmpty())
     } catch (Throwable t) { status.setText("" + t) }
 }
@@ -1971,7 +2400,8 @@ def SETUP_TEXT = "Cellpose is the free program that suggests the cell outlines. 
 def cellposeBusy = false
 def showCellposeState = { String busyText ->
     def found = findCellposePython() != null
-    cpLabel.setText("<html><body style='width:300px'><font color='#666666'>" + (busyText != null ? busyText : found ? "Cellpose: found on this computer." : "Cellpose (the program that suggests outlines) is not installed on this computer yet.") + "</font></body></html>")
+    cpLabel.setText("<html><body style='width:300px'><font color='" + MUTED + "'>" + (busyText != null ? busyText : found ? "Cellpose: found on this computer." : "Cellpose (the program that suggests outlines) is not installed on this computer yet.") + "</font></body></html>")
+    cpLabel.setVisible(!found || busyText != null)   // nothing to say once Cellpose is installed and idle
     setupRow.setVisible(!found || busyText != null); setupBtn.setEnabled(busyText == null)
 }
 // asks first (unless already asked), then installs; returns "" when Cellpose is ready
@@ -2241,7 +2671,7 @@ go.addActionListener({ e ->
                 (edgeCells.length > 0 ? edgeCells.length + " outlines at the picture's edge were left out (dashed).<br>" : "") +
                 (steps.lastDim > 0 ? "<font color='#b05000'><b>" + steps.lastDim + " cells are not brighter than their background at rest.</b> Review their quality status in Step 4.</font><br>" : "") +
                 "<b>Continue to Step 4 to analyze responses inside Fiji.</b> It uses unlifted fluorescence and reports excluded and unscorable cells explicitly.<br>Saved in: ..." + File.separator + outDir.getParentFile().getName() + File.separator + outDir.getName()
-            javax.swing.SwingUtilities.invokeLater { analysisMeasurement = measured; analyzeBtn.setEnabled(true); result.setText("<html><body style='width:300px'>" + html + "</body></html>"); go.setText("Measure and save again"); go.setEnabled(true); refresh(true); openBtn.setVisible(true); frame.refreshContents() }
+            javax.swing.SwingUtilities.invokeLater { analysisMeasurement = measured; analyzeBtn.setEnabled(true); result.setText("<html><body style='width:300px'>" + html + "</body></html>"); go.setText("Measure again"); go.setEnabled(true); s3.setSummary(cells.length + " cells measured"); s4.setExpanded(true); refresh(true); openBtn.setVisible(true); frame.refreshContents() }
         } catch (Throwable t) { go.setEnabled(true); go.setText("Measure and save"); result.setText("<html><body style='width:300px'>Could not measure: " + t + "</body></html>"); IJ.log("Calcium imaging plugin: " + t) }
     }
 } as java.awt.event.ActionListener)
