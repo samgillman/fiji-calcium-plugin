@@ -345,7 +345,7 @@ is present. Suggest cells again starts a fresh run. Failed or cancelled runs nev
 results. Edge-cell controls and the faster CPU settings from this version are preserved.
 
 
-GITHUB RELEASES AND UPDATES (2026.11.19.6)
+GITHUB RELEASES AND UPDATES
 Project: https://github.com/samgillman/fiji-calcium-plugin
 Installer: https://github.com/samgillman/fiji-calcium-plugin/releases/latest/download/Install_Calcium_Plugin.groovy
 
@@ -354,10 +354,10 @@ Download Install_Calcium_Plugin.groovy, open it in Fiji's Script Editor, and pre
 verifies and installs the plugin in this Fiji installation. No manual copying is needed. Save your
 work and restart Fiji. The ZIP remains available for manual installation.
 
-For future updates, use Install update in the startup prompt or at the bottom of the plugin.
+For future updates, use Check for updates and Install update on Step 1, Choose the recording.
 It downloads the release, verifies its checksum and version, backs up the old script and safely
 replaces it. Save your work and restart Fiji to load the new version. Your current session stays
-open. Later dismisses the prompt. Startup checks can be disabled with the checkbox; manual checks
+open. Later dismisses the offer. Startup checks can be disabled with the checkbox; manual checks
 remain available. No recordings or results are sent.
 
 Previous files are saved in calcium-plugin-backups inside Fiji's folder, with .groovy.bak names.
