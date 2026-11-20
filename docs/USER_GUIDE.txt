@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.1.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.2.
 
 NEW: STEP 4 — SIMPLECA ANALYSIS INSIDE FIJI
 After Measure and save, open Analyze responses. On first use, click Set up analysis engine
@@ -53,6 +53,8 @@ HOW TO USE IT
   1. Empty the ROI Manager if it holds outlines from other work (the plugin uses whatever is in it).
   2. Choose  Plugins > Calcium Imaging > Calcium Cells Step By Step.
   3. In the first window pick the recording: one that is open in Fiji, or "Choose a file from disk...".
+     For a file from disk, the file chooser opens as soon as you pick that entry (or press
+     "Choose file…"), and the file's name is shown under the list.
      Pick the original recording, not a processed copy. Choose a folder for the results. Press Next.
   4. The colour picture opens on the left, and a window with one card per step stays on top at the
      right. Step 2 is open; click the title of another step to open it (the open one closes).

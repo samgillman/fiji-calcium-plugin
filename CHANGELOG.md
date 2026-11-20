@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.11.20.2
+
+- Step 1: choosing **Choose a file from disk...** now opens the file chooser straight away, and a **Choose file…** button with the chosen file's name sits under the list. Before, the chooser only appeared after **Next**, so picking that entry looked as if nothing happened.
+- **Next** still asks for the file if none was chosen, and stays on Step 1 if that is cancelled instead of closing the plugin.
+
 ## 2026.11.20.1
 
 - Redesign every plugin window to match SimpleCa²⁺: the computer's own interface font instead of a fixed one, the SimpleCa²⁺ colours, white cards, and one clearly marked main button per step. Measurements, thresholds and saved tables are unchanged.

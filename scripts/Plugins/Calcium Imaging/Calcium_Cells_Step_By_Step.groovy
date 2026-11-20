@@ -1,4 +1,4 @@
-// Calcium imaging: cells step by step                                                    version 2026.11.20.1
+// Calcium imaging: cells step by step                                                    version 2026.11.20.2
 // One plugin for the whole job on one recording:
 //   1. choose the recording (already open in Fiji, or a file) and a folder for the results
 //   2. the plugin makes the cells visible: all-frames picture, response (found automatically, if there is one), and a
@@ -86,7 +86,7 @@ class CalciumSteps {
     /** Steps 1-2: pictures. The movie is only read. */
     void prepare(ImagePlus imp, boolean lookForResponse) {
         movie = imp; n = imp.getStackSize(); w = imp.getWidth(); h = imp.getHeight()
-        say("Calcium imaging plugin, version 2026.11.20.1")
+        say("Calcium imaging plugin, version 2026.11.20.2")
         say("Recording: " + imp.getTitle() + " (" + n + " frames, " + w + " x " + h + ", " + imp.getBitDepth() + "-bit)")
         ImagePlus sum = ZProjector.run(imp, "sum")                                   // Image > Stacks > Z Project, Sum Slices
         FloatProcessor avg = (FloatProcessor) sum.getProcessor().convertToFloat()
@@ -468,7 +468,7 @@ class CalciumSteps {
 
 /** Release lookup sends no recording data. Installation requires an explicit button click. */
 class CalciumRelease {
-    static final String VERSION = "2026.11.20.1"
+    static final String VERSION = "2026.11.20.2"
     static final String REPOSITORY = "https://github.com/samgillman/fiji-calcium-plugin"
     static final String API = "https://api.github.com/repos/samgillman/fiji-calcium-plugin/releases/latest"
     static final String ASSET = "Calcium_Imaging_Fiji_Plugin.zip"
@@ -1914,9 +1914,14 @@ class CalciumTracePanel extends javax.swing.JPanel {
 
 /** Step 1: which recording, whether to look for a response, and where the results go. */
 class CalciumStartDialog {
-    /** Returns [recording, look, folder], or null when the dialog was cancelled. */
-    static Map ask(List<String> labels, String preselected, String defaultFolder) {
+    /** The file and folder choosers; tests replace them so no native dialog opens. Each returns a path, or null when cancelled. */
+    static Closure chooseFile = { -> def od = new ij.io.OpenDialog("Choose the recording (.zvi, .czi, .tif ...)"); od.getFileName() == null ? null : od.getPath() }
+    static Closure chooseFolder = { String from -> ij.io.DirectoryChooser.setDefaultDirectory(from); new ij.io.DirectoryChooser("Folder for the results").getDirectory() }
+    /** Returns [recording, look, folder, file], or null when the dialog was cancelled. "file" is the path chosen for the
+     *  from-disk entry (the last label unless fromDisk names another); it is null for a recording that is already open. */
+    static Map ask(List<String> labels, String preselected, String defaultFolder, String fromDisk = null) {
         Map answer = null
+        String diskLabel = fromDisk ?: (labels ? labels[-1] : null)
         def show = {
             def dialog = new javax.swing.JDialog((java.awt.Frame) null, "Calcium imaging: cells step by step", true)
             def content = new javax.swing.JPanel(); content.setLayout(new javax.swing.BoxLayout(content, javax.swing.BoxLayout.Y_AXIS))
@@ -1928,7 +1933,28 @@ class CalciumStartDialog {
             def choice = new javax.swing.JComboBox<String>(labels as String[]); choice.setSelectedItem(preselected); choice.setFont(CalciumTheme.font()); choice.setAlignmentX(0f)
             choice.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, (int) choice.getPreferredSize().height))
             def look = new javax.swing.JCheckBox("Look for a response and show it in magenta", true); CalciumTheme.plain(look)
-            [choice, javax.swing.Box.createVerticalStrut(4), hint("Pick the original movie, not a processed copy."), javax.swing.Box.createVerticalStrut(8), look].each { recording.body.add(it) }
+            // Choosing "from disk" asks for the file here, straight away, and shows its name; Next is not needed to get the file chooser.
+            String file = null
+            def fileButton = CalciumTheme.button("Choose file…"), fileName = CalciumTheme.label("No file chosen yet", CalciumTheme.MUTED)
+            def fileRow = new javax.swing.JPanel(new java.awt.BorderLayout(8, 0)); fileRow.setOpaque(false); fileRow.setAlignmentX(0f)
+            fileRow.add(fileButton, java.awt.BorderLayout.WEST); fileRow.add(fileName, java.awt.BorderLayout.CENTER)
+            fileRow.setBorder(javax.swing.BorderFactory.createEmptyBorder(6, 0, 0, 0))
+            fileName.setPreferredSize(new java.awt.Dimension(200, (int) fileName.getPreferredSize().height))
+            fileRow.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, (int) fileRow.getPreferredSize().height))
+            boolean choosing = false
+            def pickFile = { ->
+                if (choosing) return
+                choosing = true
+                try {
+                    String chosen = chooseFile.call()
+                    if (chosen) { file = chosen; fileName.setText(new File(chosen).getName()); fileName.setForeground(CalciumTheme.INK); fileName.setToolTipText(chosen); fileButton.setText("Change file…") }
+                } finally { choosing = false }
+            }
+            def showFileRow = { -> fileRow.setVisible(choice.getSelectedItem() == diskLabel); dialog.pack() }
+            fileButton.addActionListener({ e -> pickFile() } as java.awt.event.ActionListener)
+            choice.addActionListener({ e -> showFileRow(); if (dialog.isVisible() && choice.getSelectedItem() == diskLabel) javax.swing.SwingUtilities.invokeLater { pickFile() } } as java.awt.event.ActionListener)
+            fileRow.setVisible(choice.getSelectedItem() == diskLabel)
+            [choice, fileRow, javax.swing.Box.createVerticalStrut(4), hint("Pick the original movie, not a processed copy."), javax.swing.Box.createVerticalStrut(8), look].each { recording.body.add(it) }
             def results = new CalciumCard("", "Folder for the results", false)
             def folder = new javax.swing.JTextField(defaultFolder, 30); folder.setFont(CalciumTheme.font()); def browse = CalciumTheme.button("Browse…")
             def line = new javax.swing.JPanel(new java.awt.BorderLayout(6, 0)); line.setOpaque(false); line.setAlignmentX(0f); line.add(folder, java.awt.BorderLayout.CENTER); line.add(browse, java.awt.BorderLayout.EAST)
@@ -1940,11 +1966,15 @@ class CalciumStartDialog {
             buttons.add(CalciumTheme.label("Version " + CalciumRelease.VERSION, CalciumTheme.FAINT, java.awt.Font.PLAIN, -1f), java.awt.BorderLayout.WEST); buttons.add(right, java.awt.BorderLayout.EAST)
             [recording, javax.swing.Box.createVerticalStrut(10), results, javax.swing.Box.createVerticalStrut(14), buttons].each { content.add(it) }
             browse.addActionListener({ e ->
-                ij.io.DirectoryChooser.setDefaultDirectory(folder.getText())
-                String chosen = new ij.io.DirectoryChooser("Folder for the results").getDirectory()
+                String chosen = chooseFolder.call(folder.getText())
                 if (chosen) folder.setText(chosen)
             } as java.awt.event.ActionListener)
-            next.addActionListener({ e -> answer = [recording: choice.getSelectedItem() as String, look: look.isSelected(), folder: folder.getText()]; dialog.dispose() } as java.awt.event.ActionListener)
+            next.addActionListener({ e ->
+                boolean disk = choice.getSelectedItem() == diskLabel
+                if (disk && file == null) pickFile()          // Next without a file still asks for one,
+                if (disk && file == null) return              // and stays here if that was cancelled
+                answer = [recording: choice.getSelectedItem() as String, look: look.isSelected(), folder: folder.getText(), file: disk ? file : null]; dialog.dispose()
+            } as java.awt.event.ActionListener)
             cancel.addActionListener({ e -> dialog.dispose() } as java.awt.event.ActionListener)
             dialog.getRootPane().setDefaultButton(next)
             dialog.getRootPane().registerKeyboardAction({ e -> dialog.dispose() } as java.awt.event.ActionListener, javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0), javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
@@ -1975,7 +2005,7 @@ movies.eachWithIndex { im, i -> if (im == front) pre = labels[i] }
 if (pre == fromDisk && movies.size() > 0) pre = labels[0]
 def defaultDir = Prefs.get("calcium.steps.folder", System.getProperty("user.home") + File.separator + "Documents" + File.separator + "Calcium imaging results")
 
-def start = CalciumStartDialog.ask(labels, pre, defaultDir)
+def start = CalciumStartDialog.ask(labels, pre, defaultDir, fromDisk)
 if (start == null) return
 def picked = start.recording
 boolean look = start.look
@@ -1985,9 +2015,9 @@ Prefs.set("calcium.steps.folder", outRoot)
 
 ImagePlus imp = null
 if (picked == fromDisk) {
-    def od = new OpenDialog("Choose the recording (.zvi, .czi, .tif ...)")
-    if (od.getFileName() == null) return
-    IJ.run("Bio-Formats Importer", "open=[" + od.getPath() + "] color_mode=Grayscale rois_import=[ROI manager] view=Hyperstack stack_order=XYCZT")
+    String recordingPath = start.file      // chosen in the Step 1 dialog
+    if (recordingPath == null) return
+    IJ.run("Bio-Formats Importer", "open=[" + recordingPath + "] color_mode=Grayscale rois_import=[ROI manager] view=Hyperstack stack_order=XYCZT")
     imp = WindowManager.getCurrentImage()
 } else imp = movies[labels.indexOf(picked)]
 if (imp == null || imp.getStackSize() < 2) { IJ.error("Calcium imaging", "No movie was opened."); return }
