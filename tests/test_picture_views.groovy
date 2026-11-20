@@ -27,11 +27,11 @@ def movie = new ImagePlus('views.tif', stack); def before = movie.getStack().get
 def imagej, hooks, roiManager
 try {
     onUI { imagej = new ImageJ(ImageJ.NO_SHOW); movie.show(); roiManager = new RoiManager(false) }
-    // the first screen: the open recording is offered; "look for a response" is unticked here, so the views start from all frames
+    // the first screen: the open recording is offered; "look for a response" stays unticked, as by default
     Thread.start {
         Window dialog = null; long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
         while (dialog == null && System.nanoTime() < end) { Thread.sleep(50); dialog = Window.getWindows().find { it instanceof JDialog && it.visible && it.title?.startsWith('Calcium imaging') } }
-        SwingUtilities.invokeLater { def box = everything(dialog).find { it instanceof javax.swing.JCheckBox }; assert box.selected : 'ticked by default'; box.setSelected(false); everything(dialog).find { it instanceof JButton && it.text == 'Next' }?.doClick() }
+        SwingUtilities.invokeLater { everything(dialog).find { it instanceof JButton && it.text == 'Next' }?.doClick() }
     }
     def binding = new Binding([CALCIUM_TEST_GUI: true])
     new GroovyShell(getClass().classLoader, binding).evaluate(new File('scripts/Plugins/Calcium Imaging/Calcium_Cells_Step_By_Step.groovy'))
@@ -73,6 +73,9 @@ try {
         float[] green = picture.getStack().getPixels(2), baseline = steps.baselinePicture(steps.b0, steps.b1)
         assert green == baseline : 'The picture shows the baseline frames'
         assert picture.getCanvas().is(canvas)
+        // the plugin window floats over its own picture only: other Fiji windows, such as Brightness/Contrast, can come in front
+        assert hooks.floatsOver.call(hooks.frame) && hooks.floatsOver.call(picture.getWindow())
+        assert !hooks.floatsOver.call(movie.getWindow()) && !hooks.floatsOver.call(roiManager) && !hooks.floatsOver.call(null)
         // moving between steps: forward and back
         def (s1, s2, s3, s4) = hooks.cards
         hooks.continueBtn.doClick(); assert s3.expanded && !s2.expanded

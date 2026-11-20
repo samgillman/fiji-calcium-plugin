@@ -71,6 +71,12 @@ try {
     assert Settings.diagnose(badRule,data).errors
     def overlap=Settings.copy(about.draft);overlap.values.baseline_end='10'
     assert Settings.diagnose(overlap,data).warnings.any{it.contains('F₀ baseline includes')}
+    // Baseline samples are counted as the engine counts them: start ≤ t < end. Frames here are just under 0.5 s apart (0, 0.49999998, 0.99999995 …).
+    assert !Settings.diagnose(about.draft,data).warnings.any{it.contains('samples but at least')} : Settings.diagnose(about.draft,data).warnings
+    def tooShort=Settings.copy(about.draft);tooShort.protocol.windows[0].Baseline_start_s=0d;tooShort.protocol.windows[0].Baseline_end_s=0.9d;tooShort.protocol.windows[0].Baseline_s=0.9d
+    assert Settings.diagnose(tooShort,data).warnings.any{it.contains('holds 2 samples but at least 3 are needed')} : Settings.diagnose(tooShort,data).warnings
+    def enough=Settings.copy(about.draft);enough.protocol.windows[0].Baseline_start_s=0d;enough.protocol.windows[0].Baseline_end_s=1.5d;enough.protocol.windows[0].Baseline_s=1.5d
+    assert !Settings.diagnose(enough,data).warnings.any{it.contains('samples but at least')} && !Settings.diagnose(enough,data).errors
 
     def pending=Settings.copy(about.draft)
     pending.values.sampling_hz=''

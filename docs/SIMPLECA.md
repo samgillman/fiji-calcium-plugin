@@ -20,7 +20,7 @@ Playback follows the available frame times on a clock in recording seconds: at *
 
 ## Choose cells and measure
 
-Choose identifiable cells independently of whether they brighten. In Step 2, **Picture** switches between **All frames** (the original colour picture), **Baseline…** (a frame range before the stimulus that you confirm) and **Response (magenta)**. Magenta is a review aid: the first screen's **Look for a response** box is ticked by default, so it starts on when a response is found. Untick the box, or press **All frames**, to choose cells without it; pressing **Response (magenta)** later looks for the response at that moment. The picture changes in place, so outlines and clicks keep working. The selection basis is recorded. Cellpose suggestions and grades still require review; accepting only brightening cells would change the population whose response percentage is reported.
+Choose identifiable cells independently of whether they brighten. In Step 2, **Picture** switches between **All frames** (the original colour picture), **Baseline…** (a frame range before the stimulus that you confirm) and **Response (magenta)**. Magenta is an optional review aid: it starts off, and choosing it looks for the response at that moment, as the first screen's option does. The picture changes in place, so outlines and clicks keep working. The selection basis is recorded. Cellpose suggestions and grades still require review; accepting only brightening cells would change the population whose response percentage is reported.
 
 **Measure and save** writes stable IDs into the accepted ROIs and their measurement columns. An accepted-ROI registry records each ID, geometry hash, measured status, edge exclusion, background pixel count and selection basis. A separate accepted-ROI ZIP includes accepted outlines excluded before measurement. Those exclusions remain visible in the cohort flow; they are not silently relabeled as nonresponders. Editing any accepted outline, edge policy or selection basis requires measuring again before opening Step 4.
 
@@ -34,6 +34,12 @@ The analysis input is the full-precision `gray_values_background_corrected_nativ
 4. Choose or load a protocol, inspect each row and any imported field timing overrides, and enter condition and independent biological-unit IDs when known. Check the timing/selection confirmation and click **Run analysis** in the browser, or **Analyze responses** in the native fallback.
 
 Setup needs internet and disk space for R and downloaded packages. It is separate from Cellpose and stored under `.calcium-simpleca` in your home folder. A previous base-only R environment is not reused as protocol-ready: setup verifies the required R and jsonlite versions. Retry uses the package cache, and later analyses can run offline. Cancelled setup may leave partial installation directories, but it never marks them ready.
+
+## Stimulus timing
+
+Each stimulus has one **Stimulus added at** time. **Noise baseline to** and **Score response from** follow it by default and show "= stimulus time"; **Set separately** gives either its own value, and **Link to stimulus time** reverses that. **Use frame N** sets the stimulus time to the movie frame on screen, and linked fields move with it. A typed time that reads the same as a frame's time is stored as that frame's exact time.
+
+Under the fields, one line states the frames each window will use, by the engine's own rule: the noise baseline takes frames from its start up to, but not including, its end; scoring takes frames from its start to its end inclusive. The same windows are drawn under the frame slider. **F₀ frames** set the zero for ΔF/F₀ and are separate from the noise baseline, which sets how large a rise must be. When two time fields disagree, the message sits beside the field to change and offers the repair.
 
 ## Response protocols
 

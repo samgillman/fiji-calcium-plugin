@@ -9,7 +9,7 @@
   const kind = (call) => call === 'Responded' ? 'responded' : call === 'Did not respond' ? 'not' : 'other';
   const inGroup = (call, group, name) => group === 0 || (group === 1 && call === 'Responded') || (group === 2 && call === 'Did not respond') ||
     (group === 3 && call === 'Excluded') || (group === 4 && call === 'Unscorable') || (group === 5 && qualityFor(name).length > 0 && (!S.qualityFlag || qualityFor(name).includes(S.qualityFlag)));
-  const S = { info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'raw', viewChosen: false,
+  const S = { unlinked: new Set(), validationShown: null, info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'raw', viewChosen: false,
     every: true, outlines: true, order: 'call', palette: 'signed', range: 'robust', tall: false, timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false };
   const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, hover: null, geom: null, scrubbing: false, drawn: [] };
   const Pic = { base: null, shown: null, zoom: 1, panX: 0, panY: 0, drag: null, moved: false, shownFrame: null, error: null };
@@ -79,7 +79,54 @@
     if (box.value === box.dataset.shown) return box._exact;
     const text = box.value.trim(); if (optional && text === '') return null;
     const value = text === '' ? NaN : Number(text);
-    return Number.isFinite(value) ? value / box._scale : text;
+    if (!Number.isFinite(value)) return text;
+    // A typed time that reads the same as a frame's time is that frame: 113.091 means the frame stored as 113.09100770950317,
+    // so a retyped value never differs from an untouched one by a hidden fraction.
+    if (TIME_KEYS.includes(box.dataset.key)) { const shown = fmt(value); for (const t of editedTimes() || []) if (fmt(t) === shown) return t; }
+    return value / box._scale;
+  }
+  const TIME_KEYS = ['Baseline_start_s', 'Baseline_end_s', 'Stimulus_onset_s', 'Start_s', 'End_s'], LINKED_KEYS = ['Baseline_end_s', 'Start_s'];
+  const FIELD_TITLES = { Baseline_start_s: 'noise baseline start', Baseline_end_s: 'noise baseline end', Stimulus_onset_s: 'stimulus time', Start_s: 'scoring start', End_s: 'scoring end',
+    Floor_local_fraction: 'minimum rise', SD_multiplier: 'baseline SD multiplier', Min_duration_s: 'minimum duration', Consecutive_samples: 'consecutive samples', Max_gap_s: 'maximum gap',
+    Min_baseline_samples: 'minimum baseline samples', Noise_floor_local_fraction: 'noise floor', Expected_interval_s: 'expected interval' };
+  const seconds = (v) => fmt(v) + ' s';
+  /** Frame times of the settings being edited: from the frame rate, or the timestamps as the plugin read them. Null when unknown. */
+  function draftTimes(timestamps, hz) {
+    const n = S.info ? S.info.frames : 0; if (!n) return null;
+    if (!timestamps) { const rate = hz === null || hz === '' || typeof hz === 'boolean' ? NaN : Number(hz); return Number.isFinite(rate) && rate > 0 ? Array.from({ length: n }, (_, i) => i / rate) : null; }
+    if (!S.results) { const t = S.state && S.state.frameTimes; return t && t.length >= n ? t : null; }
+    const applied = S.results.appliedDraft && S.results.appliedDraft.timestamps, t = S.results.frameTimes || S.results.time;
+    return applied && JSON.stringify(applied) === JSON.stringify(timestamps) && t && t.length >= n ? t : null;
+  }
+  const editedTimes = () => (S.draft && $('sampling_hz') ? draftTimes(S.draft.timestamps, readInput($('sampling_hz'), false)) : null);
+  /** Which frames a window uses, by the engine's own rule: baseline start ≤ t < baseline end, and scoring start ≤ t ≤ scoring end. */
+  function windowFrames(row, times) {
+    const n = S.info ? S.info.frames : 0; if (!n || !times || times.length < n) return null;
+    const num = (v) => (v === null || v === '' || typeof v === 'boolean' ? NaN : Number(v));
+    const b0 = num(row.Baseline_start_s), b1 = num(row.Baseline_end_s), on = num(row.Stimulus_onset_s), s0 = num(row.Start_s), s1 = num(row.End_s);
+    const tol = 8 * Number.EPSILON * Math.max(1, ...[b0, b1, s0, s1].filter(Number.isFinite).map(Math.abs));
+    const span = (test) => { let first = 0, last = 0, count = 0; for (let i = 0; i < n; i++) if (test(times[i])) { if (!first) first = i + 1; last = i + 1; count++; } return { first, last, count }; };
+    let before = 0, at = false; if (Number.isFinite(on)) for (let i = 0; i < n; i++) { if (times[i] < on - tol) before = i + 1; else { at = Math.abs(times[i] - on) <= tol; break; } }
+    return { n, times, stimulus: Number.isFinite(on) ? { before, at } : null,
+      baseline: Number.isFinite(b0) && Number.isFinite(b1) ? span((t) => t >= b0 - tol && t < b1 - tol) : null,
+      scoring: Number.isFinite(s0) && Number.isFinite(s1) ? span((t) => t >= s0 - tol && t <= s1 + tol) : null };
+  }
+  const frameSpan = (s) => !s || !s.count ? 'no frames' : s.count === 1 ? 'frame ' + s.first : 'frames ' + s.first + '–' + s.last;
+  /** "Noise baseline to" and "Score response from" follow the stimulus time unless they are set separately. A linked box mirrors
+   *  the stimulus box exactly, stored number included, so the protocol is the same as if the value had been typed three times. */
+  function syncLinks(index) {
+    const onset = $('window-' + index + '-Stimulus_onset_s'); if (!onset) return;
+    for (const key of LINKED_KEYS) {
+      const box = $('window-' + index + '-' + key); if (!box || box.dataset.linked !== '1') continue;
+      box.value = onset.value; box.dataset.shown = onset.dataset.shown; box._exact = onset._exact; box._scale = 1; box.classList.remove('changed');
+      box.closest('label').querySelector('.link-text').textContent = onset.value.trim() === '' ? '= stimulus time (not set)' : '= stimulus time (' + onset.value.trim() + ' s)';
+    }
+  }
+  function setLinked(box, linked, fixed) {
+    const label = box.closest('label'), toggle = label.nextElementSibling;
+    box.dataset.linked = linked ? '1' : ''; label.classList.toggle('linked', linked);
+    toggle.textContent = linked ? 'Set separately' : 'Link to stimulus time'; toggle.hidden = !!fixed;
+    toggle.title = linked ? 'Give this its own value instead of the stimulus time' : 'Make this follow the stimulus time again';
   }
   const FILES = ['timestamps', 'sensitivity', 'negative_control'];
   const NUMBERS = ['Baseline_start_s', 'Baseline_end_s', 'Stimulus_onset_s', 'Start_s', 'End_s', 'Floor_local_fraction', 'SD_multiplier', 'Min_duration_s', 'Consecutive_samples', 'Max_gap_s', 'Min_baseline_samples', 'Noise_floor_local_fraction', 'Expected_interval_s'];
@@ -99,6 +146,7 @@
   }
   function renderWindows() {
     // The positive-control tick box is moved between the two windows; keep references, because a detached element cannot be found by id.
+    S.validationShown = null;
     const container = $('windows-editor'), keep = [S.controlLabel || (S.controlLabel = $('control').closest('label')), S.controlHelp || (S.controlHelp = $('control-help'))]; keep.forEach((e) => e.remove()); container.innerHTML = '';
     const legacy = Number($('protocol-mode').value) === 1;
     S.draft.protocol.windows.forEach((row, index) => {
@@ -106,13 +154,29 @@
       const heading = document.createElement('h3'); heading.textContent = index === 0 ? 'Primary stimulus' : 'Positive control'; section.appendChild(heading);
       const add = (target, key, title, opts) => { const label = windowInput(index, key, title, opts); target.appendChild(label); const box = label.lastChild;
         if (box.tagName === 'SELECT' || key === 'Stimulus') box.value = w[key] == null ? '' : String(w[key]); else exactInput(box, w[key], opts && opts.scale); return box; };
-      add(section, 'Stimulus', 'Name'); const onsetBox = add(section, 'Stimulus_onset_s', 'Stimulus added at (s)');
-      const fromFrame = document.createElement('button'); fromFrame.type = 'button'; fromFrame.className = 'ghost small from-frame'; fromFrame.textContent = 'Use frame on screen'; fromFrame.disabled = onsetBox.disabled;
-      fromFrame.title = 'Set this to the time of the movie frame shown now. Scrub the movie to the frame where the stimulus arrives first.';
-      fromFrame.addEventListener('click', () => { const t = frameTimes()[S.frame - 1]; if (!finite(t)) return; exactInput(onsetBox, t); onsetBox.dispatchEvent(new Event('input', { bubbles: true })); onsetBox.dispatchEvent(new Event('change', { bubbles: true })); });
+      // A field that can follow the stimulus time: shown as text while linked, with a control to set it separately.
+      const same = (a, b) => (a == null || a === '') ? (b == null || b === '') : (b != null && b !== '' && Number(a) === Number(b));
+      const linkable = (key, title) => {
+        const box = add(section, key, title), label = box.closest('label'), text = document.createElement('span'); text.className = 'link-text'; label.appendChild(text);
+        const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = 'ghost small link-toggle'; label.after(toggle);
+        toggle.addEventListener('click', () => {
+          if (box.dataset.linked === '1') { S.unlinked.add(box.id); setLinked(box, false); box.focus(); box.select(); }
+          else { S.unlinked.delete(box.id); setLinked(box, true); syncLinks(index); draftChanged(); }
+        });
+        setLinked(box, legacy || (same(w[key], w.Stimulus_onset_s) && !S.unlinked.has(box.id)), legacy);
+        return box;
+      };
+      add(section, 'Stimulus', 'Name');
+      add(section, 'Baseline_start_s', 'Noise baseline from (s)'); linkable('Baseline_end_s', 'Noise baseline to (s)');
+      const onsetBox = add(section, 'Stimulus_onset_s', 'Stimulus added at (s)');
+      const fromFrame = document.createElement('button'); fromFrame.type = 'button'; fromFrame.className = 'ghost small from-frame'; fromFrame.textContent = 'Use frame on screen';
+      fromFrame.title = 'Set the stimulus time to the time of the movie frame shown now; linked fields follow. Scrub the movie to the frame where the stimulus arrives first.';
+      fromFrame.addEventListener('click', () => { const t = frameTime(); if (!finite(t)) return; exactInput(onsetBox, t); onsetBox.dispatchEvent(new Event('input', { bubbles: true })); onsetBox.dispatchEvent(new Event('change', { bubbles: true })); });
       onsetBox.closest('label').after(fromFrame);
-      add(section, 'Baseline_start_s', 'Response baseline from (s)'); add(section, 'Baseline_end_s', 'Response baseline to (s)');
-      add(section, 'Start_s', 'Score response from (s)'); add(section, 'End_s', 'Score response to (s)');
+      const suggestion = document.createElement('p'); suggestion.className = 'fine suggestion'; suggestion.id = 'suggestion-' + index; suggestion.hidden = true; fromFrame.after(suggestion);
+      linkable('Start_s', 'Score response from (s)'); add(section, 'End_s', 'Score response to (s)');
+      syncLinks(index);
+      const preview = document.createElement('p'); preview.className = 'frames-preview'; preview.id = 'frames-preview-' + index; section.appendChild(preview);
       const summary = document.createElement('p'); summary.className = 'rule-summary'; summary.id = 'rule-summary-' + index; section.appendChild(summary);
       const details = document.createElement('details'); const summaryTitle = document.createElement('summary'); summaryTitle.textContent = 'Adjust the response rule'; details.appendChild(summaryTitle);
       add(details, 'Floor_local_fraction', 'Minimum rise (%)', { scale: 100 }); add(details, 'SD_multiplier', 'Baseline SD multiplier');
@@ -124,6 +188,7 @@
       if (index === 0) keep.forEach((e) => container.appendChild(e));
     });
     if (!S.draft.protocol.windows.length) keep.forEach((e) => container.appendChild(e));
+    frameButtons();
     $('control').checked = S.draft.protocol.windows.length > 1;
     $('control-help').hidden = !$('control').checked;
     updateProtocolControls();
@@ -137,11 +202,36 @@
       const i = section.dataset.index, box = (key) => $('window-' + i + '-' + key), mode = box('Duration_mode').value;
       for (const field of section.querySelectorAll('input,select')) {
         const key = field.dataset.key;
-        field.disabled = busy || (legacy && (['Baseline_end_s', 'Stimulus_onset_s', 'Duration_mode', 'Min_duration_s', 'Min_baseline_samples', 'Noise_floor_local_fraction', 'Expected_interval_s'].includes(key) || (i === '1' && key === 'Stimulus'))) || (!legacy && ((key === 'Min_duration_s' && mode !== 'seconds') || (key === 'Consecutive_samples' && mode !== 'samples')));
+        field.disabled = busy || (legacy && (['Baseline_end_s', 'Start_s', 'Duration_mode', 'Min_duration_s', 'Min_baseline_samples', 'Noise_floor_local_fraction', 'Expected_interval_s'].includes(key) || (i === '1' && key === 'Stimulus'))) || (!legacy && ((key === 'Min_duration_s' && mode !== 'seconds') || (key === 'Consecutive_samples' && mode !== 'samples')));
       }
+      for (const button of section.querySelectorAll('button')) button.disabled = busy;
+      const row = {}; for (const key of TIME_KEYS) row[key] = readInput(box(key), false);
+      const used = windowFrames(row, editedTimes()), numeric = (v) => typeof v === 'number' && Number.isFinite(v);
+      const f0 = [$('baseline_start'), $('baseline_end')].map((b) => readInput(b, false));
+      $('frames-preview-' + i).textContent = !used ? 'Frame numbers appear here once the frame rate or timestamps are valid.' :
+        (i === '0' && f0.every((f) => f !== null && f !== '' && Number.isInteger(Number(f))) ? 'F₀: frames ' + f0[0] + '–' + f0[1] + '. ' : '') +
+        'Noise baseline: ' + (used.baseline ? frameSpan(used.baseline) + ' (' + plural(used.baseline.count, 'sample') + ')' : 'not set') + '. ' +
+        'Stimulus: ' + (!used.stimulus ? 'not set' : used.stimulus.at ? 'at frame ' + (used.stimulus.before + 1) : used.stimulus.before === 0 ? 'before frame 1' : used.stimulus.before >= used.n ? 'after the last frame' : 'between frames ' + used.stimulus.before + ' and ' + (used.stimulus.before + 1)) + '. ' +
+        'Scoring: ' + (used.scoring ? frameSpan(used.scoring) : 'not set') + '.';
+      const note = $('suggestion-' + i), first = S.initialDraft && S.initialDraft.protocol.windows[i], suggested = i === '0' && !S.results && first && numeric(row.Stimulus_onset_s) && Number(first.Stimulus_onset_s) === row.Stimulus_onset_s;
+      note.hidden = !suggested; if (suggested) note.textContent = 'A suggested starting value' + (used && used.stimulus && used.stimulus.at ? ' (frame ' + (used.stimulus.before + 1) + ')' : '') + ', not a measured stimulus time. Set it to when the stimulus was added.';
+      if (i === '0') shadeTimeline(used);
       $('rule-summary-' + i).textContent = 'Rise ≥ ' + box('Floor_local_fraction').value + '% and ≥ ' + box('SD_multiplier').value + ' × baseline SD, for ' + (mode === 'seconds' ? box('Min_duration_s').value + ' s.' : box('Consecutive_samples').value + ' consecutive samples.') + (legacy ? ' Legacy rule.' : '');
     }
     $('rule-help').textContent = legacy ? 'Legacy reproduction: the baseline ends at the response start; the optional control is KCl. Sample counts depend on the acquisition rate.' : 'Starter settings are provisional. Check them against your controls before using responder percentages.';
+  }
+  /** Under the frame slider: grey for the noise baseline, a mark for the stimulus, orange for the scored frames of the primary stimulus. */
+  function shadeTimeline(used) {
+    const strip = $('time-windows'); if (!strip) return; strip.replaceChildren(); if (!used || used.n < 2) return;
+    const at = (frame) => (frame - 1) / (used.n - 1) * 100, piece = (className, from, to, title) => { const e = document.createElement('i'); e.className = className; e.style.left = at(from) + '%'; e.style.width = Math.max(0.4, at(to) - at(from)) + '%'; e.title = title; strip.appendChild(e); };
+    if (used.baseline && used.baseline.count) piece('baseline', used.baseline.first, used.baseline.last, 'Noise baseline');
+    if (used.scoring && used.scoring.count) piece('scoring', used.scoring.first, used.scoring.last, 'Scored frames');
+    if (used.stimulus && used.stimulus.before < used.n) { const e = document.createElement('i'); e.className = 'stimulus'; e.style.left = at(used.stimulus.at ? used.stimulus.before + 1 : Math.max(1, used.stimulus.before + 0.5)) + '%'; e.title = 'Stimulus added'; strip.appendChild(e); }
+  }
+  const frameTime = () => (S.info ? (editedTimes() || frameTimes())[S.frame - 1] : NaN);   // of the frame on screen, in the time base being edited
+  function frameButtons() {
+    const t = frameTime();
+    for (const button of document.querySelectorAll('.from-frame')) button.textContent = finite(t) ? 'Use frame ' + S.frame + ' (' + fmt(t) + ' s)' : 'Use frame on screen';
   }
   function collectDraft() {
     const draft = clone(S.draft), p = draft.protocol, legacy = Number($('protocol-mode').value) === 1;
@@ -179,7 +269,11 @@
   function fileNote(key) { const file = S.draft[key]; $(key + '-name').textContent = file ? file.name : 'No file selected'; $(key + '-clear').hidden = !file; }
   // Draft validation reports errors without changing settings, saved calls or the applied movie clock.
   function validateDraft(draft) {
-    const errors = [], warnings = [], fields = new Set(), add = (field, message) => { errors.push(message); if (field) fields.add(field); };
+    const errors = [], listed = [], warnings = [], repairs = new Map(), inline = [], fields = new Set(), add = (field, message) => { errors.push(message); listed.push(message); if (field) fields.add(field); };
+    // Two time fields that disagree: both are marked, and one message sits beside the field to change, with the repair.
+    const conflict = (mark, beside, message, repair) => { errors.push(message); mark.forEach((f) => fields.add(f)); inline.push({ beside, message, repair }); };
+    const warn = (message, repair) => { warnings.push(message); if (repair) repairs.set(message, repair); };
+    const times = draftTimes(draft.timestamps, draft.values.sampling_hz);
     const numeric = (v) => v !== null && v !== '' && typeof v !== 'boolean' && Number.isFinite(Number(v));
     const value = draft.values, n = S.info.frames;
     if (!draft.timestamps && (!numeric(value.sampling_hz) || Number(value.sampling_hz) <= 0)) add('sampling_hz', 'Frame rate must be a positive number, or supply valid timestamps.');
@@ -189,44 +283,72 @@
     draft.protocol.windows.forEach((original, index) => {
       const row = expandWindow(original, legacy), prefix = 'window-' + index + '-', label = index ? 'Control: ' : 'Stimulus: ';
       const required = NUMBERS.filter((key) => !['Max_gap_s', 'Expected_interval_s'].includes(key));
-      for (const key of required) if (!numeric(row[key])) add(prefix + key, label + key.replace(/_/g, ' ') + ' needs a number.');
+      const box = (key) => $(prefix + key), linked = (key) => !!box(key) && box(key).dataset.linked === '1', v = (key) => Number(row[key]), has = (key) => numeric(row[key]);
+      for (const key of required) if (!has(key) && !(LINKED_KEYS.includes(key) && linked(key))) add(prefix + key, label + FIELD_TITLES[key] + ' needs a number.');
       const name = String(row.Stimulus || '').trim().toLowerCase();
       if (!name || names.has(name)) add(prefix + 'Stimulus', label + 'use a nonempty, distinct name.'); names.add(name);
       if (numeric(row.Baseline_start_s) && Number(row.Baseline_start_s) < 0) add(prefix + 'Baseline_start_s', label + 'baseline cannot start before 0 s.');
-      for (const [left, right, strict, message] of [
-        ['Baseline_start_s', 'Baseline_end_s', true, 'baseline end must follow baseline start.'],
-        ['Baseline_end_s', 'Stimulus_onset_s', false, 'baseline must finish at or before stimulus addition.'],
-        ['Stimulus_onset_s', 'Start_s', false, 'scoring cannot start before stimulus addition.'],
-        ['Start_s', 'End_s', true, 'response end must follow response start.']]) {
-        if (numeric(row[left]) && numeric(row[right]) && (strict ? Number(row[right]) <= Number(row[left]) : Number(row[right]) < Number(row[left]))) add(prefix + right, label + message);
-      }
+      const relink = (key) => () => { const b = box(key); S.unlinked.delete(b.id); setLinked(b, true, legacy); syncLinks(index); draftChanged(); };
+      const setTo = (key, value) => () => { exactInput(box(key), value); draftChanged(); };
+      const used = windowFrames(row, times), last = used ? used.times[used.n - 1] : NaN, onset = prefix + 'Stimulus_onset_s';
+      if (has('Baseline_end_s') && has('Stimulus_onset_s') && v('Stimulus_onset_s') < v('Baseline_end_s'))
+        conflict([prefix + 'Baseline_end_s', onset], prefix + 'Baseline_end_s', label + 'the noise baseline ends at ' + seconds(v('Baseline_end_s')) + ', after the stimulus at ' + seconds(v('Stimulus_onset_s')) + '.', { text: 'Set to ' + seconds(v('Stimulus_onset_s')), run: relink('Baseline_end_s') });
+      if (has('Stimulus_onset_s') && has('Start_s') && v('Start_s') < v('Stimulus_onset_s'))
+        conflict([prefix + 'Start_s', onset], prefix + 'Start_s', label + 'scoring starts at ' + seconds(v('Start_s')) + ', before the stimulus at ' + seconds(v('Stimulus_onset_s')) + '.', { text: 'Set to ' + seconds(v('Stimulus_onset_s')), run: relink('Start_s') });
+      if (has('Baseline_start_s') && has('Baseline_end_s') && v('Baseline_end_s') <= v('Baseline_start_s'))
+        conflict([prefix + 'Baseline_start_s', linked('Baseline_end_s') ? onset : prefix + 'Baseline_end_s'], prefix + 'Baseline_start_s', label + 'the noise baseline starts at ' + seconds(v('Baseline_start_s')) + ', at or after its end at ' + seconds(v('Baseline_end_s')) + '.', v('Baseline_end_s') > 0 ? { text: 'Set to 0 s', run: setTo('Baseline_start_s', 0) } : null);
+      if (has('Start_s') && has('End_s') && v('End_s') <= v('Start_s'))
+        conflict([prefix + 'End_s', linked('Start_s') ? onset : prefix + 'Start_s'], prefix + 'End_s', label + 'scoring ends at ' + seconds(v('End_s')) + ', at or before its start at ' + seconds(v('Start_s')) + '.', last > v('Start_s') ? { text: 'Set to the recording end (' + seconds(last) + ')', run: setTo('End_s', last) } : null);
       for (const key of ['Floor_local_fraction', 'SD_multiplier', 'Noise_floor_local_fraction']) if (numeric(row[key]) && Number(row[key]) < 0) add(prefix + key, label + 'thresholds cannot be negative.');
       if (numeric(row.Floor_local_fraction) && numeric(row.SD_multiplier) && Number(row.Floor_local_fraction) === 0 && Number(row.SD_multiplier) === 0) add(prefix + 'Floor_local_fraction', label + 'specify an amplitude or noise threshold.');
       if (legacy && numeric(row.Floor_local_fraction) && Number(row.Floor_local_fraction) <= 0) add(prefix + 'Floor_local_fraction', label + 'legacy mode requires a positive minimum rise.');
       if (numeric(row.Min_duration_s) && Number(row.Min_duration_s) <= 0) add(prefix + 'Min_duration_s', label + 'duration must be positive.');
-      for (const [key, minimum] of [['Consecutive_samples', 1], ['Min_baseline_samples', 2]]) if (numeric(row[key]) && (!Number.isInteger(Number(row[key])) || Number(row[key]) < minimum)) add(prefix + key, label + key.replace(/_/g, ' ') + ' must be a whole number ≥ ' + minimum + '.');
-      for (const key of ['Max_gap_s', 'Expected_interval_s']) if (row[key] !== null && row[key] !== '' && (!numeric(row[key]) || Number(row[key]) <= 0)) add(prefix + key, label + key.replace(/_/g, ' ') + ' must be positive or blank.');
+      for (const [key, minimum] of [['Consecutive_samples', 1], ['Min_baseline_samples', 2]]) if (numeric(row[key]) && (!Number.isInteger(Number(row[key])) || Number(row[key]) < minimum)) add(prefix + key, label + FIELD_TITLES[key] + ' must be a whole number ≥ ' + minimum + '.');
+      for (const key of ['Max_gap_s', 'Expected_interval_s']) if (row[key] !== null && row[key] !== '' && (!numeric(row[key]) || Number(row[key]) <= 0)) add(prefix + key, label + FIELD_TITLES[key] + ' must be positive or blank.');
+      if (used) {
+        if (has('Start_s') && v('Start_s') >= last) { if (linked('Start_s')) add(onset, label + 'the stimulus time is at or after the last frame (' + seconds(last) + ').'); else add(prefix + 'Start_s', label + 'scoring must start before the recording ends at ' + seconds(last) + '.'); }
+        if (has('End_s') && v('End_s') > last) warn(label + 'response end exceeds this recording; complete-window rules may mark cells unscorable.');
+        if (used.baseline && has('Min_baseline_samples') && used.baseline.count < v('Min_baseline_samples')) warn(label + 'the noise baseline holds ' + plural(used.baseline.count, 'sample') + ' (' + frameSpan(used.baseline) + ') but at least ' + v('Min_baseline_samples') + ' are needed, so every cell would be unscorable.');
+        const f0 = [Number(value.baseline_start), Number(value.baseline_end)], before = used.stimulus ? used.stimulus.before : 0;
+        if (!index && used.stimulus && numeric(value.baseline_end) && Number.isInteger(f0[1]) && f0[1] >= 1 && f0[1] <= used.n && f0[1] > before) {
+          const first = Math.max(1, Math.min(Number.isInteger(f0[0]) ? f0[0] : 1, before)), same = (now, wanted) => (typeof now === 'string' ? String(wanted) : wanted);
+          warn('The F₀ frames (' + value.baseline_start + '–' + value.baseline_end + ') include the stimulus time or later frames.', before >= 1 ? { text: 'Use frames ' + first + '–' + before, run: () => { exactInput($('baseline_start'), same(value.baseline_start, first)); exactInput($('baseline_end'), same(value.baseline_end, before)); draftChanged(); } } : null);
+        }
+      }
       if (!draft.timestamps && numeric(value.sampling_hz) && Number(value.sampling_hz) > 0) {
-        const interval = 1 / Number(value.sampling_hz), end = (n - 1) * interval;
-        if (numeric(row.Start_s) && Number(row.Start_s) >= end) add(prefix + 'Start_s', label + 'response must start before the recording ends at ' + fmt(end) + ' s.');
-        if (numeric(row.End_s) && Number(row.End_s) > end) warnings.push(label + 'response end exceeds this recording; complete-window rules may mark cells unscorable.');
-        if (!legacy && row.Duration_mode === 'seconds' && numeric(row.Min_duration_s) && Number(row.Min_duration_s) < interval) warnings.push(label + 'minimum duration (' + row.Min_duration_s + ' s) is shorter than the frame interval (' + fmt(interval) + ' s). Timing is coarsely resolved.');
-        if (!index && numeric(row.Stimulus_onset_s) && numeric(value.baseline_end) && (Number(value.baseline_end) - 1) * interval >= Number(row.Stimulus_onset_s)) warnings.push('The trace F₀ baseline includes the stimulus onset or later frames. Review the resting baseline.');
+        const interval = 1 / Number(value.sampling_hz);
+        if (!legacy && row.Duration_mode === 'seconds' && numeric(row.Min_duration_s) && Number(row.Min_duration_s) < interval) warn(label + 'minimum duration (' + row.Min_duration_s + ' s) is shorter than the frame interval (' + fmt(interval) + ' s). Timing is coarsely resolved.');
       }
     });
     if (!String(draft.protocol.name || '').trim()) add('protocol-name', 'Enter a protocol name.');
     if (draft.protocol.field_overrides !== null && !Array.isArray(draft.protocol.field_overrides)) add('field-overrides', 'Field overrides must be a valid JSON array.');
     const signature = JSON.stringify(draft);
     if (signature === S.draftAck && S.state && S.state.validation) {
-      errors.push(...S.state.validation.errors); warnings.push(...S.state.validation.warnings);
+      // One message per problem: the plugin's general checks are shown only for what this page did not already explain.
+      if (!errors.length) for (const message of S.state.validation.errors) { errors.push(message); listed.push(message); }
+      const mine = [/F₀ baseline includes/, /response end exceeds/, /holds \d+ samples/];
+      for (const message of S.state.validation.warnings) if (!times || !mine.some((p) => p.test(message))) warnings.push(message);
     }
     for (const box of document.querySelectorAll('#side [aria-invalid]')) box.removeAttribute('aria-invalid');
     for (const id of fields) if ($(id)) $(id).setAttribute('aria-invalid', 'true');
-    const box = $('validation'); box.hidden = !errors.length && !warnings.length; box.replaceChildren();
-    for (const [messages, className] of [[errors, ''], [warnings, 'warning']]) if (messages.length) {
-      const list = document.createElement('ul'); list.className = className;
-      for (const message of new Set(messages)) { const li = document.createElement('li'); li.textContent = message; list.appendChild(li); }
-      box.appendChild(list);
+    // Rebuilt only when what is shown changes, so a button is never replaced under the mouse by a routine refresh.
+    const shown = JSON.stringify([listed, warnings, inline.map((e) => [e.beside, e.message, e.repair && e.repair.text]), Array.from(repairs.values()).map((r) => r.text)]);
+    if (shown !== S.validationShown) {
+      S.validationShown = shown;
+      const action = (repair) => { const button = document.createElement('button'); button.type = 'button'; button.className = 'ghost small repair'; button.textContent = repair.text; button.addEventListener('click', repair.run); return button; };
+      for (const old of document.querySelectorAll('#side .field-error')) old.remove();
+      for (const entry of inline) {
+        const field = $(entry.beside); if (!field) continue;
+        const row = field.closest('label') || field, after = row.nextElementSibling && row.nextElementSibling.classList.contains('link-toggle') ? row.nextElementSibling : row;
+        const note = document.createElement('div'); note.className = 'field-error'; note.setAttribute('role', 'alert'); const text = document.createElement('span'); text.textContent = entry.message; note.appendChild(text);
+        if (entry.repair) note.appendChild(action(entry.repair)); after.after(note);
+      }
+      const box = $('validation'); box.hidden = !listed.length && !warnings.length; box.replaceChildren();
+      for (const [messages, className] of [[listed, ''], [warnings, 'warning']]) if (messages.length) {
+        const list = document.createElement('ul'); list.className = className;
+        for (const message of new Set(messages)) { const li = document.createElement('li'); li.textContent = message; if (repairs.has(message)) { li.append(' '); li.appendChild(action(repairs.get(message))); } list.appendChild(li); }
+        box.appendChild(list);
+      }
     }
     return { errors, warnings };
   }
@@ -455,7 +577,7 @@
     $('speed').disabled = $('play').disabled;
     const t = frameTimes()[S.frame - 1], provisional = !S.results && (!S.state || S.state.timingProvisional !== false);
     const label = (finite(t) ? (provisional ? '≈ ' : '') + t.toFixed(2) + ' s · ' : '') + 'Frame ' + S.frame + ' / ' + S.info.frames;
-    $('time-label').textContent = label; $('time').setAttribute('aria-valuetext', label);
+    $('time-label').textContent = label; $('time').setAttribute('aria-valuetext', label); frameButtons();
     $('playback-note').textContent = staticView ? 'Static colour overview — this image does not move. Choose “Recording” in View to play or scrub the movie.' : !S.info.hasMovie ? 'The recording is unavailable in this session. Reopen it in Fiji to view its frames.' : frameTimes().length ? (provisional ? 'Preview timing is provisional. Playback follows the displayed frame times; confirm timing before analysis.' : 'Playback follows the applied frame times. Drag the slider to pause and inspect a frame.') : 'Frame-by-frame preview. No valid time base is available; 1× plays 20 frames per second.';
   }
   function setFrame(wanted, manual) {
@@ -938,7 +1060,7 @@
       const box = event.target;
       if (!S.draft || box.type === 'file' || ['confirmed', 'control', 'protocol-mode'].includes(box.id)) return;
       if (box.dataset.shown !== undefined) box.classList.toggle('changed', box.value !== box.dataset.shown);
-      if ($('protocol-mode').value === '1' && box.dataset.key === 'Start_s') for (const key of ['Baseline_end_s', 'Stimulus_onset_s']) exactInput($('window-' + box.dataset.window + '-' + key), readInput(box, false));
+      if (box.dataset.key === 'Stimulus_onset_s') syncLinks(box.dataset.window);
       draftChanged();
     });
     $('control').addEventListener('change', () => {
@@ -978,7 +1100,7 @@
     $('protocol-import').addEventListener('change', async () => {
       const file = $('protocol-import').files[0]; if (!file) return;
       try { let parsed; try { parsed = JSON.parse(await file.text()); } catch (bad) { throw new Error(file.name + ' is not a valid JSON file (' + bad.message + '). Choose a protocol exported from SimpleCa²⁺ or this page.'); }
-        const result = await api('protocol', { protocol: parsed }); const draft = collectDraft(); draft.protocol = result.protocol; S.protocolDrafts = {}; S.note = null; fillDraft(draft); $('confirmed').checked = false; draftChanged(); }
+        const result = await api('protocol', { protocol: parsed }); const draft = collectDraft(); draft.protocol = result.protocol; S.protocolDrafts = {}; S.note = null; S.unlinked.clear(); fillDraft(draft); $('confirmed').checked = false; draftChanged(); }
       catch (error) { draftError(error); }
       finally { $('protocol-import').value = ''; }
     });
@@ -1006,7 +1128,7 @@
       try { await api('close', {}); S.closed = true; play(false); $('lost').textContent = 'This analysis page is closed. Saved results remain in the results folder. You can close this tab.'; $('lost').classList.add('on'); showState(); }
       catch (error) { draftError(error); }
     });
-    $('discard').addEventListener('click', () => { S.note = null; S.protocolDrafts = {}; fillDraft((S.results && S.results.appliedDraft) || S.initialDraft); $('confirmed').checked = false; for (const key of FILES) $(key + '-file').value = ''; draftChanged(); });
+    $('discard').addEventListener('click', () => { S.note = null; S.unlinked.clear(); S.protocolDrafts = {}; fillDraft((S.results && S.results.appliedDraft) || S.initialDraft); $('confirmed').checked = false; for (const key of FILES) $(key + '-file').value = ''; draftChanged(); });
     $('quality-filter').addEventListener('click', () => { S.qualityFlag = null; S.group = -1; showGroup(5); showQuality(); showTab('review'); });
     $('group').addEventListener('change', () => { if (Number($('group').value) !== 5 && S.qualityFlag) { S.qualityFlag = null; showQuality(); } });
     $('all-call-columns').addEventListener('change', () => table('table-calls', S.results.tables.calls));

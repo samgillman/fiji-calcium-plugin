@@ -89,6 +89,55 @@ const assert = require('assert/strict');
     assert.equal(originalProtocol.windows.length, 2);
     await screenshots('before');
 
+    // Stimulus timing: one stimulus time drives the linked fields, and the page says in frames what will be used.
+    const editor0 = page.locator('.window-editor[data-index="0"]'), window0 = () => page.evaluate(() => window.calciumStep4.collectDraft().protocol.windows[0]);
+    const times = await page.evaluate(() => window.calciumStep4.frameTimes());
+    assert.equal(await editor0.locator('.row.linked').count(), 2, 'baseline end and scoring start follow the stimulus time by default');
+    assert.match(await text('#frames-preview-0'), /F₀: frames 1–5\. Noise baseline: frames 2–6 \(5 samples\)\. Stimulus: at frame 7\. Scoring: frames 7–15\./);
+    assert.match(await text('#suggestion-0'), /suggested starting value \(frame 7\), not a measured stimulus time/);
+    assert.doesNotMatch(await text('#validation'), /Stimulus: the noise baseline holds/, 'five baseline samples are enough');
+    await page.fill('#window-0-Stimulus_onset_s', '2');
+    let edited = await window0();
+    assert.ok(edited.Stimulus_onset_s === times[4] && edited.Baseline_end_s === times[4] && edited.Start_s === times[4], 'linked fields take the identical stored number');
+    assert.equal(await page.locator('#side .field-error').count(), 0); assert.equal(await editor0.locator('[aria-invalid]').count(), 0);
+    assert.match(await text('#frames-preview-0'), /Noise baseline: frames 2–4 \(3 samples\)\. Stimulus: at frame 5\. Scoring: frames 5–15\./);
+    assert.ok(await page.isHidden('#suggestion-0'));
+    // The F₀ frames now reach the stimulus: the warning carries its repair.
+    assert.match(await text('#validation'), /The F₀ frames \(1–5\) include the stimulus time or later frames\./);
+    await page.locator('#validation .repair', { hasText: 'Use frames 1–4' }).click();
+    assert.equal(await page.inputValue('#baseline_end'), '4'); assert.doesNotMatch(await text('#validation'), /F₀ frames/);
+    // "Use frame" names the frame and moves everything linked.
+    await page.evaluate(() => window.calciumStep4.setFrame(9));
+    assert.equal(await editor0.locator('.from-frame').textContent(), 'Use frame 9 (4 s)');
+    await editor0.locator('.from-frame').click(); edited = await window0();
+    assert.ok(edited.Stimulus_onset_s === times[8] && edited.Baseline_end_s === times[8] && edited.Start_s === times[8]);
+    assert.equal(await page.locator('#side .field-error').count(), 0);
+    // A field set separately that conflicts is the one marked, with both values and a one-click repair; one message only.
+    await editor0.locator('.link-toggle').first().click(); await page.fill('#window-0-Baseline_end_s', '6');
+    assert.equal(await page.locator('#side .field-error').count(), 1);
+    assert.match(await editor0.locator('.field-error').textContent(), /Stimulus: the noise baseline ends at 6 s, after the stimulus at 4 s\.\s*Set to 4 s/);
+    assert.equal(await page.getAttribute('#window-0-Baseline_end_s', 'aria-invalid'), 'true'); assert.equal(await page.getAttribute('#window-0-Stimulus_onset_s', 'aria-invalid'), 'true');
+    assert.ok(await page.isDisabled('#analyze'));
+    await page.waitForFunction(() => JSON.stringify(window.calciumStep4.collectDraft()) === window.calciumStep4.S.draftAck);
+    assert.doesNotMatch(await text('#validation'), /[Bb]aseline must|noise baseline ends/, 'the same problem is not repeated in the list');
+    await editor0.locator('.field-error .repair').click();
+    assert.equal(await page.locator('#side .field-error').count(), 0); assert.equal((await window0()).Baseline_end_s, times[8]);
+    assert.equal(await editor0.locator('.row.linked').count(), 2);
+    // Too few baseline samples is counted correctly and named.
+    await page.fill('#window-0-Stimulus_onset_s', '1');
+    assert.match(await text('#validation'), /Stimulus: the noise baseline holds 1 sample \(frame 2\) but at least 3 are needed/);
+    // A typed time that reads the same as a frame time is that frame, hidden digits included.
+    assert.ok(await page.evaluate(() => {
+      const app = window.calciumStep4, box = document.getElementById('window-0-Stimulus_onset_s'); app.S.state.frameTimes[10] = 5.000000004;
+      box.value = '5'; box.dispatchEvent(new Event('input', { bubbles: true })); const w = app.collectDraft().protocol.windows[0];
+      return w.Stimulus_onset_s === 5.000000004 && w.Baseline_end_s === 5.000000004 && w.Start_s === 5.000000004;
+    }));
+    // The windows are drawn under the frame slider.
+    assert.ok(await page.locator('#time-windows .baseline').count() === 1 && await page.locator('#time-windows .scoring').count() === 1 && await page.locator('#time-windows .stimulus').count() === 1);
+    await page.click('#discard');
+    await page.waitForFunction((wanted) => JSON.stringify(window.calciumStep4.collectDraft()) === wanted, JSON.stringify(initial));
+    assert.equal(await editor0.locator('.row.linked').count(), 2, 'discard restores the values and the links');
+
     // Clearing the time source must not reuse the initial session clock.
     await page.getByText('Use recorded timestamps', { exact: true }).click();
     await page.click('#timestamps-clear'); await page.fill('#sampling_hz', '');
@@ -224,9 +273,11 @@ const assert = require('assert/strict');
     assert.ok(await page.isDisabled('#window-0-Duration_mode') && await page.isDisabled('#window-0-Min_duration_s'));
     assert.ok(await page.isEnabled('#window-0-Consecutive_samples'));
     assert.equal(await page.inputValue('#window-1-Stimulus'), 'KCl');
-    await page.fill('#window-0-Start_s', '5');
+    // In the legacy rule the baseline end and scoring start always follow the stimulus time, with no way to separate them.
+    await page.fill('#window-0-Stimulus_onset_s', '5');
     assert.equal(await page.inputValue('#window-0-Baseline_end_s'), '5');
-    assert.equal(await page.inputValue('#window-0-Stimulus_onset_s'), '5');
+    assert.equal(await page.inputValue('#window-0-Start_s'), '5');
+    assert.ok(await page.locator('#window-0-Start_s').isHidden() && await page.locator('.window-editor[data-index="0"] .link-toggle').first().isHidden());
     await page.uncheck('#control'); await page.check('#control');
     assert.equal(await page.inputValue('#window-1-Duration_mode'), 'samples');
     assert.equal(await page.inputValue('#window-1-Start_s'), '');
