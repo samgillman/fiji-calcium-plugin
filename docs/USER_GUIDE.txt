@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.6.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.7.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -57,7 +57,9 @@ from the raw file to a table of gray values per cell:
   2. It makes the cells visible: cells are green and very bright objects (precipitate, debris)
      are yellow. In Step 2, Picture switches between All frames, Baseline… (frames before the
      stimulus, so a cell looks the same whether or not it responds) and Response (magenta), which
-     looks for the response when first chosen. Magenta starts off; the view in use is recorded.
+     looks for the response when first chosen. The first screen's "Look for a response" box
+     is ticked by default, so magenta starts on; untick it or press All frames to choose cells
+     without it. The view in use is recorded.
      "‹ Change recording" goes back to the first screen; "‹ Back" buttons move between steps.
   3. You choose the cells: draw around each one, or let it suggest outlines and click the real cells.
      For every cell it finds a background area right next to that cell and shows it in blue.

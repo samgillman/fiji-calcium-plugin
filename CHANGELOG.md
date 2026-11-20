@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026.11.20.7
+
+- The first screen's **Look for a response and show it in magenta** box is now ticked by default, so a recording opens with magenta on when a response is found. Untick it, or press **All frames** in Step 2, to choose cells without it. The selection basis is still recorded with each measurement: response-assisted when magenta was in use, all frames otherwise. Measurements and thresholds are unchanged.
+
 ## 2026.11.20.6
 
 - Step 2 has a **Picture** switch: **All frames**, **Baseline…** and **Response (magenta)**. Magenta can now be turned on after the recording is open; the response is looked for at that moment, exactly as the first screen's option does, and the picture changes in place so outlines and clicks keep working. The first screen's option still works and still starts unticked.

@@ -27,11 +27,11 @@ def movie = new ImagePlus('views.tif', stack); def before = movie.getStack().get
 def imagej, hooks, roiManager
 try {
     onUI { imagej = new ImageJ(ImageJ.NO_SHOW); movie.show(); roiManager = new RoiManager(false) }
-    // the first screen: the open recording is offered; "look for a response" stays unticked, as by default
+    // the first screen: the open recording is offered; "look for a response" is unticked here, so the views start from all frames
     Thread.start {
         Window dialog = null; long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
         while (dialog == null && System.nanoTime() < end) { Thread.sleep(50); dialog = Window.getWindows().find { it instanceof JDialog && it.visible && it.title?.startsWith('Calcium imaging') } }
-        SwingUtilities.invokeLater { everything(dialog).find { it instanceof JButton && it.text == 'Next' }?.doClick() }
+        SwingUtilities.invokeLater { def box = everything(dialog).find { it instanceof javax.swing.JCheckBox }; assert box.selected : 'ticked by default'; box.setSelected(false); everything(dialog).find { it instanceof JButton && it.text == 'Next' }?.doClick() }
     }
     def binding = new Binding([CALCIUM_TEST_GUI: true])
     new GroovyShell(getClass().classLoader, binding).evaluate(new File('scripts/Plugins/Calcium Imaging/Calcium_Cells_Step_By_Step.groovy'))
