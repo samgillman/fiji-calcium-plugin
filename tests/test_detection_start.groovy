@@ -13,7 +13,7 @@ def fragment = source.substring(source.indexOf('def detectionRunner ='),source.i
     def panel = (failure == 'begin' ? BrokenPanel : Panel).newInstance()
     def info = new JLabel()
     def calls = new java.util.concurrent.atomic.AtomicInteger()
-    def binding = new Binding([suggestBtn:button,detectionProgress:panel,info:info,proposals:[],forceFresh:false,cellposeBusy:false,
+    def binding = new Binding([suggestBtn:button,detectionProgress:panel,info:info,proposals:[],forceFresh:false,cellposeBusy:false,detecting:false,hiddenKinds:[] as Set,paintLegend:{ -> },steps:new Expando(blind:false),
         showCellposeState:{ state -> },
         frame:new Expando(refreshContents:{ -> if(failure=='window') throw new IOException('simulated window error') }),
         refresh:{ force -> if(failure=='completion') throw new IOException('simulated result display error') },

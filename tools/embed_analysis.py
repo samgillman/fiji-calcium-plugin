@@ -32,13 +32,20 @@ def web_bundle():
             info.create_system=3; info.external_attr=0o100644 << 16
             z.writestr(info,content)
     data=out.getvalue()
-    return WEB_START+'\nclass CalciumWebBundle {\n    static final String SHA256 = "'+hashlib.sha256(data).hexdigest()+'"\n    static final String CONTENT = "'+base64.b64encode(data).decode()+'"\n}\n'+WEB_END
+    # A string constant in a class file holds at most 65535 characters, so the page travels in parts joined at load.
+    text=base64.b64encode(data).decode(); parts=[text[i:i+60000] for i in range(0,len(text),60000)]
+    return (WEB_START+'\nclass CalciumWebBundle {\n    static final String SHA256 = "'+hashlib.sha256(data).hexdigest()+'"\n    static final List<String> PARTS = [\n        "'
+            +'",\n        "'.join(parts)+'"]\n    static final String CONTENT = PARTS.join("")\n}\n'+WEB_END)
 def sync_web(s,check):
     if WEB_START not in s: raise ValueError('Missing web bundle marker')
     a=s.index(WEB_START); b=s.index(WEB_END,a)+len(WEB_END)
     if not check: return s[:a]+web_bundle()+s[b:]
     digest=re.search(r'SHA256 = "([a-f0-9]{64})"',s[a:b]).group(1)
-    data=base64.b64decode(re.search(r'CONTENT = "([A-Za-z0-9+/=]+)"',s[a:b]).group(1),validate=True)
+    listed=re.search(r'PARTS = \[(.*?)\]',s[a:b],re.S)
+    if not listed: raise ValueError('Run python tools/embed_analysis.py before packaging')
+    parts=re.findall(r'"([A-Za-z0-9+/=]+)"',listed.group(1))
+    if any(len(part)>65000 for part in parts): raise ValueError('An embedded Step 4 page part is too long for a string constant')
+    data=base64.b64decode(''.join(parts),validate=True)
     if hashlib.sha256(data).hexdigest()!=digest: raise ValueError('Invalid embedded Step 4 page checksum')
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         expected=web_sources()

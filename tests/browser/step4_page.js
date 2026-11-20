@@ -296,6 +296,7 @@ const assert = require('assert/strict');
 
     // Dragging begins on another cell's trace; pointer capture keeps it scrubbing.
     await page.locator('#plot').scrollIntoViewIfNeeded();
+    await page.click('[data-plot=cell]'); await page.check('#every');   // the page opens on the average alone
     const points = await page.evaluate(() => {
       const { S, Plot } = window.calciumStep4, g = Plot.geom, box = document.getElementById('plot').getBoundingClientRect();
       const x = (t) => box.left + g.L + (t - g.x0) / (g.x1 - g.x0) * g.W;

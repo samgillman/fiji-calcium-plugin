@@ -47,12 +47,20 @@ try {
         // blind: the response was looked for only to offer the frames before it; it is in neither the window nor the picture for Cellpose
         assert steps.looked && steps.found && offeredFrames == [1, steps.estimatedLastBeforeStimulus()] && steps.b1 < steps.onset : 'The plugin offers the frames before the rise it found'
         assert steps.blind && steps.blindFirst == 1 && steps.blindLast == steps.b1 && hooks.selectionBasis() == 'Pre-stimulus, blind (frames 1-' + steps.b1 + ')'
+        // the Next line names the one thing to do; adding responders is offered only once there are blind cells
+        assert hooks.nextLine.text.contains('Next:') && hooks.nextLine.text.contains('Suggest cells automatically') && hooks.addRespondersBtn.visible && !hooks.addRespondersBtn.enabled
+        assert hooks.acceptAllBtn.text == 'Accept likely (0)'
         assert picture instanceof CompositeImage && picture.getNChannels() == 3 && active(picture) == '110' : 'Room for magenta, switched off'
         assert (picture.getStack().getPixels(3) as float[]).every { it == 0f } : 'Nothing of the response is held in the window while choosing blind'
         assert (picture.getStack().getPixels(2) as float[]) == steps.framesPicture(1, steps.b1) : 'The picture shows the frames before the stimulus'
         int[] forCellpose = steps.outlinePicture().getProcessor().getPixels()
         assert forCellpose.every { ((it >> 16) & 255) == 0 && (it & 255) == 0 } && forCellpose.any { ((it >> 8) & 255) > 0 } : 'Cellpose gets the pre-stimulus picture only, no magenta'
         assert steps.outlinePicture().getProcessor().getPixels() == steps.blindOutlinePicture().getProcessor().getPixels()
+        // the two blind pictures for Cellpose: the same pre-stimulus picture, capped at 2 and at 8 gray levels
+        assert steps.blindOutlinePicture(steps.BLIND_CAP).getProcessor().getPixels() == steps.blindOutlinePicture().getProcessor().getPixels()
+        float[] high = steps.blindDetectionPicture(steps.BLIND_CAP_HIGH)
+        assert (0..<high.length).every { int i -> Math.abs(high[i] - Math.max(0d, Math.min(1d, steps.blindPic[i] / 8d))) < 1e-6 } && high != steps.blindDetectionPicture()
+        assert steps.blindRecipe().contains('from 0 to 2 and from 0 to 8 gray levels') && steps.blindRecipe().contains('less than 10 %')
         assert hooks.viewBaselineBtn.getUI().chosen && !hooks.viewResponseBtn.getUI().chosen && hooks.selectionNote.text.contains('Blind')
         assert hooks.recordingNote.text.contains('blind') && !hooks.recordingNote.text.contains('magenta')
         assert hooks.sensBox.visible && !hooks.respondsLegend.visible && hooks.trace.vals == null && hooks.trace.caption.contains('hidden')
@@ -60,6 +68,16 @@ try {
         hooks.rm.addRoi(new OvalRoi(16, 22, 16, 16)); hooks.refresh(true)
         assert hooks.hoverAt(24, 30).contains('Your cell 1') && hooks.trace.vals == null && !hooks.responseSeen() : 'No trace while choosing blind'
         assert hooks.basisFor(hooks.cellRois()) == 'Pre-stimulus, blind (frames 1-' + steps.b1 + ')'
+        assert hooks.nextLine.text.contains('Add cells that respond') && hooks.nextLine.text.contains('Continue to measure') && hooks.addRespondersBtn.enabled : 'With blind cells chosen, the next step is offered: ' + hooks.nextLine.text
+        // the legend switches kinds off and on: a click hides or shows one kind, a double-click shows only that kind
+        int drawnAll = picture.getOverlay().size()
+        hooks.legendClicked('cells', false); int withoutCells = picture.getOverlay().size()
+        assert withoutCells < drawnAll && hooks.hiddenKinds == ['cells'] as Set : 'Your cells can be hidden'
+        hooks.legendClicked('cells', false); assert picture.getOverlay().size() == drawnAll && hooks.hiddenKinds.isEmpty()
+        hooks.legendClicked('background', false); hooks.legendClicked('background', true)
+        assert hooks.hiddenKinds == ['cells', 'g0', 'g1', 'g2', 'g3'] as Set && picture.getOverlay().size() <= withoutCells : 'Double-click: only the background'
+        hooks.legendClicked('background', false); hooks.legendClicked('background', true)
+        assert hooks.hiddenKinds.isEmpty() && picture.getOverlay().size() == drawnAll : 'Double-click again: everything'
         // grades: shape, size and brightness only; never "responds", whatever the rise
         double[] ev = steps.grade(new OvalRoi(4, 22, 40, 16)); assert ev[0] != 0d && ev[5] == 0d && ev[6] == 0d
         assert steps.grade(new OvalRoi(4, 22, 40, 16), false)[5] > 1d : 'With the response the same outline does rise'
@@ -71,6 +89,7 @@ try {
         assert other.grade(new OvalRoi(16, 22, 16, 16)) == steps.grade(new OvalRoi(16, 22, 16, 16)) : 'Blind grades do not change with the response frames'
         canvas = picture.getCanvas(); listeners = canvas.getMouseListeners() as List
         hooks.viewAllBtn.doClick()
+        assert !hooks.addRespondersBtn.visible && hooks.nextLine.text.contains('Continue to measure') && !hooks.nextLine.text.contains('Add cells that respond') && !hooks.autoSuggestAsked()
         assert !steps.blind && hooks.selectionBasis() == 'All-frames structural review' && active(picture) == '110' && hooks.viewAllBtn.getUI().chosen
         assert !hooks.sensBox.visible && hooks.respondsLegend.visible && hooks.recordingNote.text.contains('response near frame')
         assert (picture.getStack().getPixels(2) as float[]) == (steps.allPic.getProcessor().getPixels() as float[])
