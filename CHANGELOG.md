@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.11.20.17
+
+- **Movement is measured against the frames the cells are chosen on.** Build .16 compared every frame with where the field sits for most of the recording, so on a recording that drifts slowly it called the first hundred frames "moved", although those are the frames the outlines were drawn on. While cells are chosen blind, the message now reads, for example, "The field sits about 4 px from where the cells are chosen (frames 1–20) from frame 139 on."
+- The shift is estimated between the 4-pixel steps of the check, with the smooth lamp light and haze taken off first, so a slow drift is no longer reported as a sudden step.
+- Worded by size: from 2.5 pixels the field "sits about N px from…" or "drifted by about N px"; from 8 pixels it "moved" and the outlines are no longer on the same cells. Under 2.5 pixels nothing is said. Only movement of 8 pixels or more is left out of the resting picture and offered a repair on the Step 4 page.
+- When the frames the cells are chosen on moved themselves, the message says that their picture is smeared (C1 Run3 KCl: 18 px during frames 1–6, settling by frame 15, chosen on frames 1–20).
+- A run of noisy frames is reported as one piece ("34 frames between 2 and 119") instead of a list of fragments.
+- Measured with it: P2 Run2 capsaicin drifts about 4 px over the recording, C2 Run1 about 6 px with a jolt at frame 8, P3 Run2 and C3 Run2 under 2 px.
+
 ## 2026.11.20.16
 
 - **Movement check.** When a recording is opened the plugin measures, frame by frame, how far the field is displaced from where it sits for most of the recording (on a picture reduced four times; shifts of 4 pixels or more count; about 3 s for 300 frames). Nothing is corrected. When frames moved, the Recording card, the log and `what_was_done.txt` say which ("The field moved (about 16 px) during frames 1–10").

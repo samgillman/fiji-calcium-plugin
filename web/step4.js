@@ -366,6 +366,9 @@
           if (legacy) warn(label + 'the response window ends after the last frame. Cells may get no call.', { text: 'End at frame ' + n, run: setFrames([['resp-to', n]]) });
           else conflict(ids('resp-to'), 'resp-to-' + index, label + 'the response window ends after the last frame (' + seconds(+last.toFixed(2)) + '). No cell would get a call.', { text: 'End at frame ' + n, run: setFrames([['resp-to', n]]) });
         }
+        // A field that sits a few pixels from where the cells were chosen: said once, as the plugin words it (no repair: nothing is wrong with the frames chosen)
+        if (!index && S.info.motion && S.info.motionNote && !S.info.motion.moved && S.info.motion.slight > 0) warn(S.info.motionNote + ' The outlines are slightly off the cells there.');
+        if (!index && S.info.motion && S.info.motion.moved && S.info.motion.smeared) warn('The cells were chosen on frames ' + S.info.motion.smeared[0] + '–' + S.info.motion.smeared[1] + ', which include the movement, so their picture is smeared.');
         if (!index && movedRuns().length) {
           // The field moved: in those frames the outlines are not on the same cells. Baselines should leave them out.
           const f0 = [Number(value.baseline_start), Number(value.baseline_end)], size = 'The field moved (about ' + S.info.motion.largest + ' px) during ' + movedText() + '. ';
