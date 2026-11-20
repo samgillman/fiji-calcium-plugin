@@ -15,8 +15,8 @@ def makeUI = {
     ])
     new GroovyShell(loader,binding).evaluate('import ij.IJ\nimport ij.Prefs\nimport java.awt.Color\n' +
         fragment.replace('frame.setAlwaysOnTop(true)', 'frame.setAlwaysOnTop(false)') +
-        '\nreturn [frame:frame,root:root,scroll:scroll,progress:detectionProgress,close:closeBtn,go:go,add:addBtn,updates:updateCheck,release:releaseBtn,trace:trace,info:info,\n' +
-        '    openStep:openStep,choose:s2,measure:s3,analyze:s4,updatesCard:updatesCard,next:continueBtn,analyzeButton:analyzeBtn]')
+        '\nreturn [frame:frame,root:root,scroll:scroll,progress:detectionProgress,close:closeBtn,go:go,add:addBtn,trace:trace,info:info,\n' +
+        '    openStep:openStep,choose:s2,measure:s3,analyze:s4,next:continueBtn,analyzeButton:analyzeBtn]')
 }
 def onUI = { Closure action -> SwingUtilities.invokeAndWait(action as Runnable) }
 def settle = { ui ->
@@ -77,7 +77,7 @@ try {
                     100,100,0,false,MouseWheelEvent.WHEEL_UNIT_SCROLL,3,4))
                 assert ui.scroll.verticalScrollBar.value > 0 : 'Mouse wheel did not scroll'
                 // Steps 2 to 4 share the space: opening one closes the others, and each one's controls can be scrolled to.
-                assert ui.choose.expanded && !ui.measure.expanded && !ui.analyze.expanded && !ui.updatesCard.visible
+                assert ui.choose.expanded && !ui.measure.expanded && !ui.analyze.expanded
                 assert !ui.go.isShowing() && ui.add.isShowing()
                 ui.next.doClick(); ui.frame.validate()
                 assert ui.measure.expanded && !ui.choose.expanded && !ui.add.isShowing()
@@ -88,21 +88,19 @@ try {
                 ui.openStep(ui.choose); ui.frame.validate()
                 assert ui.choose.expanded && !ui.analyze.expanded
                 reveal(ui,ui.add)
-                ui.updatesCard.setVisible(true)
                 // Every label and button uses the look and feel's own interface font, never a fixed family.
                 String family = UIManager.getFont('Label.font').family
                 def fonts; fonts = { c -> if (c instanceof JLabel || c instanceof AbstractButton) assert c.font.family == family : "Fixed font on ${c.class.simpleName}: ${c.font}"
                     if (c instanceof Container) c.components.each { fonts(it) } }
                 fonts(ui.root)
                 ui.progress.begin().report(40,'Finding cells','Long-running CPU detection')
-                ui.release.setVisible(true)
                 ui.frame.refreshContents()
             }
             settle(ui)
             onUI {
                 assert ui.frame.size == new Dimension(340,360) : 'Progress or update status changed the chosen window size'
                 controlsFit(ui)
-                reveal(ui,ui.progress.detailsButton); reveal(ui,ui.release); reveal(ui,ui.close)
+                reveal(ui,ui.progress.detailsButton); reveal(ui,ui.close)
                 ui.progress.finish(true,'444 suggestions; Cellpose finished')
                 ui.info.setText('<html><body style="width:300px">Suggestions are ready to review.</body></html>')
                 ui.frame.refreshContents()
@@ -120,7 +118,7 @@ try {
             onUI { controlsFit(ui); reveal(ui,ui.close) }
             println 'PASS: step cards, interface font, resize, uncompressed controls, wheel scrolling, both scrollbars, bottom/right controls, stable size (' + look + ')'
         } finally {
-            onUI { ui?.progress?.close(); ui?.updates?.close(); ui?.frame?.dispose() }
+            onUI { ui?.progress?.close(); ui?.frame?.dispose() }
         }
     }
 } catch (Throwable failure) {

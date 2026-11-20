@@ -35,6 +35,14 @@ jobs:
       - name: Exercise native Windows resizing and scrolling
         if: runner.os == 'Windows'
         run: python tools/run_tests.py --gui-only
+      - name: Save recording chooser preview
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: recording-chooser-${{ matrix.os }}
+          path: build/start-update-screen.png
+          if-no-files-found: ignore
+          retention-days: 14
 
   browser:
     name: Step 4 browser
