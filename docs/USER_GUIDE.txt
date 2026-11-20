@@ -7,6 +7,9 @@ After Measure and save, open Analyze responses. On first use, click Set up analy
 Confirm the recording frame rate, baseline frames and stimulus times before running analysis.
 Traces, heatmap, metrics, cell response calls and counts open inside Fiji. Selecting a trace,
 table cell or heatmap row highlights its outline on the cell picture inside the same window.
+A time slider and Play button move a line on the traces; with "Movie: change from rest" chosen
+above the picture, the picture shows the recording at that moment, so you can watch a cell
+brighten as its trace rises. Every cell's trace is drawn behind the mean, coloured by its call.
 Step 4 uses the UNLIFTED background-corrected fluorescence. It keeps invalid-baseline and
 unscorable cells in the quality/count tables and reports the evaluable denominator explicitly.
 The older "every cell kept" export below is retained for compatibility; Step 4 never uses it.

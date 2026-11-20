@@ -4,6 +4,12 @@
 
 - Step 1: choosing **Choose a file from disk...** now opens the file chooser straight away, and a **Choose file…** button with the chosen file's name sits under the list. Before, the chooser only appeared after **Next**, so picking that entry looked as if nothing happened.
 - **Next** still asks for the file if none was chosen, and stays on Step 1 if that is cancelled instead of closing the plugin.
+- Step 4, movie beside the traces: a time slider, a **Play** button and a line on the plot move together, and the picture can show the recording at that moment. **Movie: change from rest** shows each frame minus the average of the baseline frames (lightly smoothed), so a responding cell lights up as its trace rises; **Movie: as recorded** shows the frame itself. **Zoom to cell** and **All outlines** help follow one cell. The recording is only read. Display only: nothing measured or saved changes.
+- Step 4, every trace: all cells are drawn behind the mean, coloured by response call (the SimpleCa²⁺ colours), with the selected cell on top. The y-axis covers 99 % of all values so one extreme cell cannot flatten the rest.
+- Step 4, cell groups: list and draw only responders, non-responders, or excluded and unscorable cells, from the **Show** list or by clicking a headline tile. A line under the list says what was decided for the selected cell, with the largest rise and the threshold from the saved table. Left and right arrow keys step through the cells.
+- Step 4 heatmap: responders first with the strongest on top (or as measured), a colour scale that covers 99 % of the values instead of the single largest, taller rows with readable names, a strip for each cell's call, and markers for the baseline and the stimulus.
+- Step 4 layout: narrower settings column that can be hidden, picture and traces side by side, larger default window. **Also score a separate KCl window** is now **Include a KCl control**, with an explanation.
+- Main window: a long recording name or folder name is shortened in the middle (full text in the tooltip), so it no longer pushes the window contents off the right edge.
 
 ## 2026.11.20.1
 
