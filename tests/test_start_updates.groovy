@@ -79,13 +79,22 @@ try {
         assert ready.panel.installBar.value==100 && ready.panel.updateNote.text.contains('restart Fiji')
         assert control(ready.dialog,'Next').enabled && control(ready.dialog,'Cancel').enabled
         assert !ready.panel.updateBtn.enabled && !ready.panel.installBtn.enabled
-        ready.dialog.setSize(420,360);ready.dialog.validate()
+        ready.dialog.setSize(420,360)
+    }
+    // Native resize events arrive after setSize returns. Check and render the settled layout.
+    await { ready.dialog.contentPane.width<=420 && ready.dialog.contentPane.height<=360 }
+    onUI {
+        ready.dialog.validate()
         def scroll=all(ready.dialog).find { it instanceof JScrollPane }
         assert scroll.verticalScrollBar.visible && scroll.wheelScrollingEnabled
         def next=control(ready.dialog,'Next')
         assert !SwingUtilities.isDescendingFrom(next,scroll) : 'Next must stay outside the scrolling content'
         assert ready.dialog.contentPane.bounds.contains(SwingUtilities.convertRectangle(next.parent,next.bounds,ready.dialog.contentPane))
-        ready.dialog.setSize(680,700);ready.dialog.validate()
+        ready.dialog.setSize(680,700)
+    }
+    await { ready.dialog.contentPane.width>=600 && ready.dialog.contentPane.height>=600 }
+    onUI {
+        ready.dialog.validate()
         // Save a rendering of this real UI for visual review without capturing the user's desktop.
         def rendered=new java.awt.image.BufferedImage(ready.dialog.width,ready.dialog.height,java.awt.image.BufferedImage.TYPE_INT_RGB)
         def g=rendered.createGraphics();try{ready.dialog.paint(g)}finally{g.dispose()}
