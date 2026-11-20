@@ -89,7 +89,8 @@ def proposals = [[roi:'previous']]
 System.setProperty('calcium.steps.pretend_no_gpu', 'true')
 def stepStub = new Expando()
 stepStub.outlinePicture = { -> new ImagePlus('mock', new ij.process.ColorProcessor(100,100)) }
-stepStub.grade = { roi -> [1,225,1,0,1,0,0,0] as double[] }
+def gradedWith = []
+stepStub.grade = { roi, blindGrade = null -> gradedWith << blindGrade; [1,225,1,0,1,0,0,0] as double[] }
 stepStub.say = { s -> }
 stepStub.nearEdge = { roi -> roi.bounds.x < 20 }
 def source = plugin.text
@@ -112,6 +113,14 @@ assert success.snapshot().context.contains('New detection')
 assert success.snapshot().context.contains('100 x 100 pixels')
 assert success.snapshot().context.contains('diameter 60')
 assert !new File(runDir,'cellpose_run_incomplete.txt').exists()
+// The sensitivity check's comparison run: saved outlines of the same picture are reused even after "Suggest cells again",
+// the outlines are graded with the response and go to their own list, and the suggestions on screen are untouched.
+def comparisonOutlines = [], shownBefore = proposals.collect { it }; gradedWith.clear()
+def comparison = Task.newInstance(progress: { p,s,d -> })
+def compared = suggest(comparison, [picture: new ImagePlus('response-assisted', new ij.process.ColorProcessor(100,100)), dir: runDir, into: comparisonOutlines])
+assert compared.startsWith('3 response-assisted outlines;') && compared.contains('were used again') && comparison.succeeded
+assert comparisonOutlines.size() == 3 && proposals == shownBefore && gradedWith == [false, false, false] && !comparisonOutlines.any { it.blind }
+println 'PASS: comparison run for the sensitivity check reuses saved outlines, grades with the response, leaves suggestions alone'
 new File(runDir,'fail-all').text = ''
 binding.setVariable('forceFresh',false)
 def reused = Task.newInstance(progress: { p,s,d -> })

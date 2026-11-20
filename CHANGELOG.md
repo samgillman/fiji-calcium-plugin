@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026.11.20.7
+
+- **Blind cell selection for % responding.** Step 1 now asks how cells are chosen: **Before the stimulus only (blind)**, the default, **All frames**, or **All frames, with the response in magenta**. The magenta choice stays off by default.
+- Blind: you confirm the last frame before the stimulus. The plugin offers the frames that end well before the rise it finds, and asks you to type it when no response is found. The picture shows those frames only, with nothing in the magenta channel. Cellpose gets that picture only, never the response (saved in `automatic_outlines_blind/` with `detection_picture.txt`). Suggestions are graded on shape, size and brightness in that picture, so no suggestion is graded "responds". Hovering shows what a cell is but no trace. Changing the frames after the stimulus changes nothing about blind detection.
+- The blind picture for Cellpose is shown from 0 to 2 gray levels with brighter pixels capped, so very bright objects cannot flatten dim cells. On P3 Run2 ATP (real Cellpose), of 260 response-assisted outlines that could be cells, the pre-stimulus picture found 94 at the old 0–8 range and 131 at 0–2. Of the 182 cells accepted there on the magenta picture, it found 59 and 91. A square root on the levels, or dividing by the lamp light, found fewer. Not yet tried on other recordings.
+- Step 2's **Baseline…** view is replaced by **Before stimulus (blind)…**. Before, it changed only the picture on screen while Cellpose still got the all-frames picture. It now switches the whole selection to blind. Suggestions made with the response are dropped from view when switching to blind.
+- The recorded selection basis is `Pre-stimulus, blind (frames a-b)` only if nothing of the response (magenta, a trace, the analysis page) had been shown before the outlines were final. Outlines changed after that are recorded as `Pre-stimulus picture (frames a-b), not blind: …`. Showing magenta from the blind view asks first.
+- **Sensitivity check** (Step 3 tick box, blind only, on by default): after measuring, response-assisted detection runs once for comparison, reusing saved outlines when the picture matches. The report gives how many of its outlines that could be cells the blind detection also found, by grade, and how many coincide with measured cells. It is added to `what_was_done.txt`, with `..._sensitivity_check.csv` and the missed outlines as `..._sensitivity_check_missed_RoiSet.zip`. The comparison outlines are never added to the cells or measured.
+- The plugin window no longer floats over other programs when the plugin is started while another program is in front. It stays above Fiji's own windows only while Fiji is in use, and drops back within about two seconds when it is not.
+- A copy newer than the latest release (a test build) now says so on the first screen instead of "You are up to date".
+- Measurements, background rules, response thresholds and Step 4 are unchanged. The response-assisted and all-frames detection pictures are unchanged (checked byte for byte against the saved P3 Run2 picture).
+
 ## 2026.11.20.6
 
 - Step 2 has a **Picture** switch: **All frames**, **Baseline…** and **Response (magenta)**. Magenta can now be turned on after the recording is open; the response is looked for at that moment, exactly as the first screen's option does, and the picture changes in place so outlines and clicks keep working. The first screen's option still works and still starts unticked.

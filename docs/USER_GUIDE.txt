@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.6.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.7.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -55,9 +55,19 @@ from the raw file to a table of gray values per cell:
 
   1. You choose the recording and a folder for the results.
   2. It makes the cells visible: cells are green and very bright objects (precipitate, debris)
-     are yellow. In Step 2, Picture switches between All frames, Baseline… (frames before the
-     stimulus, so a cell looks the same whether or not it responds) and Response (magenta), which
-     looks for the response when first chosen. Magenta starts off; the view in use is recorded.
+     are yellow. Step 1 asks how cells are chosen:
+       - Before the stimulus only (blind), the default and the choice for % responding. You confirm
+         the last frame before the stimulus (the plugin offers the frames that end well before the
+         rise it finds). The picture, the suggested outlines and their grades then come from those
+         frames only; the response is never shown, traces are hidden while choosing, and no
+         suggestion is graded "responds". Whether a cell is chosen cannot depend on its response.
+       - All frames: the average of all frames, which includes the frames after the stimulus.
+       - All frames with the response in magenta: dim cells are then found only if they respond,
+         which raises % responding. Use it for the size or timing of responses, not for % responding.
+     In Step 2, Picture switches between All frames, Before stimulus (blind)… and Response (magenta).
+     The way cells were chosen is recorded with every measurement. "Pre-stimulus, blind" is recorded
+     only if nothing of the response (magenta, a trace, Step 4) was shown before the outlines were
+     final; outlines changed after that are recorded as not blind.
      "‹ Change recording" goes back to the first screen; "‹ Back" buttons move between steps.
   3. You choose the cells: draw around each one, or let it suggest outlines and click the real cells.
      For every cell it finds a background area right next to that cell and shows it in blue.
@@ -175,6 +185,27 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        the colour picture simply has no magenta.
   Colour picture       green = all-frames picture (0 to 8); red = the same picture shown 10 to 30, so
                        only very bright objects get red and turn yellow; magenta = response picture.
+  Blind picture        The same steps as the all-frames picture on the frames before the stimulus only
+                       (Z Project Sum Slices of those frames, Divide, Subtract Background 150, Gaussian
+                       Blur 1.5). Cellpose gets it shown from 0 to 2 gray levels with brighter pixels
+                       capped, so precipitate and rounded cells do not flatten the dim cells; never the
+                       response. Suggestions are graded on this picture (size, brightness, contrast).
+                       Saved as automatic_outlines_blind/..._for_automatic_outlines.tif with
+                       detection_picture.txt. The cap was chosen on one recording (P3 Run2 ATP, 18 Nov
+                       2026): of 260 response-assisted outlines that could be cells, cap 8 found 94 and
+                       cap 2 found 131.
+  Sensitivity check    After a blind measurement (tick box in Step 3, on by default) the response-
+                       assisted detection runs once for comparison (saved outlines are reused). The
+                       report says how many of its outlines that could be cells (graded responds,
+                       likely or unsure) the blind detection also found, by grade. A response-assisted
+                       outline counts as found when a blind outline contains its centre or it contains
+                       the centre of a blind outline. Its outlines are never added to the cells or
+                       measured. Files: ..._sensitivity_check.csv and
+                       ..._sensitivity_check_missed_RoiSet.zip (the missed ones that could be cells; open it in the
+                       ROI Manager). If most are
+                       found, the blind picture picks up dim cells well. If many are missed, % responding
+                       is still unbiased only if cells that are dim at rest respond at the same rate as
+                       the others: state that assumption with the result.
   Background of a cell A band from 6 to 40 pixels outside the cell's outline, without other cells
                        (widened by 4 pixels) and without bright objects. Of the pixels left, the
                        darkest quarter (ranked in the all-frames picture) is that cell's background.

@@ -1,4 +1,4 @@
-// Calcium imaging: cells step by step                                                    version 2026.11.20.6
+// Calcium imaging: cells step by step                                                    version 2026.11.20.7
 // One plugin for the whole job on one recording:
 //   1. choose the recording (already open in Fiji, or a file) and a folder for the results
 //   2. the plugin makes the cells visible: all-frames picture, response (found automatically, if there is one), and a
@@ -65,6 +65,12 @@ class CalciumSteps {
     static int MIN_PIXELS = 150          // fewer usable pixels: the band is doubled once; still fewer: no background
     static int SUGGEST_MIN_AREA = 150, SUGGEST_MAX_AREA = 6000   // automatic outlines outside this size (pixels) are not shown
     static double SUGGEST_BRIGHT = 12    // automatic outlines brighter than this on average are shown in orange: probably precipitate
+    // Blind selection: cells are found and accepted on frames before the stimulus only, so whether a cell is chosen cannot depend on its response.
+    // Detection picture for Cellpose: 0 to BLIND_CAP gray levels, brighter pixels capped, so precipitate and rounded cells cannot take
+    // over the range and flatten the dim cells. Chosen on P3 Run2 ATP (20 Nov 2026, real Cellpose): of 260 response-assisted outlines
+    // that could be cells, cap 8 found 94, cap 4 127, cap 3 128, cap 2 131 (and 91 of the 182 cells accepted there, against 59 at
+    // cap 8); a square root on the levels or dividing by the lamp light found fewer. Untested on other recordings.
+    static double BLIND_CAP = 2
     // -------------------------------------------------------------------
 
     ImagePlus movie
@@ -82,13 +88,16 @@ class CalciumSteps {
     List<String> log = []
     Roi[] alsoAvoid = new Roi[0]         // outlines that are not measured (cells at the edge that are left out) but must never serve as background
     String edgeNote = ""                 // what was done about cells at the picture's edge, for the record of steps
+    boolean blind = false                // cells are being chosen blind: picture, suggestions and grades come from frames blindFirst..blindLast only
+    int blindFirst = 0, blindLast = 0
+    float[] blindPic                     // frames blindFirst..blindLast, processed like the all-frames picture (shown, and used to grade suggestions)
 
     void say(String s) { log.add(s) }
 
     /** Steps 1-2: pictures. The movie is only read. */
     void prepare(ImagePlus imp, boolean lookForResponse) {
         movie = imp; n = imp.getStackSize(); w = imp.getWidth(); h = imp.getHeight()
-        say("Calcium imaging plugin, version 2026.11.20.6")
+        say("Calcium imaging plugin, version 2026.11.20.7")
         say("Recording: " + imp.getTitle() + " (" + n + " frames, " + w + " x " + h + ", " + imp.getBitDepth() + "-bit)")
         ImagePlus sum = ZProjector.run(imp, "sum")                                   // Image > Stacks > Z Project, Sum Slices
         FloatProcessor avg = (FloatProcessor) sum.getProcessor().convertToFloat()
@@ -161,14 +170,36 @@ class CalciumSteps {
         return true
     }
     void hideResponse() { if (colourPic.getNChannels() >= 3) { ((CompositeImage) colourPic).setActiveChannels("110"); colourPic.updateAndDraw() } }
-    /** A picture for choosing cells from frames first to last only, processed like the all-frames picture. Display only. */
-    float[] baselinePicture(int first, int last) {
-        ImagePlus preview = ZProjector.run(movie, "avg", first, last)
-        ImagePlus picture = new ImagePlus("baseline_" + movie.getTitle(), preview.getProcessor().convertToFloat())
+    /** A picture from frames first to last only, made like the all-frames picture: Z Project Sum Slices, Divide by the number
+     *  of frames, Subtract Background, Gaussian Blur. */
+    float[] framesPicture(int first, int last) {
+        ImagePlus sum = ZProjector.run(movie, "sum", first, last)
+        FloatProcessor avg = (FloatProcessor) sum.getProcessor().convertToFloat()
+        avg.multiply(1.0d / (last - first + 1))
+        ImagePlus picture = new ImagePlus("before_stimulus_" + movie.getTitle(), avg)
         IJ.run(picture, "Subtract Background...", "rolling=" + (int) BALL_RADIUS)
         IJ.run(picture, "Gaussian Blur...", "sigma=" + BLUR_PICTURE)
         return (float[]) picture.getProcessor().getPixels()
     }
+    /** The last frame before the stimulus as the plugin estimates it: the end of the frames before the rise, which stop well
+     *  ahead of it, so early responders are not in them. 0 when no response was found. Only the time is used, not which cells rose. */
+    int estimatedLastBeforeStimulus() { return found ? b1 : 0 }
+    /** Blind selection from here on: the picture shows frames first..last only, the response channel is emptied, and new
+     *  suggestions are found and graded on that picture without the response. Measurements are not affected. */
+    void startBlind(int first, int last) { startBlind(first, last, framesPicture(first, last)) }
+    /** The same with the picture already made (framesPicture can run off the window's thread; this part changes the window). */
+    void startBlind(int first, int last, float[] picture) {
+        blindPic = picture; blindFirst = first; blindLast = last; blind = true
+        if (colourPic != null) {
+            if (colourPic.getNChannels() >= 3) Arrays.fill((float[]) colourPic.getStack().getPixels(3), 0f)   // nothing of the response stays in the window
+            showPicture(blindPic); hideResponse()
+        }
+        log.removeAll { String s -> s.startsWith("Blind selection:") }
+        say("Blind selection: cells are chosen on frames " + first + "-" + last + " only (before the stimulus" + (found ? "; the rise starts near frame " + onset : "") + "). Picture: Z Project Sum Slices " + first + "-" + last + ", Divide " + (last - first + 1) + ", Subtract Background rolling=" + (int) BALL_RADIUS + ", Gaussian Blur sigma=" + BLUR_PICTURE + "; the colour picture shows it in red and green, with nothing in magenta. Cellpose gets this picture only (" + blindRecipe() + "), never the response; suggestions are graded on shape, size and brightness in it; traces are not shown while choosing.")
+    }
+    void stopBlind() { blind = false }
+    String blindBasis() { return "Pre-stimulus, blind (frames " + blindFirst + "-" + blindLast + ")" }
+    String blindRecipe() { return "shown to it from 0 to " + BLIND_CAP + " gray levels, brighter pixels capped" }
     /** Shows a picture (the all-frames picture, or a baseline picture) in the red and green channels of the colour picture. */
     void showPicture(float[] picture) {
         for (int c = 1; c <= 2; c++) { float[] target = (float[]) colourPic.getStack().getPixels(c); System.arraycopy(picture, 0, target, 0, target.length) }
@@ -326,19 +357,22 @@ class CalciumSteps {
     /** Evidence about a suggested outline, all measured, nothing guessed.
      *  Returns [grade, area, mean, brightShare, contrast, riseInside, riseAround, touchesEdge].
      *  grade 0 = responds on its own, 1 = likely a cell, 2 = unsure, 3 = probably precipitate, 4 = wrong size (not shown).
-     *  On four reviewed recordings (1396 outlines) the share accepted as cells was 83 %, 80 %, 41 %, 12 % and 2 %. */
-    double[] grade(Roi roi) {
+     *  On four reviewed recordings (1396 outlines) the share accepted as cells was 83 %, 80 %, 41 %, 12 % and 2 %.
+     *  Blind (cells chosen before the stimulus): brightness comes from the pre-stimulus picture and the response is not used, so grade 0 never occurs. */
+    double[] grade(Roi roi) { return grade(roi, blind) }
+    double[] grade(Roi roi, boolean blindGrade) {
+        float[] pic = blindGrade && blindPic != null ? blindPic : flat
+        float[] rise = blindGrade ? null : respDiff
         int[] px = pixelsOf(roi); int a = px.length
         if (a == 0) return [4d, 0d, 0d, 0d, 0d, 0d, 0d, 0d] as double[]
-        boolean[] in = new boolean[w * h]; for (int i : px) in[i] = true
         boolean[] near = new boolean[w * h]; for (int i : pixelsOf(RoiEnlarger.enlarge(roi, 3))) near[i] = true
-        double s = 0, sb = 0, sr = 0; int nb = 0; boolean edge = false
-        for (int i : px) { s += flat[i]; if (flat[i] > BRIGHT_ABOVE) nb++; if (respDiff != null) sr += respDiff[i]; int x = i % w, y = (int) (i / w); if (x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2) edge = true }
+        double s = 0, sr = 0; int nb = 0; boolean edge = false
+        for (int i : px) { s += pic[i]; if (pic[i] > BRIGHT_ABOVE) nb++; if (rise != null) sr += rise[i]; int x = i % w, y = (int) (i / w); if (x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2) edge = true }
         double mean = s / a, brightShare = nb / (double) a, riseIn = sr / a
         double ringSum = 0, ringRise = 0; int nr = 0
-        for (int i : pixelsOf(RoiEnlarger.enlarge(roi, 12))) if (!near[i]) { ringSum += flat[i]; if (respDiff != null) ringRise += respDiff[i]; nr++ }
+        for (int i : pixelsOf(RoiEnlarger.enlarge(roi, 12))) if (!near[i]) { ringSum += pic[i]; if (rise != null) ringRise += rise[i]; nr++ }
         double contrast = nr > 0 ? mean - ringSum / nr : 0, riseRing = nr > 0 ? ringRise / nr : 0
-        boolean own = respDiff != null && riseIn > 0.5d && riseIn > 1.25d * Math.max(riseRing, 0.05d)
+        boolean own = rise != null && riseIn > 0.5d && riseIn > 1.25d * Math.max(riseRing, 0.05d)
         int g = 2
         boolean precip = mean > SUGGEST_BRIGHT || brightShare >= 0.25d
         if (precip) g = 3
@@ -383,9 +417,26 @@ class CalciumSteps {
         return true
     }
 
-    ImagePlus outlinePicture() {
+    /** Blind: the pre-stimulus picture alone (see blindDetectionPicture). Otherwise the all-frames picture, with the response when one was found. */
+    ImagePlus outlinePicture() { return blind ? blindOutlinePicture() : outlinePicture(found) }
+    /** The response-assisted picture, used once by the sensitivity check after blind selection. */
+    ImagePlus responseOutlinePicture() { return outlinePicture(true) }
+    /** The picture Cellpose gets in blind mode, in 0..1: pre-stimulus frames only, never the response, from 0 to BLIND_CAP gray
+     *  levels with brighter pixels capped, so very bright objects (precipitate, rounded cells) cannot flatten the dim cells.
+     *  For detection only; measurements are made on the raw movie. */
+    float[] blindDetectionPicture() {
+        float[] v = new float[blindPic.length]
+        for (int i = 0; i < v.length; i++) v[i] = (float) Math.max(0d, Math.min(1d, blindPic[i] / BLIND_CAP))
+        return v
+    }
+    ImagePlus blindOutlinePicture() {
+        float[] g = blindDetectionPicture(); int[] rgb = new int[w * h]
+        for (int i = 0; i < rgb.length; i++) rgb[i] = ((int) Math.round(g[i] * 255)) << 8
+        return new ImagePlus("for_automatic_outlines_blind", new ColorProcessor(w, h, rgb))
+    }
+    ImagePlus outlinePicture(boolean withResponse) {
         float[] g = (float[]) allPic.getProcessor().getPixels()
-        float[] m = found ? (float[]) respPic.getProcessor().getPixels() : null
+        float[] m = withResponse && found ? (float[]) respPic.getProcessor().getPixels() : null
         int[] rgb = new int[w * h]
         for (int i = 0; i < rgb.length; i++) {
             int gv = (int) Math.max(0, Math.min(255, Math.round(g[i] / SHOW_MAX * 255)))
@@ -509,9 +560,66 @@ class CalciumSteps {
     }
 }
 
+/** Sensitivity check after blind selection. Response-assisted detection is run once, for comparison only, and each of its
+ *  outlines is looked up among the blind suggestions. Found = a blind outline contains its centre, or it contains the centre of
+ *  a blind outline (the rule the window uses to match accepted cells to suggestions). The comparison outlines are never added
+ *  to the cells or measured. */
+class CalciumSensitivity {
+    static final List<String> GRADES = ["responds on its own", "likely a cell", "unsure", "very bright: probably precipitate"]
+    static Set<Long> pointsOf(Roi r) { Set<Long> s = new HashSet<Long>(); r.getContainedPoints().each { java.awt.Point p -> s.add((((long) (int) p.getY()) << 32) | (((int) p.getX()) & 0xffffffffL)) }; s }
+    /** Both lists hold suggestions as the window keeps them: maps with roi, grade, cx, cy and edge. */
+    static Map compare(List assisted, List blindSuggestions, Roi[] measured, boolean leaveOutEdge) {
+        def counted = assisted.findAll { !(leaveOutEdge && it.edge) }
+        def rows = []
+        counted.eachWithIndex { a, int i ->
+            Roi r = (Roi) a.roi; Rectangle rb = r.getBounds()
+            boolean found = blindSuggestions.any { b -> ((Roi) b.roi).contains((int) a.cx, (int) a.cy) || r.contains((int) b.cx, (int) b.cy) }
+            double best = 0; Set<Long> mine = null
+            blindSuggestions.each { b ->
+                Roi o = (Roi) b.roi
+                if (!o.getBounds().intersects(rb)) return
+                if (mine == null) mine = pointsOf(r)
+                Set<Long> theirs = pointsOf(o); int both = 0; theirs.each { if (mine.contains(it)) both++ }
+                double iou = both / (double) (mine.size() + theirs.size() - both); if (iou > best) best = iou
+            }
+            boolean inCells = measured.any { Roi c -> c.contains((int) a.cx, (int) a.cy) || r.contains((int) c.getBounds().getCenterX(), (int) c.getBounds().getCenterY()) }
+            rows << [n: i + 1, grade: (int) a.grade, x: (int) a.cx, y: (int) a.cy, area: (int) (a.ev != null ? a.ev[1] : r.getContainedPoints().length), found: found, overlap: best, inCells: inCells, roi: r]
+        }
+        def cellLike = rows.findAll { it.grade <= 2 }
+        return [rows: rows, cellLike: cellLike.size(), found: cellLike.count { it.found }, bright: rows.count { it.grade == 3 }, brightFound: rows.count { it.grade == 3 && it.found },
+                byGrade: (0..3).collect { int g -> [rows.count { it.grade == g }, rows.count { it.grade == g && it.found }] },
+                inCells: cellLike.count { it.inCells }, blindShown: blindSuggestions.count { !(leaveOutEdge && it.edge) }, assistedShown: assisted.size(), edgeLeftOut: assisted.size() - counted.size()]
+    }
+    static String pct(int a, int b) { b > 0 ? Math.round(100d * a / b) + " %" : "-" }
+    /** Plain-language report, for the record of steps and the result line. */
+    static String report(Map m, String how) {
+        int t = (int) m.cellLike, f = (int) m.found
+        def by = (0..2).collect { int g -> def c = m.byGrade[g]; GRADES[g] + " " + c[1] + " of " + c[0] }.join("; ")
+        return "Sensitivity check (response-assisted detection run once for comparison; " + how + "; its outlines were not added to the cells and were not measured): " +
+            t + " response-assisted outlines could be cells (graded responds, likely or unsure" + (((int) m.edgeLeftOut) > 0 ? ", not at the edge" : "") + "). " +
+            "The blind detection also found " + f + " of them (" + pct(f, t) + ") and missed " + (t - f) + ". By grade: " + by + ". " +
+            "Very bright (probably precipitate): " + m.brightFound + " of " + m.bright + " found. " +
+            m.inCells + " of the " + t + " coincide with a measured cell. Blind detection made " + m.blindShown + " suggestions. " +
+            "Found = a blind outline contains its centre or it contains the centre of a blind outline. " +
+            "How to read it: if most are found, the blind picture picks up dim cells well. If many are missed, blind detection misses cells that are dim at rest; " +
+            "% responding is still unbiased if those cells respond at the same rate as the others, but that assumption then carries weight and should be stated with the result."
+    }
+    static void save(Map m, String prefix) {
+        def csv = new StringBuilder("outline,grade_with_response,x,y,area_pixels,found_by_blind_detection,best_overlap_with_a_blind_outline,coincides_with_a_measured_cell\n")
+        m.rows.each { r -> csv.append(String.format(Locale.US, "%d,%s,%d,%d,%d,%s,%.2f,%s\n", r.n, GRADES[(int) r.grade], r.x, r.y, r.area, r.found ? "yes" : "no", r.overlap, r.inCells ? "yes" : "no")) }
+        new File(prefix + "sensitivity_check.csv").setText(csv.toString(), "UTF-8")
+        new ZipOutputStream(new FileOutputStream(prefix + "sensitivity_check_missed_RoiSet.zip")).withCloseable { ZipOutputStream z ->
+            m.rows.findAll { !it.found && (int) it.grade <= 2 }.each { r ->   // the missed ones that could be cells, as counted in the report
+                Roi o = (Roi) ((Roi) r.roi).clone(); String name = String.format(Locale.US, "missed_%03d_%s", r.n, GRADES[(int) r.grade].replaceAll(/[^A-Za-z]+/, "_"))
+                o.setName(name); o.setPosition(0); z.putNextEntry(new ZipEntry(name + ".roi")); z.write(RoiEncoder.saveAsByteArray(o)); z.closeEntry()
+            }
+        }
+    }
+}
+
 /** Release lookup sends no recording data. Installation requires an explicit button click. */
 class CalciumRelease {
-    static final String VERSION = "2026.11.20.6"
+    static final String VERSION = "2026.11.20.7"
     static final String REPOSITORY = "https://github.com/samgillman/fiji-calcium-plugin"
     static final String API = "https://api.github.com/repos/samgillman/fiji-calcium-plugin/releases/latest"
     static final String ASSET = "Calcium_Imaging_Fiji_Plugin.zip"
@@ -3106,8 +3214,11 @@ class CalciumUpdatesPanel extends CalciumCard {
             }
             releasePage = found.page; selectedRelease = found
             installBtn.setVisible(found.newer && found.installable); laterBtn.setVisible(found.newer)
+            boolean aheadOfRelease = false
+            try { aheadOfRelease = !found.newer && CalciumRelease.newer(CalciumRelease.VERSION, String.valueOf(found.version)) } catch (Exception ignored) { }
             message(found.newer ? '<b>Update available: '+CalciumInstaller.escape(found.version)+'.</b> '+
                 (found.installable ? 'Install it here, then restart Fiji to use it.' : 'Open Release notes for installation instructions.') :
+                aheadOfRelease ? 'This copy ('+CalciumRelease.VERSION+') is newer than the latest release ('+CalciumInstaller.escape(found.version)+'): a test build that has not been released.' :
                 'You are up to date (installed '+CalciumRelease.VERSION+'; latest release '+CalciumInstaller.escape(found.version)+').')
         })
         if (accepted) {
@@ -3162,6 +3273,26 @@ class CalciumStartDialog {
         dialog.setSize(Math.min(dialog.getWidth(), (int) bounds.getWidth() - insets.left - insets.right - 40),
             Math.min(dialog.getHeight(), (int) bounds.getHeight() - insets.top - insets.bottom - 60))
     }
+    /** Blind selection: which frames come before the stimulus. Offers the plugin's own estimate (the frames before the rise it
+     *  found, which end well ahead of it) for the user to confirm or change. Returns [first, last], or null when cancelled. */
+    static int[] askBlindFrames(def steps) {
+        int n = (int) steps.n, estimate = (int) steps.estimatedLastBeforeStimulus()
+        int first = steps.blind ? (int) steps.blindFirst : 1, last = steps.blind ? (int) steps.blindLast : (estimate > 0 ? estimate : Math.min(20, n))
+        while (true) {
+            def gd = new GenericDialog("Frames before the stimulus")
+            gd.addMessage(estimate > 0 ? "The cells start to rise near frame " + steps.onset + ". The frames offered end " + (steps.onset - estimate) + " frames before that,\nso cells that respond early are not in them. Check the last frame against when the stimulus was added." :
+                "No response was found, so the plugin cannot tell when the stimulus was added.\nType the last frame before it.")
+            gd.addNumericField("First frame", first, 0)
+            gd.addNumericField("Last frame before the stimulus", last, 0)
+            gd.addMessage("Cells are found and chosen on these frames only. Measurements still use every frame.")
+            gd.showDialog(); if (gd.wasCanceled()) return null
+            double a = gd.getNextNumber(), b = gd.getNextNumber()
+            if (!Double.isFinite(a) || !Double.isFinite(b) || a != Math.floor(a) || b != Math.floor(b) || a < 1 || b < a || b > n) { IJ.error("Calcium imaging", "Choose whole frame numbers from 1 to " + n + ", the first no later than the last."); continue }
+            first = (int) a; last = (int) b
+            if (steps.found && last >= (int) steps.onset && !IJ.showMessageWithCancel("Calcium imaging", "Frame " + last + " is at or after the rise near frame " + steps.onset + ".\nFrames after the stimulus are not blind: cells that respond are brighter in them.\n\nUse these frames anyway?")) continue
+            return [first, last] as int[]
+        }
+    }
     /** The file and folder choosers; tests replace them so no native dialog opens. Each returns a path, or null when cancelled. */
     static Closure chooseFile = { -> def od = new ij.io.OpenDialog("Choose the recording (.zvi, .czi, .tif ...)"); od.getFileName() == null ? null : od.getPath() }
     static Closure chooseFolder = { String from -> ij.io.DirectoryChooser.setDefaultDirectory(from); new ij.io.DirectoryChooser("Folder for the results").getDirectory() }
@@ -3180,7 +3311,14 @@ class CalciumStartDialog {
             def recording = new CalciumCard("", "Recording", false)
             def choice = new javax.swing.JComboBox<String>(labels as String[]); choice.setSelectedItem(preselected); choice.setFont(CalciumTheme.font()); choice.setAlignmentX(0f)
             choice.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, (int) choice.getPreferredSize().height))
-            def look = new javax.swing.JCheckBox("Look for a response and show it in magenta", false); CalciumTheme.plain(look)
+            // How cells are chosen. Blind is the default: for % responding, whether a cell is chosen must not depend on its response.
+            def blindChoice = new javax.swing.JRadioButton("Before the stimulus only (blind): for % responding", true)
+            def allChoice = new javax.swing.JRadioButton("All frames", false)
+            def look = new javax.swing.JRadioButton("All frames, with the response in magenta (not for % responding)", false)
+            blindChoice.setToolTipText("<html>Cellpose and you see only the frames before the stimulus, and traces are hidden while choosing,<br>so a cell is chosen the same way whether or not it responds. You confirm the last frame before the stimulus.</html>")
+            allChoice.setToolTipText("<html>The average of all frames. It includes the frames after the stimulus,<br>so cells that stay bright after it are a little easier to see.</html>")
+            look.setToolTipText("<html>Cells that brighten after the stimulus turn magenta and are easier to find.<br>Dim cells are then chosen only if they respond, which raises % responding.<br>Use it for the size or timing of responses, not for % responding.</html>")
+            def choiceGroup = new javax.swing.ButtonGroup(); [blindChoice, allChoice, look].each { choiceGroup.add(it); CalciumTheme.plain(it) }
             // Choosing "from disk" asks for the file here, straight away, and shows its name; Next is not needed to get the file chooser.
             String file = null
             def fileButton = CalciumTheme.button("Choose file…"), fileName = CalciumTheme.label("No file chosen yet", CalciumTheme.MUTED)
@@ -3202,7 +3340,8 @@ class CalciumStartDialog {
             fileButton.addActionListener({ e -> pickFile() } as java.awt.event.ActionListener)
             choice.addActionListener({ e -> showFileRow(); if (dialog.isVisible() && choice.getSelectedItem() == diskLabel) javax.swing.SwingUtilities.invokeLater { pickFile() } } as java.awt.event.ActionListener)
             fileRow.setVisible(choice.getSelectedItem() == diskLabel)
-            [choice, fileRow, javax.swing.Box.createVerticalStrut(4), hint("Pick the original movie, not a processed copy."), javax.swing.Box.createVerticalStrut(8), look].each { recording.body.add(it) }
+            [choice, fileRow, javax.swing.Box.createVerticalStrut(4), hint("Pick the original movie, not a processed copy."), javax.swing.Box.createVerticalStrut(10),
+             CalciumTheme.label("Choose cells on:", CalciumTheme.INK), blindChoice, allChoice, look].each { recording.body.add(it) }
             def results = new CalciumCard("", "Folder for the results", false)
             def folder = new javax.swing.JTextField(defaultFolder, 30); folder.setFont(CalciumTheme.font()); def browse = CalciumTheme.button("Browse…")
             def line = new javax.swing.JPanel(new java.awt.BorderLayout(6, 0)); line.setOpaque(false); line.setAlignmentX(0f); line.add(folder, java.awt.BorderLayout.CENTER); line.add(browse, java.awt.BorderLayout.EAST)
@@ -3225,7 +3364,7 @@ class CalciumStartDialog {
                 boolean disk = choice.getSelectedItem() == diskLabel
                 if (disk && file == null) pickFile()          // Next without a file still asks for one,
                 if (disk && file == null) return              // and stays here if that was cancelled
-                answer = [recording: choice.getSelectedItem() as String, look: look.isSelected(), folder: folder.getText(), file: disk ? file : null]; dismiss()
+                answer = [recording: choice.getSelectedItem() as String, look: look.isSelected(), blind: blindChoice.isSelected(), folder: folder.getText(), file: disk ? file : null]; dismiss()
             } as java.awt.event.ActionListener)
             cancel.addActionListener({ e -> dismiss() } as java.awt.event.ActionListener)
             dialog.getRootPane().setDefaultButton(next)
@@ -3272,6 +3411,7 @@ def start = CalciumStartDialog.ask(labels, pre, defaultDir, fromDisk)
 if (start == null) return
 def picked = start.recording
 boolean look = start.look
+boolean blindStart = start.blind == true
 def outRoot = start.folder
 if (outRoot == null || outRoot.trim().isEmpty()) outRoot = defaultDir
 Prefs.set("calcium.steps.folder", outRoot)
@@ -3288,7 +3428,12 @@ if (imp == null || imp.getStackSize() < 2) { IJ.error("Calcium imaging", "No mov
 IJ.showStatus("Making the cells visible...")
 if (imp.getBitDepth() == 32) IJ.log("Calcium imaging plugin: this movie is 32-bit, so it looks like a processed copy. Background is meant to be taken on the original movie.")
 def steps = new CalciumSteps()
-steps.prepare(imp, look)
+steps.prepare(imp, look || blindStart)   // blind: the response is looked for only to offer when the stimulus came; it is never shown while choosing
+if (blindStart) {
+    int[] frames = CalciumStartDialog.askBlindFrames(steps)
+    if (frames == null) { IJ.showStatus("Calcium imaging: cancelled"); return }
+    steps.startBlind(frames[0], frames[1])
+}
 steps.colourPic.show()
 IJ.run(steps.colourPic, "Set... ", "zoom=75")
 def rm = testGui ? new RoiManager(false) : RoiManager.getRoiManager()
@@ -3327,8 +3472,8 @@ def root = new CalciumScrollPanel(); root.setBorder(javax.swing.BorderFactory.cr
 def s1 = section("1", "Recording", false); s1.setDone(true)
 def recordingNote = note("&nbsp;")
 def describeRecording = { ->
-    recordingNote.setText("<html><body style='width:300px'><b>" + CalciumTheme.middle(imp.getTitle(), 40) + "</b><br><font color='" + MUTED + "'>" + steps.n + " frames · " + (steps.found ? "response near frame " + steps.onset + " (magenta)" : (steps.looked ? "no response found (no magenta)" : "response not looked for")) + "</font></body></html>")
-    recordingNote.setToolTipText(imp.getTitle() + ". " + (steps.found ? "Brightness rises near frame " + steps.onset + "; the response can be shown in magenta." : (steps.looked ? "No response was found, so there is no magenta. Every cell is still shown in green." : "The response has not been looked for. Choose Response (magenta) in Step 2 to look for it.")))
+    recordingNote.setText("<html><body style='width:300px'><b>" + CalciumTheme.middle(imp.getTitle(), 40) + "</b><br><font color='" + MUTED + "'>" + steps.n + " frames · " + (steps.blind ? "cells chosen blind on frames " + steps.blindFirst + "–" + steps.blindLast : steps.found ? "response near frame " + steps.onset + " (magenta)" : (steps.looked ? "no response found (no magenta)" : "response not looked for")) + "</font></body></html>")
+    recordingNote.setToolTipText(imp.getTitle() + ". " + (steps.blind ? "Cells are chosen on frames " + steps.blindFirst + "–" + steps.blindLast + ", before the stimulus" + (steps.found ? "; the cells start to rise near frame " + steps.onset : "") + ". The response is not shown while choosing." : steps.found ? "Brightness rises near frame " + steps.onset + "; the response can be shown in magenta." : (steps.looked ? "No response was found, so there is no magenta. Every cell is still shown in green." : "The response has not been looked for. Choose Response (magenta) in Step 2 to look for it.")))
 }
 describeRecording()
 def changeBtn = btn("‹ Change recording")
@@ -3336,11 +3481,12 @@ changeBtn.setToolTipText("Back to the first screen, to choose another recording 
 s1.body.add(recordingNote); s1.body.add(row(changeBtn))
 
 def s2 = section("2", "Choose the cells")
-String selectionBasis = steps.found ? 'Response-assisted review' : 'All-frames structural review'
+String selectionBasis = steps.blind ? steps.blindBasis() : steps.found ? 'Response-assisted review' : 'All-frames structural review'
 // What the colour picture shows while cells are chosen. The choice is recorded with the measurement as the selection basis.
-def viewAllBtn = btn('All frames'), viewBaselineBtn = btn('Baseline…'), viewResponseBtn = btn('Response (magenta)')
+def viewAllBtn = btn('All frames'), viewBaselineBtn = btn('Before stimulus (blind)…'), viewResponseBtn = btn('Response (magenta)')
 viewAllBtn.setToolTipText('The average of all frames with the background removed: cells by their structure')
-viewBaselineBtn.setToolTipText('Only frames before the stimulus, so a cell looks the same whether or not it responds')
+viewBaselineBtn.setToolTipText('<html>Only frames before the stimulus. Suggestions are made on this picture too, traces are hidden<br>and grades use shape, size and brightness only, so whether a cell is chosen cannot depend on its response.</html>')
+def blindNote = { -> 'Blind: frames ' + steps.blindFirst + '–' + steps.blindLast + ' only, before the stimulus. Suggestions come from this picture, traces are hidden, and grades use shape, size and brightness. Recorded as pre-stimulus, blind.' }
 viewResponseBtn.setToolTipText('<html>Cells that brighten after the stimulus turn magenta.<br>Choosing cells with this on is recorded as response-assisted selection,<br>which can raise percent responding.</html>')
 def selectionNote = hint('&nbsp;')
 def showView = { String which, String text ->
@@ -3365,12 +3511,13 @@ edgeBox.setToolTipText("<html>At the edge a cell's background can only be taken 
 def status = new javax.swing.JLabel("<html><body style='width:300px'><b>Cells chosen: 0</b></body></html>"); status.setFont(small); status.setForeground(CalciumTheme.INK); status.setAlignmentX(0f)
 def info = note("&nbsp;")
 def trace = new CalciumTracePanel(); trace.setAlignmentX(0f); trace.setFont(small)
+if (steps.blind) trace.show(null, "Traces are hidden while choosing cells blind", 0, 0)
 s2.body.add(row(CalciumTheme.label('Picture:', CalciumTheme.MUTED), viewAllBtn, viewBaselineBtn, viewResponseBtn)); s2.body.add(selectionNote)
 def cpLabel = hint("&nbsp;")
 def setupBtn = btn("Set up Cellpose (one time)"); def setupRow = row(setupBtn)
 def detectionProgress = new CalciumOutlineProgress()
 def continueBtn = btn("Continue to measure  ›")
-showView(steps.found ? 'response' : 'all', steps.found ? 'Magenta: cells that brightened near frame ' + steps.onset + '. Picking cells this way is recorded as response-assisted.' : 'Choosing cells on the average of all frames.')
+showView(steps.blind ? 'baseline' : steps.found ? 'response' : 'all', steps.blind ? blindNote() : steps.found ? 'Magenta: cells that brightened near frame ' + steps.onset + '. Picking cells this way is recorded as response-assisted.' : 'Choosing cells on the average of all frames.')
 s2.body.add(row(suggestBtn, acceptAllBtn)); s2.body.add(detectionProgress); s2.body.add(cpLabel); s2.body.add(setupRow)
 s2.body.add(row(CalciumTheme.label("Or draw:", CalciumTheme.MUTED), ovalBtn, freeBtn, addBtn))
 s2.body.add(row(showSug, showBg)); s2.body.add(row(edgeBox))
@@ -3385,7 +3532,8 @@ acceptedGraphics.setColor(new Color(24, 30, 36)); acceptedGraphics.fillRoundRect
 acceptedGraphics.setColor(Color.black); acceptedGraphics.setStroke(new java.awt.BasicStroke(5f)); acceptedGraphics.drawOval(6, 3, 18, 8)
 acceptedGraphics.setColor(Color.white); acceptedGraphics.setStroke(new java.awt.BasicStroke(2f)); acceptedGraphics.drawOval(6, 3, 18, 8); acceptedGraphics.dispose()
 legend.add(legendRow(new javax.swing.ImageIcon(acceptedIcon), "your cells"))
-legend.add(legendRow(lineIcon(CYAN, 2, false, false), "responds"))
+def respondsLegend = legendRow(lineIcon(CYAN, 2, false, false), "responds"); respondsLegend.setVisible(!steps.blind)   // no such grade while choosing blind
+legend.add(respondsLegend)
 legend.add(legendRow(lineIcon(GREY, 1, true, false), "unsure"))
 legend.add(legendRow(lineIcon(BLUE, 1, false, true), "background"))
 legend.add(legendRow(lineIcon(CYAN, 1, false, false), "likely a cell"))
@@ -3398,6 +3546,8 @@ def s3 = section("3", "Measure and save")
 def makeMovie = box("Also open a background-corrected movie", true)
 def saveMovie = box("Save that movie as a TIFF too (large)", false)
 saveMovie.setToolTipText("About 1.7 GB for 300 frames of 1388 x 1040")
+def sensBox = box("Sensitivity check after measuring (blind only)", true); sensBox.setVisible(steps.blind == true)
+sensBox.setToolTipText("<html>Runs response-assisted detection once, for comparison, and reports how many of its outlines<br>the blind detection also found. A second Cellpose run: about 20 s with a graphics chip, a few minutes<br>without; saved outlines are reused. Its outlines are never added to your cells or measured.</html>")
 def go = CalciumTheme.button("Measure and save", true)
 def savedIn = "..." + File.separator + CalciumTheme.middle(outDir.getParentFile().getName(), 24) + File.separator + "<br>" + CalciumTheme.middle(outDir.getName(), 44)
 def result = note("Saves the tables in: " + savedIn); result.setToolTipText(outDir.getPath())
@@ -3405,7 +3555,7 @@ def openBtn = btn("Open results folder"); openBtn.setVisible(false)
 def closeBtn = btn("Close")
 closeBtn.setToolTipText("Close this window; the pictures and saved results stay")
 def backToCellsBtn = btn('‹ Back to cells')
-s3.body.add(makeMovie); s3.body.add(saveMovie); s3.body.add(row(go, openBtn)); s3.body.add(result); s3.body.add(row(backToCellsBtn))
+s3.body.add(makeMovie); s3.body.add(saveMovie); s3.body.add(sensBox); s3.body.add(row(go, openBtn)); s3.body.add(result); s3.body.add(row(backToCellsBtn))
 def s4 = section("4", "Analyze responses")
 def analyzeBtn = CalciumTheme.button("Open analysis page", true); analyzeBtn.setEnabled(false)
 analyzeBtn.setToolTipText("Opens the analysis page in your browser. It runs on this computer only; nothing is sent anywhere.")
@@ -3442,7 +3592,17 @@ if (!testGui) {
     settle.setRepeats(false)
     def follow = { java.beans.PropertyChangeEvent e -> settle.restart() } as java.beans.PropertyChangeListener
     focus.addPropertyChangeListener("activeWindow", follow)
-    frame.addWindowListener(new java.awt.event.WindowAdapter() { void windowClosed(java.awt.event.WindowEvent e) { settle.stop(); focus.removePropertyChangeListener("activeWindow", follow) } })
+    // Start on top only if Fiji is the program in use. When the plugin starts while another program is in front, Fiji never
+    // loses focus afterwards, so the change above never comes and the window used to float over every program.
+    frame.setAlwaysOnTop(focus.getActiveWindow() != null)
+    // A missed change must not keep it on top either: drop back after two checks a second apart with Fiji not in use.
+    int away = 0
+    def check = new javax.swing.Timer(1000, { e ->
+        away = focus.getActiveWindow() == null ? away + 1 : 0
+        if (away >= 2 && frame.isDisplayable() && frame.isAlwaysOnTop()) frame.setAlwaysOnTop(false)
+    } as java.awt.event.ActionListener)
+    check.start()
+    frame.addWindowListener(new java.awt.event.WindowAdapter() { void windowClosed(java.awt.event.WindowEvent e) { settle.stop(); check.stop(); focus.removePropertyChangeListener("activeWindow", follow) } })
 }
 
 // ---- what the window does ----
@@ -3450,12 +3610,23 @@ def lastKey = ""; int[][] lastBg = new int[0][]
 def proposals = []        // automatic outlines: [roi, grade (0 responds, 1 likely, 2 unsure, 3 bright), ev (the measured evidence), cx, cy]
 def cellEdits = new CalciumCellEdits(manager: rm, picture: steps.colourPic)
 def measuredKey = { Roi[] rois -> rois.collect { CalciumInstaller.digest(RoiEncoder.saveAsByteArray(it)) }.join(':') }
+// Blind selection stays blind only while nothing of the response has been shown: a trace, the magenta picture or Step 4.
+// The outlines held at that moment were chosen blind; outlines changed afterwards are recorded as not blind.
+boolean responseSeen = steps.found && !steps.blind && look      // magenta shown from the start
+String blindKey = null
+Closure reveal = null                                             // set below, once the outlines can be read
+def basisFor = { Roi[] all ->
+    if (!steps.blind) return selectionBasis
+    (!responseSeen || measuredKey(all) == blindKey) ? steps.blindBasis() :
+        'Pre-stimulus picture (frames ' + steps.blindFirst + '-' + steps.blindLast + '), not blind: the response had been shown before these outlines were final'
+}
 // Step 4 opens as a page in the browser, served from this computer by the plugin. The Fiji window does the same analysis
 // and is used when asked for, or when the page cannot be served or opened here.
 CalciumWebPages stepFourPages = new CalciumWebPages()
 def openFijiWindow = { -> def window = new CalciumAnalysisWindow(analysisMeasurement); window.besideControls(frame); window.setVisible(true) }
 analyzeBtn.addActionListener({ e ->
     if (analysisMeasurement == null) return
+    reveal()
     if (testGui) { openFijiWindow(); return }
     try {
         def stepFourPage = stepFourPages.page(analysisMeasurement)
@@ -3466,7 +3637,7 @@ analyzeBtn.addActionListener({ e ->
         openFijiWindow()
     }
 } as java.awt.event.ActionListener)
-classicBtn.addActionListener({ e -> if (analysisMeasurement != null) openFijiWindow() } as java.awt.event.ActionListener)
+classicBtn.addActionListener({ e -> if (analysisMeasurement != null) { reveal(); openFijiWindow() } } as java.awt.event.ActionListener)
 // Browser pages keep their own measurement snapshots until Close analysis or Fiji exits.
 def cellRois = { ->
     Roi[] accepted=rm.getRoisAsArray()
@@ -3476,6 +3647,7 @@ def cellRois = { ->
     def all = unique as List
     all.findAll { it != null && it.isArea() }.collect { def r = (Roi) it.clone(); r.setPosition(0); r } as Roi[]
 }
+reveal = { -> if (!responseSeen) { responseSeen = true; blindKey = measuredKey(cellRois()) } }
 // the outlines in the ROI Manager, split into the cells that count and (when the box is ticked) the ones at the picture's edge
 def splitCells = { ->
     Roi[] all = cellRois(); boolean cut = edgeBox.isSelected()
@@ -3488,7 +3660,7 @@ def unusedProposals = { Roi[] cells ->
 def evidenceText = { p ->
     double[] e = p.ev; def parts = []
     parts << String.format(Locale.US, "%.0f um across", 2 * Math.sqrt(e[1] / Math.PI) * steps.movie.getCalibration().pixelWidth)
-    if (steps.respDiff != null) parts << String.format(Locale.US, "rise after the stimulus %.1f gray levels inside, %.1f around it", e[5], e[6])
+    if (steps.respDiff != null && !p.blind && !steps.blind) parts << String.format(Locale.US, "rise after the stimulus %.1f gray levels inside, %.1f around it", e[5], e[6])
     parts << String.format(Locale.US, "%.1f gray levels brighter than its surroundings", e[4])
     if (e[3] >= 0.02) parts << String.format(Locale.US, "%.0f %% of it is very bright", 100 * e[3])
     if (e[7] > 0) parts << "touches the edge of the picture"
@@ -3498,11 +3670,11 @@ def evidenceText = { p ->
 def refresh = { boolean force ->
     try {
         def sp = splitCells(); Roi[] all = (Roi[]) sp.all; Roi[] cells = (Roi[]) sp.cells; Roi[] edgeCells = (Roi[]) sp.edge
-        def key = all.collect { it.getBounds().toString() + it.getContainedPoints().length }.join("|") + "#" + Arrays.toString(rm.getSelectedIndexes()) + "#" + showBg.isSelected() + "#" + proposals.size() + "#" + showSug.isSelected() + "#" + edgeBox.isSelected() + '#'+selectionBasis + (analysisMeasurement!=null ? '#'+measuredKey(all) : '')
+        def key = all.collect { it.getBounds().toString() + it.getContainedPoints().length }.join("|") + "#" + Arrays.toString(rm.getSelectedIndexes()) + "#" + showBg.isSelected() + "#" + proposals.size() + "#" + showSug.isSelected() + "#" + edgeBox.isSelected() + '#'+selectionBasis + '#' + responseSeen + (analysisMeasurement!=null ? '#'+measuredKey(all) : '')
         if (!force && key == lastKey) return
         lastKey = key
         if (analysisMeasurement != null) {
-            boolean current = measuredKey(all)+'#edge='+edgeBox.isSelected()+'#selection='+selectionBasis == analysisMeasurement.key
+            boolean current = measuredKey(all)+'#edge='+edgeBox.isSelected()+'#selection='+basisFor(all) == analysisMeasurement.key
             analyzeBtn.setEnabled(current && go.isEnabled())
             s3.setDone(current); s4.setSummary(current ? "ready" : "measure again first")
             analysisNote.setText("<html><body style='width:300px'>" + (current ? "Review the recording, check timing, and run analysis in your browser. Keep Fiji open." : "Cell outlines changed. Measure and save again before analysis.") + "</body></html>")
@@ -3539,32 +3711,33 @@ def refresh = { boolean force ->
 }
 def viewButtons = [viewAllBtn, viewBaselineBtn, viewResponseBtn]
 def busyView = { boolean busy -> viewButtons.each { it.setEnabled(!busy) } }
+def currentView = { -> steps.blind ? 'baseline' : selectionBasis.startsWith('Response') ? 'response' : 'all' }
+def blindControls = { boolean on -> respondsLegend.setVisible(!on); sensBox.setVisible(on); frame.refreshContents() }
 viewAllBtn.addActionListener({
-    steps.showAllFrames(); steps.hideResponse()
+    steps.stopBlind(); steps.showAllFrames(); steps.hideResponse()
     selectionBasis = 'All-frames structural review'
-    showView('all', 'Choosing cells on the average of all frames.'); refresh(true)
+    showView('all', 'Choosing cells on the average of all frames.'); blindControls(false); describeRecording(); refresh(true)
 } as java.awt.event.ActionListener)
 viewBaselineBtn.addActionListener({
-    def prompt = new GenericDialog('Baseline frames for choosing cells')
-    prompt.addNumericField('First baseline frame', steps.found ? steps.b0 : 1, 0); prompt.addNumericField('Last baseline frame', steps.found ? steps.b1 : Math.min(20, steps.n), 0)
-    prompt.addMessage('Choose frames before stimulation. The recording and measurements are unchanged.')
-    prompt.showDialog(); if (prompt.wasCanceled()) return
-    double first = prompt.getNextNumber(), last = prompt.getNextNumber()
-    if (!Double.isFinite(first) || !Double.isFinite(last) || first != Math.floor(first) || last != Math.floor(last) || first < 1 || last < first || last > steps.n) { IJ.error('Calcium imaging', 'Choose whole frame numbers from 1 to ' + steps.n + ', the first no later than the last.'); return }
-    busyView(true); selectionNote.setText("<html><body style='width:300px'>Making the baseline picture…</body></html>")
-    Thread.start('Calcium baseline picture') {
+    int[] range = CalciumStartDialog.askBlindFrames(steps); if (range == null) return
+    busyView(true); selectionNote.setText("<html><body style='width:300px'>Making the picture of frames " + range[0] + "–" + range[1] + "…</body></html>")
+    Thread.start('Calcium pre-stimulus picture') {
         float[] picture = null; String problem = null
-        try { picture = steps.baselinePicture(first as int, last as int) } catch (Throwable t) { problem = t.message ?: t.toString() }
+        try { picture = steps.framesPicture(range[0], range[1]) } catch (Throwable t) { problem = t.message ?: t.toString() }
         javax.swing.SwingUtilities.invokeLater {
             busyView(false)
-            if (picture == null) { showView(selectionBasis.startsWith('Baseline') ? 'baseline' : selectionBasis.startsWith('Response') ? 'response' : 'all', 'Could not make the baseline picture: ' + problem); return }
-            steps.showPicture(picture); steps.hideResponse()
-            selectionBasis = 'Baseline frames ' + (first as int) + '-' + (last as int)
-            showView('baseline', 'Choosing cells on frames ' + (first as int) + '–' + (last as int) + ': a cell looks the same whether or not it responds.'); refresh(true)
+            if (picture == null) { showView(currentView(), 'Could not make the picture of frames before the stimulus: ' + problem); return }
+            steps.startBlind(range[0], range[1], picture)
+            // suggestions made with the response (or on all frames) would show it: only blind suggestions stay
+            proposals.removeAll { !it.blind }; if (proposals.isEmpty()) suggestBtn.setText("Suggest cells automatically")
+            trace.show(null, "Traces are hidden while choosing cells blind", 0, 0); info.setText("<html><body style='width:300px'>&nbsp;</body></html>")
+            selectionBasis = steps.blindBasis()
+            showView('baseline', blindNote()); blindControls(true); describeRecording(); refresh(true)
         }
     }
 } as java.awt.event.ActionListener)
 viewResponseBtn.addActionListener({
+    if (steps.blind && !testGui && javax.swing.JOptionPane.showConfirmDialog(frame, "<html><body style='width:320px'>Showing the response ends blind selection. Outlines you have now stay recorded as chosen blind as long as you do not change them; any change after this is recorded as not blind.</body></html>", "Show the response", javax.swing.JOptionPane.OK_CANCEL_OPTION) != javax.swing.JOptionPane.OK_OPTION) return
     boolean first = !steps.looked
     busyView(true); if (first) selectionNote.setText("<html><body style='width:300px'>Looking for the response in all " + steps.n + " frames…</body></html>")
     Thread.start('Calcium response picture') {
@@ -3572,12 +3745,12 @@ viewResponseBtn.addActionListener({
         try { if (!steps.looked) steps.findResponse() } catch (Throwable t) { problem = t.message ?: t.toString() }
         javax.swing.SwingUtilities.invokeLater {
             busyView(false); describeRecording()
-            String previous = selectionBasis.startsWith('Baseline') ? 'baseline' : selectionBasis.startsWith('Response') ? 'response' : 'all'
+            String previous = currentView()
             if (problem != null) { showView(previous, 'Could not look for the response: ' + problem); return }
             if (!steps.found) { showView(previous, 'No response found (' + steps.why + '), so there is no magenta. The picture is unchanged.'); return }
-            steps.showAllFrames(); steps.showResponse()
+            reveal(); steps.stopBlind(); steps.showAllFrames(); steps.showResponse()
             selectionBasis = 'Response-assisted review'
-            showView('response', 'Magenta: cells that brightened near frame ' + steps.onset + '. Picking cells this way is recorded as response-assisted.'); refresh(true)
+            showView('response', 'Magenta: cells that brightened near frame ' + steps.onset + '. Picking cells this way is recorded as response-assisted.'); blindControls(false); describeRecording(); refresh(true)
         }
     }
 } as java.awt.event.ActionListener)
@@ -3603,7 +3776,8 @@ def hoverAt = { int x, int y ->
     if (target == null || target.is(lastHover)) { if (target == null && lastHover != null) { lastHover = null; info.setText("<html><body style='width:300px'>&nbsp;</body></html>") }; return text }
     lastHover = target
     info.setText("<html><body style='width:300px'>" + text + "</body></html>")
-    trace.show(steps.traceOf(target, cells), cap, steps.found ? steps.p0 : 0, steps.found ? steps.p1 : 0)
+    if (steps.blind) trace.show(null, "Traces are hidden while choosing cells blind", 0, 0)   // a trace would show the response
+    else { reveal(); trace.show(steps.traceOf(target, cells), cap, steps.found ? steps.p0 : 0, steps.found ? steps.p1 : 0) }
     return text
 }
 def findCellposePython = { ->
@@ -3710,10 +3884,13 @@ def runSetup = { boolean ask, Closure detectionUpdate = null ->
 }
 
 def forceFresh = false     // set when "Suggest cells again" is pressed: do not reuse saved outlines
-def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, s, d -> }) ->
+// comparison (the sensitivity check): [picture, dir, into] runs Cellpose on that picture into that folder, grades the outlines
+// with the response, and puts them in "into" instead of the suggestions. Nothing is shown and nothing is accepted.
+def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, s, d -> }), Map comparison = null ->
     task.report(0, "Checking Cellpose", "Finding the installed Python environment.")
     def py = findCellposePython()
     if (py == null && cellposeBusy) return "Cellpose is still being set up; try again when it says it is found"
+    if (py == null && comparison != null) return "Cellpose was not found"
     if (py == null && !testGui) {
         def choices = ["Set up Cellpose now", "I already have it: show where", "Cancel"] as Object[]
         int ans = javax.swing.JOptionPane.showOptionDialog(frame, "Cellpose was not found on this computer.\n\n" + SETUP_TEXT, "Cellpose is needed for suggestions", javax.swing.JOptionPane.DEFAULT_OPTION, javax.swing.JOptionPane.QUESTION_MESSAGE, null, choices, choices[0])
@@ -3738,16 +3915,18 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
     }
     if (py == null) return "Cellpose was not found"
     task.report(5, "Preparing the detection image", "Checking whether saved outlines can be reused.")
-    def dir = new File(outDir, "automatic_outlines"); dir.mkdirs()
+    boolean blindRun = comparison == null && steps.blind == true
+    def dir = comparison != null ? (File) comparison.dir : new File(outDir, blindRun ? "automatic_outlines_blind" : "automatic_outlines"); dir.mkdirs()
     def tif = new File(dir, base + "_for_automatic_outlines.tif")
     def zip = new File(dir, base + "_for_automatic_outlines_rois.zip")
     def optFile = new File(dir, "cellpose_options_used.txt")
     def pending = new File(dir, "cellpose_run_incomplete.txt")
-    def pic = steps.outlinePicture()
+    def pic = comparison != null ? (ImagePlus) comparison.picture : steps.outlinePicture()
+    if (blindRun) new File(dir, "detection_picture.txt").setText(steps.blindBasis() + ". Picture for Cellpose: " + steps.blindRecipe() + "; no response channel.\n", "UTF-8")
     task.imageSize = pic.getWidth() + " x " + pic.getHeight() + " pixels"
     def opts = []; def cmd = []
     boolean reuse = false
-    if (!forceFresh && !pending.exists() && tif.isFile() && zip.isFile() && zip.length() > 0) {
+    if (!(forceFresh && comparison == null) && !pending.exists() && tif.isFile() && zip.isFile() && zip.length() > 0) {
         ImagePlus saved = null
         try { saved = IJ.openImage(tif.getPath()); reuse = CalciumSteps.samePicture(saved, pic) }
         catch (Throwable ignore) { }
@@ -3820,9 +3999,9 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
             task.checkCancelled()
             def r = new ij.io.RoiDecoder(zf.getInputStream(e).withCloseable { it.bytes }, e.getName()).getRoi()
             if (r != null && r.isArea()) {
-                double[] ev = steps.grade(r)
+                double[] ev = comparison != null ? steps.grade(r, false) : steps.grade(r)
                 if (ev[0] >= 4) hidden++
-                else { def cen = r.getContourCentroid(); got << [roi:r, grade:(int) ev[0], ev:ev, cx:(int) cen[0], cy:(int) cen[1], edge:steps.nearEdge(r)] }
+                else { def cen = r.getContourCentroid(); got << [roi:r, grade:(int) ev[0], ev:ev, cx:(int) cen[0], cy:(int) cen[1], edge:steps.nearEdge(r), blind:blindRun] }
             }
             task.report(85 + (int) (12 * (i + 1) / entries.size()), "Checking the suggested cells", "Checked " + (i + 1) + " of " + entries.size() + " outlines.")
         }
@@ -3831,7 +4010,13 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
     def csv = new StringBuilder("suggestion,grade,area_pixels,mean_brightness,share_very_bright,brighter_than_surroundings,rise_inside,rise_around,touches_edge,x,y\n")
     got.eachWithIndex { p, i -> csv.append(String.format(Locale.US, "%d,%s,%.0f,%.2f,%.3f,%.2f,%.2f,%.2f,%s,%d,%d\n", i + 1, GRADE_TEXT[p.grade], p.ev[1], p.ev[2], p.ev[3], p.ev[4], p.ev[5], p.ev[6], p.ev[7] > 0 ? "yes" : "no", p.cx, p.cy)) }
     new File(dir, base + "_suggestions_with_evidence.csv").text = csv.toString()
-    steps.say("Automatic outlines (suggestions only): Cellpose, command: " + cmd.join(" ") + " (" + how + "). " + got.size() + " outlines shown: " + got.count { it.grade == 0 } + " respond on their own, " + got.count { it.grade == 1 } + " likely cells, " + got.count { it.grade == 2 } + " unsure, " + got.count { it.grade == 3 } + " very bright; " + hidden + " left out for their size; " + got.count { it.edge } + " lie within " + CalciumSteps.EDGE_MARGIN + " pixels of the picture's edge" + (edgeBox.isSelected() ? " and are not shown (box ticked)" : "") + ". Grades are measured (brightness, share of very bright pixels, contrast, rise after the stimulus inside against around). Only the outlines the user accepted became cells.")
+    if (comparison != null) {
+        task.checkCancelled(); comparison.into.addAll(got); task.succeeded = true
+        if (pending.exists() && !pending.delete()) throw new IOException("Could not finish the detection record: " + pending.getPath())
+        return got.size() + " response-assisted outlines; " + how
+    }
+    if (blindRun) steps.say("Automatic outlines are blind: Cellpose got the picture of frames " + steps.blindFirst + "-" + steps.blindLast + " only (" + steps.blindRecipe() + "), saved as " + tif.getName() + " in " + dir.getName() + ", and the outlines were graded on that picture without the response.")
+    steps.say("Automatic outlines (suggestions only): Cellpose, command: " + cmd.join(" ") + " (" + how + "). " + got.size() + " outlines shown: " + got.count { it.grade == 0 } + " respond on their own, " + got.count { it.grade == 1 } + " likely cells, " + got.count { it.grade == 2 } + " unsure, " + got.count { it.grade == 3 } + " very bright; " + hidden + " left out for their size; " + got.count { it.edge } + " lie within " + CalciumSteps.EDGE_MARGIN + " pixels of the picture's edge" + (edgeBox.isSelected() ? " and are not shown (box ticked)" : "") + ". Grades are measured (brightness, share of very bright pixels, contrast" + (blindRun ? "; the response is not used" : ", rise after the stimulus inside against around") + "). Only the outlines the user accepted became cells.")
     task.checkCancelled()
     javax.swing.SwingUtilities.invokeAndWait { proposals.clear(); proposals.addAll(got) }
     if (pending.exists() && !pending.delete()) throw new IOException("Could not finish the detection record: " + pending.getPath())
@@ -3856,7 +4041,7 @@ suggestBtn.addActionListener({ e ->
 acceptAllBtn.addActionListener({ e ->
     int nL = unusedProposals(cellRois()).count { it.grade <= 1 } as int
     if (nL == 0) return
-    int ans = javax.swing.JOptionPane.showConfirmDialog(frame, "Accept all " + nL + " outlines graded \"responds\" or \"likely a cell\"?\n\nIn tests about 8 in 10 of these were real cells, so about 2 in 10 are not.\nLook through them afterwards and remove the wrong ones.", "Accept all likely ones", javax.swing.JOptionPane.OK_CANCEL_OPTION)
+    int ans = javax.swing.JOptionPane.showConfirmDialog(frame, "Accept all " + nL + " outlines graded " + (steps.blind ? "" : "\"responds\" or ") + "\"likely a cell\"?\n\nIn tests about 8 in 10 of these were real cells, so about 2 in 10 are not.\nLook through them afterwards and remove the wrong ones.", "Accept all likely ones", javax.swing.JOptionPane.OK_CANCEL_OPTION)
     if (ans == javax.swing.JOptionPane.OK_OPTION) acceptAll()
 } as java.awt.event.ActionListener)
 def updateEditHint = { String message -> editHint.setText("<html><body style='width:300px'>" + message + "</body></html>") }
@@ -3945,10 +4130,29 @@ changeBtn.addActionListener({ e ->
 } as java.awt.event.ActionListener)
 openBtn.addActionListener({ e -> try { java.awt.Desktop.getDesktop().open(outDir) } catch (Throwable t) { IJ.log("Results folder: " + outDir.getPath()) } } as java.awt.event.ActionListener)
 frame.addWindowListener(new java.awt.event.WindowAdapter() { void windowClosing(java.awt.event.WindowEvent e) { timer.stop(); detectionProgress.close() } })
+// Sensitivity check after blind selection: response-assisted detection once, compared with the blind suggestions. Returns the
+// comparison and its report, or a message saying why it did not run. Its outlines are never added to the cells or measured.
+def runSensitivity = { Roi[] cells, String prefix, Closure tell ->
+    if (!steps.found) return [text: 'Sensitivity check not run: no response was found, so there is no response-assisted picture to compare with.']
+    def assisted = [], blindSuggestions = []
+    javax.swing.SwingUtilities.invokeAndWait { blindSuggestions.addAll(proposals.findAll { it.blind }) }
+    def task = new CalciumOutlineTask(progress: { p, s, d -> tell('Sensitivity check: ' + s.toLowerCase() + '…') })
+    String how
+    try { how = suggest(task, [picture: steps.responseOutlinePicture(), dir: new File(outDir, 'automatic_outlines'), into: assisted]) }
+    catch (Throwable t) { return [text: 'Sensitivity check failed: ' + t] }
+    if (!task.succeeded) return [text: 'Sensitivity check not completed: ' + how]
+    def m = CalciumSensitivity.compare(assisted, blindSuggestions, cells, edgeBox.isSelected())
+    CalciumSensitivity.save(m, prefix)
+    String text = CalciumSensitivity.report(m, how)
+    steps.say(text + ' Files: ' + new File(prefix + 'sensitivity_check.csv').getName() + ' (one row per response-assisted outline) and ' + new File(prefix + 'sensitivity_check_missed_RoiSet.zip').getName() + ' (the missed outlines that could be cells, to open in the ROI Manager).')
+    new File(prefix + 'what_was_done.txt').setText(steps.log.join('\n') + '\n', 'UTF-8')
+    [m: m, text: text]
+}
 go.addActionListener({ e ->
     def sp = splitCells(); Roi[] cells = (Roi[]) sp.cells; Roi[] edgeCells = (Roi[]) sp.edge
-    final String measuredSelectionBasis=selectionBasis
+    final String measuredSelectionBasis=basisFor(sp.all as Roi[])
     final boolean measuredExcludeEdges=edgeBox.isSelected()
+    final boolean checkSensitivity = steps.blind && sensBox.isSelected()
     steps.alsoAvoid = edgeCells
     steps.edgeNote = edgeBox.isSelected() ? "Cells at the picture's edge: outlines within " + CalciumSteps.EDGE_MARGIN + " pixels of the border are left out, because their background can only be taken from the inner, better-lit side (" + edgeCells.length + " outlines in the ROI Manager left out; they are not in the tables or the saved outlines)." : "Cells at the picture's edge were NOT left out (box unticked); the summary table marks them."
     if (cells.length == 0) { result.setText("<html><body style='width:300px'>There are no cells yet. Choose cells in step 2 first.</body></html>"); return }
@@ -3964,7 +4168,7 @@ go.addActionListener({ e ->
                 if (saveMovie.isSelected()) IJ.saveAsTiff(corrected, outDir.getPath() + File.separator + base + "_background_corrected_movie.tif")
             }
             result.setText("<html><body style='width:300px'>Measuring " + cells.length + " cells on " + steps.n + " frames...</body></html>")
-            steps.log.removeAll{it.startsWith('Cell selection basis:')};steps.say('Cell selection basis: '+measuredSelectionBasis+'. Accepted ROI registry includes premeasurement exclusions.')
+            steps.log.removeAll{it.startsWith('Cell selection basis:') || it.startsWith('Sensitivity check')};steps.say('Cell selection basis: '+measuredSelectionBasis+'. Accepted ROI registry includes premeasurement exclusions.')
             def summary = steps.measureAndSave(cells, names, outDir.getPath() + File.separator + base + "_")
             if (corrected != null && !testGui) { corrected.show(); corrected.setSlice(Math.min(steps.n, steps.found ? steps.p0 + 5 : 1)); corrected.setDisplayRange(0, CalciumSteps.SHOW_MAX); corrected.updateAndDraw() }
             IJ.log(summary); IJ.log("Saved in: " + outDir.getPath()); IJ.log("Step 4 uses full-precision unlifted fluorescence: " + base + "_gray_values_background_corrected_native.csv")
@@ -3982,7 +4186,15 @@ go.addActionListener({ e ->
                 registry:registryFile,registryHash:CalciumInstaller.digest(registryFile.bytes),selectionBasis:measuredSelectionBasis,
                 acceptedRois:acceptedRoisFile,acceptedRoisHash:CalciumInstaller.digest(acceptedRoisFile.bytes)]
             measured.inputHash=CalciumInstaller.digest(measured.csv.bytes)
-            def html = "<b>Done.</b> " + cells.length + " cells measured on " + steps.n + " frames.<br>" +
+            String sensitivityHtml = ""
+            if (checkSensitivity) {
+                def check = runSensitivity(cells, outDir.getPath() + File.separator + base + "_", { String s -> javax.swing.SwingUtilities.invokeLater { result.setText("<html><body style='width:300px'>" + CalciumOutlineProgress.escape(s) + "</body></html>") } })
+                def m = check.m
+                sensitivityHtml = m != null ? "Sensitivity check: the blind detection also found <b>" + m.found + " of " + m.cellLike + "</b> response-assisted outlines that could be cells (" + CalciumSensitivity.pct((int) m.found, (int) m.cellLike) + "); " + (m.cellLike - m.found) + " missed. Details in what_was_done.txt.<br>" :
+                    "<font color='#b05000'>" + CalciumOutlineProgress.escape((String) check.text) + "</font><br>"
+                IJ.log((String) check.text)
+            }
+            def html = "<b>Done.</b> " + cells.length + " cells measured on " + steps.n + " frames.<br>" + sensitivityHtml +
                 "Legacy 5-SD screening rise: <b>" + steps.lastClear + " of " + cells.length + "</b>. Protocol responder counts are in Step 4.<br>" +
                 (edgeCells.length > 0 ? edgeCells.length + " outlines at the picture's edge were left out (dashed).<br>" : "") +
                 (steps.lastDim > 0 ? "<font color='#b05000'><b>" + steps.lastDim + " cells are not brighter than their background at rest.</b> Review their quality status in Step 4.</font><br>" : "") +
@@ -3991,7 +4203,7 @@ go.addActionListener({ e ->
         } catch (Throwable t) { go.setEnabled(true); go.setText("Measure and save"); result.setText("<html><body style='width:300px'>Could not measure: " + t + "</body></html>"); IJ.log("Calcium imaging plugin: " + t) }
     }
 } as java.awt.event.ActionListener)
-if (testGui) { binding.setVariable("hooks", [viewAllBtn: viewAllBtn, viewBaselineBtn: viewBaselineBtn, viewResponseBtn: viewResponseBtn, selectionNote: selectionNote, selectionBasis: { -> selectionBasis }, changeBtn: changeBtn, changeRecording: changeRecording, continueBtn: continueBtn, backToCellsBtn: backToCellsBtn, backToMeasureBtn: backToMeasureBtn, cards: [s1, s2, s3, s4], recordingNote: recordingNote, detectionProgress: detectionProgress, suggestBtn: suggestBtn, edgeBox: edgeBox, addBtn: addBtn, setForceFresh: { boolean v -> forceFresh = v }, setupCellpose: setupCellpose, findCellposePython: findCellposePython, setupBtn: setupBtn, setupRow: setupRow, cpLabel: cpLabel, showCellposeState: showCellposeState, setupText: SETUP_TEXT, saveMovie: saveMovie, makeMovie: makeMovie, rm: rm, refresh: refresh, go: go, status: status, steps: steps, outDir: outDir, showBg: showBg, frame: frame, suggest: suggest, acceptAt: acceptAt, acceptAll: acceptAll, hoverAt: hoverAt, proposals: proposals, result: result, info: info, removeSelected: removeSelected, undoLast: undoLast, root: root]); refresh(true); return }
+if (testGui) { binding.setVariable("hooks", [cellRois: cellRois, sensBox: sensBox, basisFor: basisFor, responseSeen: { -> responseSeen }, reveal: { -> reveal() }, runSensitivity: runSensitivity, trace: trace, respondsLegend: respondsLegend, viewAllBtn: viewAllBtn, viewBaselineBtn: viewBaselineBtn, viewResponseBtn: viewResponseBtn, selectionNote: selectionNote, selectionBasis: { -> selectionBasis }, changeBtn: changeBtn, changeRecording: changeRecording, continueBtn: continueBtn, backToCellsBtn: backToCellsBtn, backToMeasureBtn: backToMeasureBtn, cards: [s1, s2, s3, s4], recordingNote: recordingNote, detectionProgress: detectionProgress, suggestBtn: suggestBtn, edgeBox: edgeBox, addBtn: addBtn, setForceFresh: { boolean v -> forceFresh = v }, setupCellpose: setupCellpose, findCellposePython: findCellposePython, setupBtn: setupBtn, setupRow: setupRow, cpLabel: cpLabel, showCellposeState: showCellposeState, setupText: SETUP_TEXT, saveMovie: saveMovie, makeMovie: makeMovie, rm: rm, refresh: refresh, go: go, status: status, steps: steps, outDir: outDir, showBg: showBg, frame: frame, suggest: suggest, acceptAt: acceptAt, acceptAll: acceptAll, hoverAt: hoverAt, proposals: proposals, result: result, info: info, removeSelected: removeSelected, undoLast: undoLast, root: root]); refresh(true); return }
 frame.setVisible(true)
 timer.start()
 refresh(true)
