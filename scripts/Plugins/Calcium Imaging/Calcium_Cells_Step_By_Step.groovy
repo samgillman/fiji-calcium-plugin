@@ -248,9 +248,57 @@ class CalciumSteps {
         IJ.run(picture, "Gaussian Blur...", "sigma=" + BLUR_PICTURE)
         return (float[]) picture.getProcessor().getPixels()
     }
-    /** The last frame before the stimulus as the plugin estimates it: the end of the frames before the rise, which stop well
-     *  ahead of it, so early responders are not in them. 0 when no response was found. Only the time is used, not which cells rose. */
-    int estimatedLastBeforeStimulus() { return found ? b1 : 0 }
+    /** Blind selection uses the frames before the RESPONSE. That is not the same as before the stimulus: a drug can reach the
+     *  chamber long before any cell responds, and more frames give a clearer picture. Measured 20 Nov 2026: the two blind
+     *  pictures outline 70 % of one recording's audited cells on frames 1-20 and 79 % on frames 1-50, and the cells gained
+     *  respond as often as the ones found before. The window the plugin offers, for the user to confirm or change:
+     *   first frame: 1, or the frame after a movement of the field at the start (CalciumMotion.MOVED pixels or more);
+     *   last frame, response found: BLIND_MARGIN frames before the rise, so cells that rise early are not in the picture;
+     *   last frame, no response found (or a "rise" that is the field moving): BLIND_CEILING, or the last frame of a shorter recording.
+     *  Only the time of the rise is used, never which cells rose. */
+    static final int BLIND_MARGIN = 15, BLIND_CEILING = 60
+    /** Why the offered window is what it is, in a sentence for the dialog. */
+    String blindWindowWhy = ""
+    /** True when the "rise" the plugin found lies in or right after frames in which the field moved: then it is the movement. */
+    boolean riseIsMovement() {
+        if (!found || motionShifts == null) return false
+        for (Object r : (List) CalciumMotion.summary(motionShifts).get('runs')) { List run = (List) r; if (onset >= ((Number) run.get(0)).intValue() && onset <= ((Number) run.get(1)).intValue() + 5) return true }
+        return false
+    }
+    int[] proposedBlindWindow() {
+        int first = 1; String moved = ""
+        if (motionShifts != null) {
+            List runs = (List) CalciumMotion.summary(motionShifts).get('runs')
+            if (!runs.isEmpty() && ((Number) ((List) runs.get(0)).get(0)).intValue() == 1) {
+                int end = ((Number) ((List) runs.get(0)).get(1)).intValue()
+                if (end < n - 10) first = end + 1
+            }
+        }
+        boolean rise = found && !riseIsMovement()
+        int last
+        if (rise && onset - BLIND_MARGIN >= first + 9) {
+            last = onset - BLIND_MARGIN
+            blindWindowWhy = "The cells start to rise near frame " + onset + ". The frames offered end " + BLIND_MARGIN + " frames before that, so cells that rise early are not in them."
+        } else if (rise) {
+            last = Math.max(first, Math.min(b1, onset - 1))
+            blindWindowWhy = "The cells start to rise near frame " + onset + ", which leaves few frames before the response. Check these frames."
+        } else {
+            last = Math.max(Math.min(n, BLIND_CEILING), Math.min(n, first + 19))
+            blindWindowWhy = (found ? "The only rise found is near frame " + onset + ", where the field moved, so no response was found." : "No response was found.") + " The frames offered go up to frame " + last + ": nothing responds in them, and more frames give a clearer picture."
+        }
+        // The field may still be settling after the movement: frames at the start of the window that sit away from the rest of it are left out too.
+        if (motionShifts != null) for (int round = 0; round < 3; round++) {
+            Map inside = CalciumMotion.summary(motionShifts, first, last); int until = 0
+            for (String kind : ['runs', 'slightRuns']) for (Object r : (List) inside.get(kind)) { List run = (List) r; int a = ((Number) run.get(0)).intValue(), b = ((Number) run.get(1)).intValue(); if (a <= first && b >= first && b < last - 9) until = Math.max(until, b) }
+            if (until == 0) break
+            first = until + 1
+        }
+        if (first > 1) moved = " Frames 1-" + (first - 1) + " are left out: the field moved in them."
+        blindWindowWhy += moved
+        return [first, last] as int[]
+    }
+    /** The last frame the plugin offers for blind selection (see proposedBlindWindow). */
+    int estimatedLastBeforeStimulus() { return proposedBlindWindow()[1] }
     /** Blind selection from here on: the picture shows frames first..last only, the response channel is emptied, and new
      *  suggestions are found and graded on that picture without the response. Measurements are not affected. */
     void startBlind(int first, int last) { startBlind(first, last, framesPicture(first, last)) }
