@@ -57,7 +57,7 @@ from the raw file to a table of gray values per cell:
   2. It makes the cells visible: cells are green and very bright objects (precipitate, debris)
      are yellow. Step 1 asks how cells are chosen:
        - Before the response only (blind), the default and the choice for % responding. The plugin
-         offers the frames and you confirm them: they end 20 frames before the rise it finds, or at
+         offers the frames and you confirm them: they end 25 frames before the rise it finds, or at
          frame 60 when it finds no response, and they leave out frames at the start in which the
          field moved. They need not end where the stimulus was added (a drug can reach the chamber
          long before most cells respond); Step 4 asks for that separately. The picture, the suggested

@@ -253,13 +253,14 @@ class CalciumSteps {
      *  pictures outline 70 % of one recording's audited cells on frames 1-20 and 79 % on frames 1-50, and the cells gained
      *  respond as often as the ones found before. The window the plugin offers, for the user to confirm or change:
      *   first frame: 1, or the frame after a movement of the field at the start (CalciumMotion.MOVED pixels or more);
-     *   last frame, response found: BLIND_MARGIN frames before the rise. The rise the plugin finds is the field's; the first cells
-     *     start 10-12 frames before it (P3 Run2, C2 Run1, P2 Run1, measured 20 Nov 2026), so 15 left 3-6 frames and 20 leaves 8-11.
+     *   last frame, response found: BLIND_MARGIN frames before the rise. The rise the plugin finds is the field's (about the
+     *     median cell); the first cells start their main rise 9-15 frames before it (P3 Run2 12, C2 Run1 9, P2 Run1 14-15;
+     *     measured 20 Nov 2026 on the audited traces). A margin of 15 left 1-6 frames, 20 leaves 5-11, 25 leaves 10-16.
      *     A rise too early for that keeps 20 frames when at least 9 frames then remain before the rise, and says so;
      *   last frame, no response found (or a "rise" that is the field moving): BLIND_CEILING, or the last frame of a shorter recording.
      *  Only the time of the rise is used, never which cells rose. A few cells can still respond briefly inside the window
      *  (1 to 4 audited cells per recording at frames 22-60 on the 18 Nov recordings): it ends before the main response. */
-    static final int BLIND_MARGIN = 20, BLIND_CEILING = 60
+    static final int BLIND_MARGIN = 25, BLIND_CEILING = 60
     /** Why the offered window is what it is, in a sentence for the dialog. */
     String blindWindowWhy = ""
     /** True when the "rise" the plugin found lies in or right after frames in which the field moved: then it is the movement. */
@@ -282,7 +283,7 @@ class CalciumSteps {
         int full = onset - BLIND_MARGIN, least = Math.max(first, Math.min(b1, onset - 1))
         if (rise && full >= Math.min(least, first + 19)) {
             last = full
-            blindWindowWhy = "The cells start to rise near frame " + onset + ". The frames offered end " + BLIND_MARGIN + " frames before that: the first cells rise about 10 frames earlier."
+            blindWindowWhy = "The cells start to rise near frame " + onset + ". The frames offered end " + BLIND_MARGIN + " frames before that: the first cells rise 10 to 15 frames earlier."
         } else if (rise) {
             last = Math.min(least, first + 19)
             blindWindowWhy = "The cells start to rise near frame " + onset + ", which leaves few frames before the response. Check these frames."
