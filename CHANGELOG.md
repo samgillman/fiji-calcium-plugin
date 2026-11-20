@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.11.20.6
+
+- Step 2 has a **Picture** switch: **All frames**, **Baseline…** and **Response (magenta)**. Magenta can now be turned on after the recording is open; the response is looked for at that moment, exactly as the first screen's option does, and the picture changes in place so outlines and clicks keep working. The first screen's option still works and still starts unticked.
+- Fix **Review baseline frames**, which could not show its picture (ImageJ refused to put a flat picture into the colour composite). The baseline view now offers the detected baseline frames when there is a response.
+- The selection basis recorded with each measurement follows the picture in use: all frames, baseline frames, or response-assisted. When "look for a response" was ticked but no response was found, it is now recorded as all frames rather than response-assisted.
+- The saved `picture_colour.tif` is always the all-frames colour picture, whatever view is on screen, with a magenta channel only when a response was found, as before.
+- **‹ Change recording** in the Recording card goes back to the first screen. If the ROI Manager holds outlines, it asks whether to clear or keep them, because the next recording starts with whatever outlines it holds. **‹ Back to cells** and **‹ Back to measuring** move back between steps.
+- The plugin window stays above Fiji's own windows only while Fiji is in use, and drops back when another program, such as a browser, is in front.
+
 ## 2026.11.20.5
 
 - Validate Step 4 settings while editing, mark invalid fields and disable analysis until errors are corrected. Preserve separate elapsed-time and legacy drafts when switching rules; add Discard pending changes to restore the completed analysis or initial settings.

@@ -1,4 +1,4 @@
-// Calcium imaging: cells step by step                                                    version 2026.11.20.5
+// Calcium imaging: cells step by step                                                    version 2026.11.20.6
 // One plugin for the whole job on one recording:
 //   1. choose the recording (already open in Fiji, or a file) and a folder for the results
 //   2. the plugin makes the cells visible: all-frames picture, response (found automatically, if there is one), and a
@@ -78,6 +78,7 @@ class CalciumSteps {
     ImagePlus allPic, respPic, colourPic
     boolean[] bright             // widened bright objects
     boolean found = false; int onset, p0, p1, b0, b1; double share; String why = ""
+    boolean looked = false             // whether the response has been looked for, at the start or later from Step 2
     List<String> log = []
     Roi[] alsoAvoid = new Roi[0]         // outlines that are not measured (cells at the edge that are left out) but must never serve as background
     String edgeNote = ""                 // what was done about cells at the picture's edge, for the record of steps
@@ -87,7 +88,7 @@ class CalciumSteps {
     /** Steps 1-2: pictures. The movie is only read. */
     void prepare(ImagePlus imp, boolean lookForResponse) {
         movie = imp; n = imp.getStackSize(); w = imp.getWidth(); h = imp.getHeight()
-        say("Calcium imaging plugin, version 2026.11.20.5")
+        say("Calcium imaging plugin, version 2026.11.20.6")
         say("Recording: " + imp.getTitle() + " (" + n + " frames, " + w + " x " + h + ", " + imp.getBitDepth() + "-bit)")
         ImagePlus sum = ZProjector.run(imp, "sum")                                   // Image > Stacks > Z Project, Sum Slices
         FloatProcessor avg = (FloatProcessor) sum.getProcessor().convertToFloat()
@@ -107,34 +108,73 @@ class CalciumSteps {
         new RankFilters().rank(bp, (double) BRIGHT_GROW, RankFilters.MAX)            // Process > Filters > Maximum
         bright = new boolean[w * h]
         for (int i = 0; i < bpx.length; i++) bright[i] = bpx[i] != 0
-        if (lookForResponse) findResponseFrames()
+        if (lookForResponse) findResponse()
+        colourPic = colourComposite(true)
+        say("Colour picture: red = all-frames picture shown " + BRIGHT_MIN + "-" + BRIGHT_MAX + " (precipitate turns yellow), green = all-frames picture 0-" + SHOW_MAX + (found ? ", magenta = response" : ""))
+    }
+
+    /** Looks for the response and, when there is one, makes the response picture. The movie is only read. */
+    void findResponse() {
+        looked = true
+        findResponseFrames()
         if (found) {
-            ImagePlus pk = ZProjector.run(imp, "sum", p0, p1), pre = ZProjector.run(imp, "sum", b0, b1)
+            ImagePlus pk = ZProjector.run(movie, "sum", p0, p1), pre = ZProjector.run(movie, "sum", b0, b1)
             float[] x = (float[]) pk.getProcessor().convertToFloat().getPixels(), y = (float[]) pre.getProcessor().convertToFloat().getPixels()
             float f = (float) ((p1 - p0 + 1) / (double) (b1 - b0 + 1))
             float[] r = new float[x.length]
             for (int i = 0; i < r.length; i++) r[i] = y[i] > 0 ? (float) (x[i] / y[i] / f) : 1f      // Process > Image Calculator, Divide
             respDiff = new float[x.length]
             for (int i = 0; i < r.length; i++) respDiff[i] = (float) (x[i] / (p1 - p0 + 1) - y[i] / (b1 - b0 + 1))
-            respPic = new ImagePlus("response_" + imp.getTitle(), new FloatProcessor(w, h, r))
+            respPic = new ImagePlus("response_" + movie.getTitle(), new FloatProcessor(w, h, r))
             IJ.run(respPic, "Gaussian Blur...", "sigma=" + BLUR_RESPONSE)
             respPic.setDisplayRange(RESP_MIN, RESP_MAX)
             say("Response: brightness rises near frame " + onset + " in " + Math.round(100 * share) + " % of the field. Response picture = frames " + p0 + "-" + p1 + " divided by frames " + b0 + "-" + b1 + ", Gaussian Blur sigma=" + BLUR_RESPONSE + ", shown " + RESP_MIN + "-" + RESP_MAX)
-        } else if (lookForResponse) say("Response: none found (" + why + "). The colour picture has no magenta.")
+        } else say("Response: none found (" + why + "). The colour picture has no magenta.")
+    }
+
+    /** The colour picture as a Fiji composite: red and green from the all-frames picture, magenta from the response.
+     *  On screen there is always a third channel (blank, and switched off, until a response is shown), so the picture can
+     *  change view later without replacing its window. The saved copy has a magenta channel only when there is a response. */
+    CompositeImage colourComposite(boolean forDisplay) {
         ImageStack st = new ImageStack(w, h)                                         // Image > Color > Merge Channels
         st.addSlice("very bright", allPic.getProcessor().duplicate())
         st.addSlice("all frames", allPic.getProcessor().duplicate())
-        if (found) st.addSlice("response", respPic.getProcessor().duplicate())
-        ImagePlus tmp = new ImagePlus("colour_" + imp.getTitle(), st)
+        boolean third = found || forDisplay
+        if (third) st.addSlice("response", found ? respPic.getProcessor().duplicate() : new FloatProcessor(w, h))
+        ImagePlus tmp = new ImagePlus("colour_" + movie.getTitle(), st)
         tmp.setDimensions(st.getSize(), 1, 1)
         CompositeImage ci = new CompositeImage(tmp, IJ.COMPOSITE)
         ci.setChannelLut(LUT.createLutFromColor(Color.red), 1); ci.setC(1); ci.setDisplayRange(BRIGHT_MIN, BRIGHT_MAX)
         ci.setChannelLut(LUT.createLutFromColor(Color.green), 2); ci.setC(2); ci.setDisplayRange(0, SHOW_MAX)
-        if (found) { ci.setChannelLut(LUT.createLutFromColor(Color.magenta), 3); ci.setC(3); ci.setDisplayRange(RESP_MIN, RESP_MAX) }
-        ci.setC(1); ci.setCalibration(imp.getCalibration().copy())
-        colourPic = ci
-        say("Colour picture: red = all-frames picture shown " + BRIGHT_MIN + "-" + BRIGHT_MAX + " (precipitate turns yellow), green = all-frames picture 0-" + SHOW_MAX + (found ? ", magenta = response" : ""))
+        if (third) { ci.setChannelLut(LUT.createLutFromColor(Color.magenta), 3); ci.setC(3); ci.setDisplayRange(RESP_MIN, RESP_MAX) }
+        if (third && !found) ci.setActiveChannels("110")
+        ci.setC(1); ci.setCalibration(movie.getCalibration().copy())
+        return ci
     }
+    /** Shows the response in magenta on the colour picture, looking for it first if needed. False when there is none. */
+    boolean showResponse() {
+        if (!looked) findResponse()
+        if (!found || colourPic.getNChannels() < 3) return false
+        float[] target = (float[]) colourPic.getStack().getPixels(3)
+        System.arraycopy((float[]) respPic.getProcessor().getPixels(), 0, target, 0, target.length)
+        ((CompositeImage) colourPic).setActiveChannels("111"); colourPic.updateAndDraw()
+        return true
+    }
+    void hideResponse() { if (colourPic.getNChannels() >= 3) { ((CompositeImage) colourPic).setActiveChannels("110"); colourPic.updateAndDraw() } }
+    /** A picture for choosing cells from frames first to last only, processed like the all-frames picture. Display only. */
+    float[] baselinePicture(int first, int last) {
+        ImagePlus preview = ZProjector.run(movie, "avg", first, last)
+        ImagePlus picture = new ImagePlus("baseline_" + movie.getTitle(), preview.getProcessor().convertToFloat())
+        IJ.run(picture, "Subtract Background...", "rolling=" + (int) BALL_RADIUS)
+        IJ.run(picture, "Gaussian Blur...", "sigma=" + BLUR_PICTURE)
+        return (float[]) picture.getProcessor().getPixels()
+    }
+    /** Shows a picture (the all-frames picture, or a baseline picture) in the red and green channels of the colour picture. */
+    void showPicture(float[] picture) {
+        for (int c = 1; c <= 2; c++) { float[] target = (float[]) colourPic.getStack().getPixels(c); System.arraycopy(picture, 0, target, 0, target.length) }
+        colourPic.updateAndDraw()
+    }
+    void showAllFrames() { showPicture((float[]) allPic.getProcessor().getPixels()) }
 
     /** Finds the frames of the response without outlines: 24 x 24 pixel squares, largest step up per square, at least 5 % of the squares stepping within the same 15 frames. */
     void findResponseFrames() {
@@ -454,7 +494,7 @@ class CalciumSteps {
         for (Roi c : cells) { Roi r = (Roi) c.clone(); r.setPosition(0); r.setStrokeColor(Color.yellow); r.setFillColor(null); ov.add(r) }
         chk.setOverlay(ov); ImagePlus flat = chk.flatten()
         IJ.saveAs(flat, "PNG", prefix + "cells_and_background_areas.png")
-        IJ.saveAsTiff(allPic, prefix + "picture_all_frames.tif"); IJ.saveAsTiff(colourPic, prefix + "picture_colour.tif")
+        IJ.saveAsTiff(allPic, prefix + "picture_all_frames.tif"); IJ.saveAsTiff(colourComposite(false), prefix + "picture_colour.tif")   // the all-frames colour picture, whatever view is on screen
         say("Legacy screening rise (not a stimulus responder call): highest 5-frame average after frames " + s0 + "-" + s1 + " at least 5 baseline standard deviations above their mean: " + lastClear + " of " + nc + " cells. Use Step 4 for protocol-defined responder counts. Mean rise " + String.format(Locale.US, "%.2f", lastMeanRise) + " gray levels.")
         if (lastDim > 0) say(lastDim + " cells are not brighter than their own background in frames 1-20. Step 4 retains their registered records and reports technical exclusions separately from nonresponders.")
         say("Compatibility export for_SimpleCa_every_cell_kept.csv adds constants to " + lastLifted + " dim traces. These offsets alter fractional response thresholds. Do not use this export for fractional amplitudes or responder percentages. Step 4 uses full-precision, unlifted fluorescence.")
@@ -471,7 +511,7 @@ class CalciumSteps {
 
 /** Release lookup sends no recording data. Installation requires an explicit button click. */
 class CalciumRelease {
-    static final String VERSION = "2026.11.20.5"
+    static final String VERSION = "2026.11.20.6"
     static final String REPOSITORY = "https://github.com/samgillman/fiji-calcium-plugin"
     static final String API = "https://api.github.com/repos/samgillman/fiji-calcium-plugin/releases/latest"
     static final String ASSET = "Calcium_Imaging_Fiji_Plugin.zip"
@@ -822,6 +862,8 @@ class CalciumTheme {
     }
     static javax.swing.JButton button(String text, boolean primary = false) { def b = new javax.swing.JButton(text); style(b, primary); b }
     static void style(javax.swing.AbstractButton b, boolean primary) { b.setUI(new CalciumButtonUI(primary: primary)) }
+    /** Marks a button as the current option of a group, or not. */
+    static void choose(javax.swing.AbstractButton b, boolean on) { if (b.getUI() instanceof CalciumButtonUI) { ((CalciumButtonUI) b.getUI()).chosen = on; b.repaint() } }
     static javax.swing.JLabel label(String text, Color colour = INK, int style = java.awt.Font.PLAIN, float delta = 0f) {
         def l = new javax.swing.JLabel(text); l.setFont(font(style, delta)); l.setForeground(colour); l.setAlignmentX(0f); l
     }
@@ -871,7 +913,7 @@ class CalciumTheme {
 
 /** Flat, rounded buttons that look the same on Mac, Windows and Linux. A primary button is filled blue. */
 class CalciumButtonUI extends javax.swing.plaf.basic.BasicButtonUI {
-    boolean primary = false
+    boolean primary = false, chosen = false   // chosen: the current option of a group, drawn light blue
     void installUI(javax.swing.JComponent c) {
         super.installUI(c)
         def b = (javax.swing.AbstractButton) c
@@ -888,6 +930,7 @@ class CalciumButtonUI extends javax.swing.plaf.basic.BasicButtonUI {
             Color fill, line, ink
             if (!m.isEnabled()) { fill = primary ? new Color(0xB7D3E3) : CalciumTheme.PAGE; line = primary ? fill : CalciumTheme.LINE; ink = primary ? Color.white : CalciumTheme.FAINT }
             else if (primary) { fill = m.isArmed() && m.isPressed() ? CalciumTheme.BLUE_DARK : m.isRollover() ? new Color(0x0064A0) : CalciumTheme.BLUE; line = fill; ink = Color.white }
+            else if (chosen) { fill = new Color(0xD3E6F0); line = CalciumTheme.BLUE; ink = CalciumTheme.BLUE_DARK }
             else { fill = m.isArmed() && m.isPressed() ? new Color(0xD3E6F0) : m.isRollover() ? CalciumTheme.BLUE_LIGHT : Color.white; line = m.isRollover() ? CalciumTheme.BLUE : new Color(0xC5CED8); ink = CalciumTheme.INK }
             g.setColor(fill); g.fillRoundRect(0, 0, w - 1, h - 1, 10, 10)
             g.setColor(line); g.drawRoundRect(0, 0, w - 1, h - 1, 10, 10)
@@ -3210,16 +3253,28 @@ def root = new CalciumScrollPanel(); root.setBorder(javax.swing.BorderFactory.cr
 
 // One card per step. Step 1 is already done; of steps 2 to 4 only one is open at a time, so the window fits the screen.
 def s1 = section("1", "Recording", false); s1.setDone(true)
-def recordingNote = note("<b>" + CalciumTheme.middle(imp.getTitle(), 40) + "</b><br><font color='" + MUTED + "'>" + steps.n + " frames · " + (steps.found ? "response near frame " + steps.onset + " (magenta)" : (look ? "no response found (no magenta)" : "response not looked for")) + "</font>")
-recordingNote.setToolTipText(imp.getTitle() + ". " + (steps.found ? "Brightness rises near frame " + steps.onset + "; the response is shown in magenta." : (look ? "No response was found, so the picture has no magenta. Every cell is still shown in green." : "The response was not looked for.")))
-s1.body.add(recordingNote)
+def recordingNote = note("&nbsp;")
+def describeRecording = { ->
+    recordingNote.setText("<html><body style='width:300px'><b>" + CalciumTheme.middle(imp.getTitle(), 40) + "</b><br><font color='" + MUTED + "'>" + steps.n + " frames · " + (steps.found ? "response near frame " + steps.onset + " (magenta)" : (steps.looked ? "no response found (no magenta)" : "response not looked for")) + "</font></body></html>")
+    recordingNote.setToolTipText(imp.getTitle() + ". " + (steps.found ? "Brightness rises near frame " + steps.onset + "; the response can be shown in magenta." : (steps.looked ? "No response was found, so there is no magenta. Every cell is still shown in green." : "The response has not been looked for. Choose Response (magenta) in Step 2 to look for it.")))
+}
+describeRecording()
+def changeBtn = btn("‹ Change recording")
+changeBtn.setToolTipText("Back to the first screen, to choose another recording or results folder")
+s1.body.add(recordingNote); s1.body.add(row(changeBtn))
 
 def s2 = section("2", "Choose the cells")
-String selectionBasis = look ? 'Response-assisted review' : 'All-frames structural review'
-ij.process.ImageProcessor savedSelectionProcessor = null
-def baselineViewBtn = btn('Review baseline frames')
-def fullViewBtn = btn('Restore all-frames view')
-def selectionNote = hint('For percent responding, choose identifiable cells independently of their response. Baseline review uses a frame range you confirm.')
+String selectionBasis = steps.found ? 'Response-assisted review' : 'All-frames structural review'
+// What the colour picture shows while cells are chosen. The choice is recorded with the measurement as the selection basis.
+def viewAllBtn = btn('All frames'), viewBaselineBtn = btn('Baseline…'), viewResponseBtn = btn('Response (magenta)')
+viewAllBtn.setToolTipText('The average of all frames with the background removed: cells by their structure')
+viewBaselineBtn.setToolTipText('Only frames before the stimulus, so a cell looks the same whether or not it responds')
+viewResponseBtn.setToolTipText('<html>Cells that brighten after the stimulus turn magenta.<br>Choosing cells with this on is recorded as response-assisted selection,<br>which can raise percent responding.</html>')
+def selectionNote = hint('&nbsp;')
+def showView = { String which, String text ->
+    [all: viewAllBtn, baseline: viewBaselineBtn, response: viewResponseBtn].each { key, button -> CalciumTheme.choose(button, key == which) }
+    selectionNote.setText("<html><body style='width:300px'>" + text + "</body></html>")
+}
 def suggestBtn = CalciumTheme.button("Suggest cells automatically", true)
 suggestBtn.setToolTipText("Cellpose outlines the cells; then click inside each outline that is a real cell")
 def acceptAllBtn = btn("Accept likely"); acceptAllBtn.setEnabled(false)
@@ -3238,11 +3293,12 @@ edgeBox.setToolTipText("<html>At the edge a cell's background can only be taken 
 def status = new javax.swing.JLabel("<html><body style='width:300px'><b>Cells chosen: 0</b></body></html>"); status.setFont(small); status.setForeground(CalciumTheme.INK); status.setAlignmentX(0f)
 def info = note("&nbsp;")
 def trace = new CalciumTracePanel(); trace.setAlignmentX(0f); trace.setFont(small)
-s2.body.add(row(baselineViewBtn,fullViewBtn));s2.body.add(selectionNote)
+s2.body.add(row(CalciumTheme.label('Picture:', CalciumTheme.MUTED), viewAllBtn, viewBaselineBtn, viewResponseBtn)); s2.body.add(selectionNote)
 def cpLabel = hint("&nbsp;")
 def setupBtn = btn("Set up Cellpose (one time)"); def setupRow = row(setupBtn)
 def detectionProgress = new CalciumOutlineProgress()
 def continueBtn = btn("Continue to measure  ›")
+showView(steps.found ? 'response' : 'all', steps.found ? 'Magenta: cells that brightened near frame ' + steps.onset + '. Picking cells this way is recorded as response-assisted.' : 'Choosing cells on the average of all frames.')
 s2.body.add(row(suggestBtn, acceptAllBtn)); s2.body.add(detectionProgress); s2.body.add(cpLabel); s2.body.add(setupRow)
 s2.body.add(row(CalciumTheme.label("Or draw:", CalciumTheme.MUTED), ovalBtn, freeBtn, addBtn))
 s2.body.add(row(showSug, showBg)); s2.body.add(row(edgeBox))
@@ -3276,7 +3332,8 @@ def result = note("Saves the tables in: " + savedIn); result.setToolTipText(outD
 def openBtn = btn("Open results folder"); openBtn.setVisible(false)
 def closeBtn = btn("Close")
 closeBtn.setToolTipText("Close this window; the pictures and saved results stay")
-s3.body.add(makeMovie); s3.body.add(saveMovie); s3.body.add(row(go, openBtn)); s3.body.add(result)
+def backToCellsBtn = btn('‹ Back to cells')
+s3.body.add(makeMovie); s3.body.add(saveMovie); s3.body.add(row(go, openBtn)); s3.body.add(result); s3.body.add(row(backToCellsBtn))
 def s4 = section("4", "Analyze responses")
 def analyzeBtn = CalciumTheme.button("Open analysis page", true); analyzeBtn.setEnabled(false)
 analyzeBtn.setToolTipText("Opens the analysis page in your browser. It runs on this computer only; nothing is sent anywhere.")
@@ -3285,12 +3342,15 @@ classicBtn.setToolTipText("The same analysis in a Fiji window, for when a browse
 analyzeBtn.addPropertyChangeListener("enabled", { classicBtn.setEnabled(analyzeBtn.isEnabled()) } as java.beans.PropertyChangeListener)
 def analysisNote = hint("Measure and save first, then open the analysis page to review the recording and run analysis. Keep Fiji open. One-time engine setup needs internet.")
 Map analysisMeasurement = null
-s4.body.add(row(analyzeBtn)); s4.body.add(analysisNote); s4.body.add(row(classicBtn))
+def backToMeasureBtn = btn('‹ Back to measuring')
+s4.body.add(row(analyzeBtn)); s4.body.add(analysisNote); s4.body.add(row(classicBtn)); s4.body.add(row(backToMeasureBtn))
 def stepCards = [s2, s3, s4]
 def openStep = { CalciumCard card -> stepCards.each { it.setExpanded(it.is(card)) }; frame.refreshContents() }
 stepCards.each { it.onToggle = { CalciumCard card -> if (card.expanded) { card.setExpanded(false); frame.refreshContents() } else openStep(card) } }
 s3.setExpanded(false); s4.setExpanded(false); s3.setSummary("after choosing cells"); s4.setSummary("SimpleCa²⁺, after measuring")
 continueBtn.addActionListener({ e -> openStep(s3) } as java.awt.event.ActionListener)
+backToCellsBtn.addActionListener({ e -> openStep(s2) } as java.awt.event.ActionListener)
+backToMeasureBtn.addActionListener({ e -> openStep(s3) } as java.awt.event.ActionListener)
 [s1, s2, s3, s4].each { root.add(it); root.add(javax.swing.Box.createVerticalStrut(8)) }
 root.add(row(closeBtn, CalciumTheme.label("Version " + CalciumRelease.VERSION, CalciumTheme.FAINT, java.awt.Font.PLAIN, -1f)))
 def scroll = new javax.swing.JScrollPane(root, javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED)
@@ -3302,6 +3362,16 @@ frame.getContentPane().add(scroll)
 frame.pack(); frame.setAlwaysOnTop(true)
 if (!testGui) { def scr = java.awt.Toolkit.getDefaultToolkit().getScreenSize(); frame.setLocation((int) Math.max(0, scr.width - frame.getWidth() - 12), 40) }
 if (!testGui) CalciumTheme.beside(steps.colourPic, frame)   // the colour picture takes the free space on the left; this window stays on the right
+// Stay above Fiji's own windows while Fiji is in use, but drop back when another program (a browser, e-mail) is in front.
+// Fiji has no active window while another program is in front. A short delay stops flicker when moving between Fiji's own windows.
+if (!testGui) {
+    def focus = java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager()
+    def settle = new javax.swing.Timer(250, { e -> if (frame.isDisplayable()) frame.setAlwaysOnTop(focus.getActiveWindow() != null) } as java.awt.event.ActionListener)
+    settle.setRepeats(false)
+    def follow = { java.beans.PropertyChangeEvent e -> settle.restart() } as java.beans.PropertyChangeListener
+    focus.addPropertyChangeListener("activeWindow", follow)
+    frame.addWindowListener(new java.awt.event.WindowAdapter() { void windowClosed(java.awt.event.WindowEvent e) { settle.stop(); focus.removePropertyChangeListener("activeWindow", follow) } })
+}
 
 // ---- what the window does ----
 def lastKey = ""; int[][] lastBg = new int[0][]
@@ -3334,29 +3404,6 @@ def cellRois = { ->
     def all = unique as List
     all.findAll { it != null && it.isArea() }.collect { def r = (Roi) it.clone(); r.setPosition(0); r } as Roi[]
 }
-baselineViewBtn.addActionListener({
-    def prompt=new GenericDialog('Baseline cell selection')
-    prompt.addNumericField('First baseline frame',1,0);prompt.addNumericField('Last baseline frame',Math.min(20,steps.n),0)
-    prompt.addMessage('Choose frames before stimulation. The recording and measurements are unchanged.')
-    prompt.showDialog();if(prompt.wasCanceled())return
-    double first=prompt.getNextNumber(),last=prompt.getNextNumber()
-    if(!Double.isFinite(first)||!Double.isFinite(last)||first!=Math.floor(first)||last!=Math.floor(last)||first<1||last<first||last>steps.n){IJ.error('Choose valid baseline frames.');return}
-    if(savedSelectionProcessor==null)savedSelectionProcessor=steps.colourPic.getProcessor().duplicate()
-    def preview=ZProjector.run(steps.movie,'avg',first as int,last as int)
-    IJ.run(preview,'Subtract Background...','rolling='+((int)CalciumSteps.BALL_RADIUS))
-    IJ.run(preview,'Gaussian Blur...','sigma='+CalciumSteps.BLUR_PICTURE)
-    preview.setDisplayRange(0,CalciumSteps.SHOW_MAX)
-    steps.colourPic.setProcessor(preview.getProcessor().convertToByte(true).convertToRGB())
-    selectionBasis='Baseline frames '+(first as int)+'-'+(last as int)
-    selectionNote.setText('<html><body style="width:300px">Selection view: '+selectionBasis+'. Response status is not a cell inclusion criterion.</body></html>')
-    steps.colourPic.updateAndDraw()
-} as java.awt.event.ActionListener)
-fullViewBtn.addActionListener({
-    if(savedSelectionProcessor!=null)steps.colourPic.setProcessor(savedSelectionProcessor.duplicate())
-    selectionBasis=look?'Response-assisted review':'All-frames structural review'
-    selectionNote.setText('<html><body style="width:300px">Selection view: '+selectionBasis+'. Use baseline review for response-independent selection.</body></html>')
-    steps.colourPic.updateAndDraw()
-} as java.awt.event.ActionListener)
 // the outlines in the ROI Manager, split into the cells that count and (when the box is ticked) the ones at the picture's edge
 def splitCells = { ->
     Roi[] all = cellRois(); boolean cut = edgeBox.isSelected()
@@ -3418,6 +3465,50 @@ def refresh = { boolean force ->
         undoBtn.setEnabled(!cellEdits.history.isEmpty())
     } catch (Throwable t) { status.setText("" + t) }
 }
+def viewButtons = [viewAllBtn, viewBaselineBtn, viewResponseBtn]
+def busyView = { boolean busy -> viewButtons.each { it.setEnabled(!busy) } }
+viewAllBtn.addActionListener({
+    steps.showAllFrames(); steps.hideResponse()
+    selectionBasis = 'All-frames structural review'
+    showView('all', 'Choosing cells on the average of all frames.'); refresh(true)
+} as java.awt.event.ActionListener)
+viewBaselineBtn.addActionListener({
+    def prompt = new GenericDialog('Baseline frames for choosing cells')
+    prompt.addNumericField('First baseline frame', steps.found ? steps.b0 : 1, 0); prompt.addNumericField('Last baseline frame', steps.found ? steps.b1 : Math.min(20, steps.n), 0)
+    prompt.addMessage('Choose frames before stimulation. The recording and measurements are unchanged.')
+    prompt.showDialog(); if (prompt.wasCanceled()) return
+    double first = prompt.getNextNumber(), last = prompt.getNextNumber()
+    if (!Double.isFinite(first) || !Double.isFinite(last) || first != Math.floor(first) || last != Math.floor(last) || first < 1 || last < first || last > steps.n) { IJ.error('Calcium imaging', 'Choose whole frame numbers from 1 to ' + steps.n + ', the first no later than the last.'); return }
+    busyView(true); selectionNote.setText("<html><body style='width:300px'>Making the baseline picture…</body></html>")
+    Thread.start('Calcium baseline picture') {
+        float[] picture = null; String problem = null
+        try { picture = steps.baselinePicture(first as int, last as int) } catch (Throwable t) { problem = t.message ?: t.toString() }
+        javax.swing.SwingUtilities.invokeLater {
+            busyView(false)
+            if (picture == null) { showView(selectionBasis.startsWith('Baseline') ? 'baseline' : selectionBasis.startsWith('Response') ? 'response' : 'all', 'Could not make the baseline picture: ' + problem); return }
+            steps.showPicture(picture); steps.hideResponse()
+            selectionBasis = 'Baseline frames ' + (first as int) + '-' + (last as int)
+            showView('baseline', 'Choosing cells on frames ' + (first as int) + '–' + (last as int) + ': a cell looks the same whether or not it responds.'); refresh(true)
+        }
+    }
+} as java.awt.event.ActionListener)
+viewResponseBtn.addActionListener({
+    boolean first = !steps.looked
+    busyView(true); if (first) selectionNote.setText("<html><body style='width:300px'>Looking for the response in all " + steps.n + " frames…</body></html>")
+    Thread.start('Calcium response picture') {
+        String problem = null
+        try { if (!steps.looked) steps.findResponse() } catch (Throwable t) { problem = t.message ?: t.toString() }
+        javax.swing.SwingUtilities.invokeLater {
+            busyView(false); describeRecording()
+            String previous = selectionBasis.startsWith('Baseline') ? 'baseline' : selectionBasis.startsWith('Response') ? 'response' : 'all'
+            if (problem != null) { showView(previous, 'Could not look for the response: ' + problem); return }
+            if (!steps.found) { showView(previous, 'No response found (' + steps.why + '), so there is no magenta. The picture is unchanged.'); return }
+            steps.showAllFrames(); steps.showResponse()
+            selectionBasis = 'Response-assisted review'
+            showView('response', 'Magenta: cells that brightened near frame ' + steps.onset + '. Picking cells this way is recorded as response-assisted.'); refresh(true)
+        }
+    }
+} as java.awt.event.ActionListener)
 def addCell = { Roi r0 -> def r = (Roi) r0.clone(); r.setPosition(0); r.setStrokeColor(null); rm.addRoi(r) }
 def acceptAt = { int x, int y ->
     def hit = unusedProposals(cellRois()).findAll { it.roi.contains(x, y) }
@@ -3757,6 +3848,29 @@ showCellposeState(null)
 setupBtn.addActionListener({ e -> setupBtn.setEnabled(false); Thread.start { if (runSetup(true) == "cancelled") javax.swing.SwingUtilities.invokeLater { showCellposeState(null) } } } as java.awt.event.ActionListener)
 def timer = new javax.swing.Timer(600, { e -> refresh(false) } as java.awt.event.ActionListener)
 closeBtn.addActionListener({ e -> timer.stop(); detectionProgress.close(); frame.dispose() } as java.awt.event.ActionListener)
+// Back to the first screen. The plugin starts again from its menu command; the outlines can be kept or cleared first,
+// because the next recording uses whatever outlines the ROI Manager holds.
+Closure relaunch = { ->
+    String command = 'Calcium Cells Step By Step'
+    if (ij.Menus.getCommands()?.containsKey(command)) Thread.start('Calcium plugin restart') { IJ.run(command) }
+    else IJ.showMessage('Calcium imaging', 'To choose another recording, run the plugin again:\nPlugins > Calcium Imaging > Calcium Cells Step By Step')
+}
+def changeRecording = { int choice ->   // 0 clear outlines, 1 keep them
+    if (choice == 0) rm.reset()
+    timer.stop(); detectionProgress.close(); frame.dispose()
+    steps.colourPic.changes = false; steps.colourPic.close()
+    if (!testGui) relaunch()
+}
+changeBtn.addActionListener({ e ->
+    int count = rm.getCount()
+    if (count == 0) { changeRecording(1); return }
+    String unmeasured = analysisMeasurement == null ? ' They have not been measured yet.' : ''
+    def options = ['Clear outlines and go back', 'Keep outlines and go back', 'Cancel'] as Object[]
+    int answer = javax.swing.JOptionPane.showOptionDialog(frame, '<html><body style="width:320px">The ROI Manager holds ' + count + ' outline' + (count == 1 ? '' : 's') + '.' + unmeasured +
+        ' The next recording starts with whatever outlines it holds, so clear them unless they belong to the next recording too.</body></html>',
+        'Change recording', javax.swing.JOptionPane.DEFAULT_OPTION, javax.swing.JOptionPane.QUESTION_MESSAGE, null, options, options[0])
+    if (answer == 0 || answer == 1) changeRecording(answer)
+} as java.awt.event.ActionListener)
 openBtn.addActionListener({ e -> try { java.awt.Desktop.getDesktop().open(outDir) } catch (Throwable t) { IJ.log("Results folder: " + outDir.getPath()) } } as java.awt.event.ActionListener)
 frame.addWindowListener(new java.awt.event.WindowAdapter() { void windowClosing(java.awt.event.WindowEvent e) { timer.stop(); detectionProgress.close() } })
 go.addActionListener({ e ->
@@ -3805,7 +3919,7 @@ go.addActionListener({ e ->
         } catch (Throwable t) { go.setEnabled(true); go.setText("Measure and save"); result.setText("<html><body style='width:300px'>Could not measure: " + t + "</body></html>"); IJ.log("Calcium imaging plugin: " + t) }
     }
 } as java.awt.event.ActionListener)
-if (testGui) { binding.setVariable("hooks", [detectionProgress: detectionProgress, suggestBtn: suggestBtn, edgeBox: edgeBox, addBtn: addBtn, setForceFresh: { boolean v -> forceFresh = v }, setupCellpose: setupCellpose, findCellposePython: findCellposePython, setupBtn: setupBtn, setupRow: setupRow, cpLabel: cpLabel, showCellposeState: showCellposeState, setupText: SETUP_TEXT, saveMovie: saveMovie, makeMovie: makeMovie, rm: rm, refresh: refresh, go: go, status: status, steps: steps, outDir: outDir, showBg: showBg, frame: frame, suggest: suggest, acceptAt: acceptAt, acceptAll: acceptAll, hoverAt: hoverAt, proposals: proposals, result: result, info: info, removeSelected: removeSelected, undoLast: undoLast, root: root]); refresh(true); return }
+if (testGui) { binding.setVariable("hooks", [viewAllBtn: viewAllBtn, viewBaselineBtn: viewBaselineBtn, viewResponseBtn: viewResponseBtn, selectionNote: selectionNote, selectionBasis: { -> selectionBasis }, changeBtn: changeBtn, changeRecording: changeRecording, continueBtn: continueBtn, backToCellsBtn: backToCellsBtn, backToMeasureBtn: backToMeasureBtn, cards: [s1, s2, s3, s4], recordingNote: recordingNote, detectionProgress: detectionProgress, suggestBtn: suggestBtn, edgeBox: edgeBox, addBtn: addBtn, setForceFresh: { boolean v -> forceFresh = v }, setupCellpose: setupCellpose, findCellposePython: findCellposePython, setupBtn: setupBtn, setupRow: setupRow, cpLabel: cpLabel, showCellposeState: showCellposeState, setupText: SETUP_TEXT, saveMovie: saveMovie, makeMovie: makeMovie, rm: rm, refresh: refresh, go: go, status: status, steps: steps, outDir: outDir, showBg: showBg, frame: frame, suggest: suggest, acceptAt: acceptAt, acceptAll: acceptAll, hoverAt: hoverAt, proposals: proposals, result: result, info: info, removeSelected: removeSelected, undoLast: undoLast, root: root]); refresh(true); return }
 frame.setVisible(true)
 timer.start()
 refresh(true)
