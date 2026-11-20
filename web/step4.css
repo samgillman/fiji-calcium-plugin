@@ -99,8 +99,7 @@ select { border: 1px solid #C5CED8; border-radius: var(--radius-sm); padding: 4p
 
 .scroller { position: relative; flex: 1 1 auto; min-height: 0; overflow: auto; background: #fff; border: 1px solid var(--gray-100); border-radius: var(--radius-md); box-shadow: var(--shadow-1); }
 #heatmap { display: block; cursor: pointer; }
-.key { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--gray-600); }
-.ramp { width: 120px; height: 10px; border: 1px solid var(--gray-100); border-radius: 2px; background: linear-gradient(90deg, #0000ff, #ffffff 50%, #ff0000); display: inline-block; }
+#heatmap-box.fit { overflow: hidden; }
 
 table { border-collapse: collapse; font-size: 12.5px; white-space: nowrap; }
 th, td { padding: 5px 10px; border-bottom: 1px solid var(--gray-100); text-align: left; }

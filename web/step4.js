@@ -10,7 +10,7 @@
   const inGroup = (call, group) => group === 0 || (group === 1 && call === 'Responded') || (group === 2 && call === 'Did not respond') ||
     (group === 3 && call !== 'Responded' && call !== 'Did not respond');
   const S = { info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'picture', viewChosen: false,
-    every: true, outlines: true, order: 'response', timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [] };
+    every: true, outlines: true, order: 'call', palette: 'signed', range: 'robust', tall: false, timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [] };
   const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, hover: null, geom: null, scrubbing: false, drawn: [] };
   const Pic = { base: null, shown: null, zoom: 1, panX: 0, panY: 0, pending: null, loading: false, drag: null, moved: false };
   const Heat = { geom: null, names: [] };
@@ -215,8 +215,8 @@
       if (i === selected) return;
       const call = callOf(S.info.names[i]); if (known && !inGroup(call, S.group)) return;
       const which = kind(call);
-      stroke(path, 'rgba(0,0,0,0.6)', which === 'responded' ? 3.2 : 2.4, false);
-      if (!known) stroke(path, '#ffffff', 1.3, false); else stroke(path, ON_PICTURE[which], which === 'responded' ? 1.8 : 1.2, which === 'other');
+      stroke(path, 'rgba(0,0,0,0.55)', which === 'responded' ? 2.8 : 2.2, false);
+      if (!known) stroke(path, '#ffffff', 1.3, false); else stroke(path, ON_PICTURE[which], which === 'responded' ? 1.5 : 1.1, which === 'other');
     });
     if (selected >= 0) { stroke(S.paths[selected], '#000000', 5.5, false); stroke(S.paths[selected], '#5BC0FF', 2.6, false); }
     ctx.restore();
@@ -343,56 +343,101 @@
   }
 
   // ---------------------------------------------------------------- heatmap
-  const ROW = 15, TOP = 26, BOTTOM = 26, LEFT = 82;
+  // Drawn the way the SimpleCa²⁺ app draws it: every cell in one picture, classic axes, a colour bar with ticks, the app's
+  // blue–white–red for signed values (or one of its palettes from zero up), and its "peak after the baseline" ordering.
+  const PALETTES = {
+    plasma: ['#0d0887', '#46039f', '#7201a8', '#9c179e', '#bd3786', '#d8576b', '#ed7953', '#fb9f3a', '#fdca26', '#f0f921'],
+    viridis: ['#440154', '#482878', '#3e4989', '#31688e', '#26828e', '#1f9e89', '#35b779', '#6ece58', '#b5de2b', '#fde725'],
+    magma: ['#000004', '#180f3d', '#440f76', '#721f81', '#9e2f7f', '#cd4071', '#f1605d', '#fd9668', '#feca8d', '#fcfdbf'],
+    inferno: ['#000004', '#1b0c41', '#4a0c6b', '#781c6d', '#a52c60', '#cf4446', '#ed6925', '#fb9b06', '#f7d13d', '#fcffa4'],
+    cividis: ['#00224e', '#123570', '#3b496c', '#575d6d', '#707173', '#8a8678', '#a59c74', '#c3b369', '#e1cc55', '#fee838'],
+    signed: ['#3B4CC0', '#FFFFFF', '#B40426']
+  };
+  const rgb = (hex) => [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+  /** 256 colours along a palette. */
+  function ramp(name) {
+    const stops = PALETTES[name].map(rgb), out = new Uint8Array(256 * 3);
+    for (let i = 0; i < 256; i++) { const at = i / 255 * (stops.length - 1), k = Math.min(stops.length - 2, Math.floor(at)), f = at - k;
+      for (let c = 0; c < 3; c++) out[i * 3 + c] = Math.round(stops[k][c] + (stops[k + 1][c] - stops[k][c]) * f); }
+    return out;
+  }
+  /** The largest value after the baseline frames and when it happens: the app's rule for ordering heatmap rows. */
+  function peakAfterBaseline(trace, time, lastBaselineFrame) {
+    let best = -Infinity, at = Infinity; if (!trace) return { value: -Infinity, time: Infinity };
+    for (let i = Math.max(0, lastBaselineFrame); i < trace.length; i++) if (finite(trace[i]) && trace[i] > best) { best = trace[i]; at = time[i]; }
+    return { value: best, time: at };
+  }
+  const TOP = 30, BOTTOM = 46, LEFT = 66, RIGHT = 92, ROW = 15;
   function drawHeatmap() {
-    const canvas = $('heatmap'), r = S.results; $('heatmap-empty').hidden = !!r; if (!r || $('panel-heatmap').hidden) return;
-    const all = S.info.names, call = (n) => callOf(n), rank = (n) => call(n) === 'Responded' ? 0 : call(n) === 'Did not respond' ? 1 : 2;
-    const value = (n, key) => { const v = r.calls[n] ? number(r.calls[n][key]) : NaN; return isFinite(v) ? v : NaN; };
-    let names = all.slice();
-    if (S.order === 'response') names.sort((a, b) => rank(a) - rank(b) || ((isFinite(value(b, 'Peak_increase')) ? value(b, 'Peak_increase') : -Infinity) - (isFinite(value(a, 'Peak_increase')) ? value(a, 'Peak_increase') : -Infinity)) || all.indexOf(a) - all.indexOf(b));
-    else if (S.order === 'peak') names.sort((a, b) => rank(a) - rank(b) || ((isFinite(value(a, 'Peak_s')) ? value(a, 'Peak_s') : Infinity) - (isFinite(value(b, 'Peak_s')) ? value(b, 'Peak_s') : Infinity)) || all.indexOf(a) - all.indexOf(b));
+    const canvas = $('heatmap'), box = $('heatmap-box'), r = S.results; $('heatmap-empty').hidden = !!r; if (!r || $('panel-heatmap').hidden) return;
+    const all = S.info.names, time = r.time, rank = (n) => callOf(n) === 'Responded' ? 0 : callOf(n) === 'Did not respond' ? 1 : 2;
+    const lastBaseline = r.baselineFrames && finite(r.baselineFrames[1]) ? r.baselineFrames[1] : 0;
+    const peaks = {}; for (const n of all) peaks[n] = peakAfterBaseline(r.traces[n], time, lastBaseline);
+    const names = all.slice(), original = (a, b) => all.indexOf(a) - all.indexOf(b);
+    if (S.order === 'call') names.sort((a, b) => rank(a) - rank(b) || peaks[b].value - peaks[a].value || original(a, b));
+    else if (S.order === 'tpeak') names.sort((a, b) => peaks[a].time - peaks[b].time || original(a, b));
+    else if (S.order === 'amp') names.sort((a, b) => peaks[b].value - peaks[a].value || original(a, b));
     Heat.names = names;
-    const width = canvas.parentElement.clientWidth - 2, height = TOP + names.length * ROW + BOTTOM;
-    canvas.style.width = width + 'px'; canvas.style.height = height + 'px';
-    const { ctx, w, h } = fit(canvas), time = r.time, W = Math.max(10, w - LEFT - 14), H = names.length * ROW;
-    const rows = names.map((n) => r.traces[n] || null), most = share(rows.filter(Boolean), 0.99, true), largest = share(rows.filter(Boolean), 1, true);
-    // colours run to a limit that covers 99 % of the values, so one extreme cell cannot wash out all the others
-    let limit = 1; if (most > 0) { const power = Math.pow(10, Math.floor(Math.log10(most))), unit = most / power; limit = (unit <= 1 ? 1 : unit <= 1.5 ? 1.5 : unit <= 2 ? 2 : unit <= 3 ? 3 : unit <= 5 ? 5 : 10) * power; }
-    $('key-low').textContent = '−' + +limit.toPrecision(3); $('key-high').textContent = (largest > limit ? '≥ ' : '+') + +limit.toPrecision(3);
-    Heat.geom = { W, H, t0: time[0], t1: time[time.length - 1] };
-    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); ctx.font = '11px ' + getComputedStyle(document.body).fontFamily; ctx.textBaseline = 'middle';
+    const rows = names.map((n) => r.traces[n] || null), have = rows.filter(Boolean), signed = S.palette === 'signed';
+    // the colour range: the largest value, or a limit that covers 99 % of the values so one extreme cell cannot wash out the rest
+    const largest = share(have, 1, true), most = S.range === 'full' ? largest : share(have, 0.99, true);
+    const step0 = ticks(0, most > 0 ? most : 1, 5).step, limit = Math.max(step0, Math.ceil(most / step0 - 1e-9) * step0);
+    const colours = ramp(S.palette), missing = [229, 229, 229];
+    const tall = S.tall, width = Math.max(320, box.clientWidth - 2), height = tall ? TOP + names.length * ROW + BOTTOM : Math.max(220, box.clientHeight - 2);
+    box.classList.toggle('fit', !tall); canvas.style.width = width + 'px'; canvas.style.height = height + 'px';
+    const { ctx, w, h } = fit(canvas), W = Math.max(10, w - LEFT - RIGHT), H = Math.max(10, h - TOP - BOTTOM), rowH = H / names.length;
+    Heat.geom = { W, H, rows: names.length };
+    // one pixel per sample and cell, then stretched without smoothing: sharp edges at any size
+    const small = document.createElement('canvas'); small.width = time.length; small.height = names.length;
+    const sctx = small.getContext('2d'), data = sctx.createImageData(time.length, names.length);
+    rows.forEach((trace, c) => { for (let f = 0; f < time.length; f++) {
+      const v = trace ? trace[f] : null, o = (c * time.length + f) * 4; let colour = missing;
+      if (finite(v)) { const t = signed ? (Math.max(-1, Math.min(1, v / limit)) + 1) / 2 : Math.max(0, Math.min(1, v / limit)), k = Math.round(t * 255) * 3; colour = [colours[k], colours[k + 1], colours[k + 2]]; }
+      data.data[o] = colour[0]; data.data[o + 1] = colour[1]; data.data[o + 2] = colour[2]; data.data[o + 3] = 255; } });
+    sctx.putImageData(data, 0, 0);
+    const family = getComputedStyle(document.body).fontFamily;
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); ctx.imageSmoothingEnabled = false; ctx.drawImage(small, LEFT, TOP, W, H);
     const X = (t) => LEFT + (t - time[0]) / (time[time.length - 1] - time[0]) * W;
-    for (const [span, colour, name] of [[r.baseline, '#C9D1D9', 'baseline'], [r.stimulus, '#F2C078', 'stimulus']]) {
+    // where the baseline and the stimulus are
+    ctx.font = '11px ' + family; ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+    for (const [span, colour, name] of [[r.baseline, '#B8C2CC', 'baseline'], [r.stimulus, '#E9A84C', 'stimulus']]) {
       if (!span || !finite(span[0]) || !finite(span[1])) continue; const a = Math.max(LEFT, X(span[0])), b = Math.min(LEFT + W, X(span[1])); if (b <= a) continue;
-      ctx.fillStyle = colour; ctx.fillRect(a, TOP - 8, b - a, 5); if (ctx.measureText(name).width + 4 < b - a) { ctx.fillStyle = '#65717D'; ctx.fillText(name, a + 2, TOP - 16); }
+      ctx.fillStyle = colour; ctx.fillRect(a, TOP - 7, b - a, 4); if (ctx.measureText(name).width + 4 < b - a) { ctx.fillStyle = '#65717D'; ctx.fillText(name, a + 1, TOP - 11); }
     }
-    const bin = W / time.length;
-    names.forEach((name, c) => {
-      const y = TOP + c * ROW, trace = rows[c];
-      ctx.fillStyle = CALL[kind(call(name))]; ctx.fillRect(4, y, 4, ROW - 1);
-      ctx.fillStyle = name === S.cell ? '#1F2933' : '#65717D'; ctx.font = (name === S.cell ? '600 ' : '') + '11px ' + getComputedStyle(document.body).fontFamily; ctx.fillText(name, 14, y + ROW / 2);
-      if (!trace) { ctx.fillStyle = '#D9DEE3'; ctx.fillRect(LEFT, y, W, ROW); return; }
-      for (let f = 0; f < time.length; f++) {
-        const v = trace[f];
-        if (!finite(v)) ctx.fillStyle = '#D9DEE3'; else { const fade = Math.round(255 * (1 - Math.min(1, Math.abs(v) / limit))); ctx.fillStyle = v >= 0 ? 'rgb(255,' + fade + ',' + fade + ')' : 'rgb(' + fade + ',' + fade + ',255)'; }
-        ctx.fillRect(LEFT + Math.floor(f * bin), y, Math.ceil(bin) + 1, ROW);
-      }
-    });
-    names.forEach((name, c) => {
-      const y = TOP + c * ROW;
-      if (c > 0 && rank(name) !== rank(names[c - 1]) && S.order !== 'measured') { ctx.fillStyle = '#fff'; ctx.fillRect(LEFT, y - 1, W, 2); ctx.fillStyle = '#65717D'; ctx.fillRect(4, y - 0.5, LEFT + W - 4, 1); }
-      if (name === S.cell) { ctx.strokeStyle = '#1F2933'; ctx.lineWidth = 1.5; ctx.strokeRect(LEFT + 0.75, y + 0.75, W - 1.5, ROW - 1.5); }
-    });
-    ctx.strokeStyle = '#DEE4EA'; ctx.lineWidth = 1; ctx.strokeRect(LEFT + 0.5, TOP + 0.5, W, H);
-    if (r.stimulus && finite(r.stimulus[0]) && r.stimulus[0] > time[0]) { const x = Math.round(X(r.stimulus[0])) + 0.5; ctx.strokeStyle = 'rgba(31,41,51,0.6)'; ctx.beginPath(); ctx.moveTo(x, TOP - 8); ctx.lineTo(x, TOP + H); ctx.stroke(); }
-    const xs = ticks(time[0], time[time.length - 1], Math.max(2, Math.floor(W / 110))); ctx.fillStyle = '#65717D'; ctx.font = '12px ' + getComputedStyle(document.body).fontFamily; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    for (const v of xs.values) { const x = X(v); ctx.fillRect(Math.round(x), TOP + H, 1, 4); ctx.fillText(tickText(v, xs.step) + ' s', Math.max(LEFT + 12, Math.min(w - 20, x)), TOP + H + 7); }
-    ctx.textAlign = 'left';
+    if (r.stimulus && finite(r.stimulus[0]) && r.stimulus[0] > time[0]) { const x = Math.round(X(r.stimulus[0])) + 0.5; ctx.strokeStyle = signed ? 'rgba(31,41,51,0.55)' : 'rgba(255,255,255,0.75)'; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(x, TOP); ctx.lineTo(x, TOP + H); ctx.stroke(); ctx.setLineDash([]); }
+    // the response call of each row, and lines between the groups when the rows are sorted by call
+    names.forEach((name, c) => { ctx.fillStyle = CALL[kind(callOf(name))]; ctx.fillRect(LEFT - 7, TOP + c * rowH, 4, Math.max(1, rowH - (rowH > 3 ? 0.5 : 0))); });
+    if (S.order === 'call') names.forEach((name, c) => { if (c > 0 && rank(name) !== rank(names[c - 1])) { ctx.fillStyle = '#fff'; ctx.fillRect(LEFT, TOP + c * rowH - 1, W, 2); } });
+    const chosen = names.indexOf(S.cell);
+    if (chosen >= 0) { const y = TOP + chosen * rowH;
+      // thin rows are marked beside the picture, never drawn over; tall rows get a frame
+      if (rowH >= 8) { ctx.strokeStyle = '#1F2933'; ctx.lineWidth = 1.5; ctx.strokeRect(LEFT + 0.75, y + 0.75, W - 1.5, rowH - 1.5); }
+      ctx.fillStyle = '#1F2933'; ctx.beginPath(); ctx.moveTo(LEFT + W + 2, y + rowH / 2); ctx.lineTo(LEFT + W + 9, y + rowH / 2 - 5); ctx.lineTo(LEFT + W + 9, y + rowH / 2 + 5); ctx.closePath(); ctx.fill(); }
+    // classic axes: a line on the left and below, ticks outside
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(LEFT - 9.5, TOP); ctx.lineTo(LEFT - 9.5, TOP + H + 0.5); ctx.lineTo(LEFT + W, TOP + H + 0.5); ctx.stroke();
+    ctx.fillStyle = '#333'; ctx.font = '12px ' + family; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    const xs = ticks(time[0], time[time.length - 1], Math.max(2, Math.floor(W / 110)));
+    for (const v of xs.values) { const x = Math.round(X(v)) + 0.5; ctx.beginPath(); ctx.moveTo(x, TOP + H); ctx.lineTo(x, TOP + H + 5); ctx.stroke(); ctx.fillText(tickText(v, xs.step), x, TOP + H + 8); }
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    if (tall) { ctx.font = '11px ' + family; names.forEach((name, c) => { ctx.fillStyle = name === S.cell ? '#1F2933' : '#65717D'; ctx.fillText(name, LEFT - 13, TOP + (c + 0.5) * rowH); }); }
+    else { const every = ticks(0, names.length, Math.max(2, Math.floor(H / 60))).step; for (let c = every; c <= names.length; c += every) { const y = Math.round(TOP + (c - 0.5) * rowH) + 0.5; ctx.beginPath(); ctx.moveTo(LEFT - 9.5, y); ctx.lineTo(LEFT - 14, y); ctx.stroke(); ctx.fillText(String(c), LEFT - 17, y); } }
+    ctx.font = '600 13px ' + family; ctx.fillStyle = '#1F2933'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillText('Time (s)', LEFT + W / 2, h - 10);
+    if (!tall) { ctx.save(); ctx.translate(16, TOP + H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('Cell', 0, 0); ctx.restore(); }
+    // colour bar with ticks, as in the app
+    const barX = LEFT + W + 26, barH = Math.min(190, H), barY = TOP + (tall ? 0 : Math.max(0, (H - barH) / 2)), low = signed ? -limit : 0;
+    for (let i = 0; i < barH; i++) { const k = Math.round((1 - i / (barH - 1)) * 255) * 3; ctx.fillStyle = 'rgb(' + colours[k] + ',' + colours[k + 1] + ',' + colours[k + 2] + ')'; ctx.fillRect(barX, barY + i, 13, 1.5); }
+    ctx.strokeStyle = '#4d4d4d'; ctx.lineWidth = 0.6; ctx.strokeRect(barX + 0.3, barY + 0.3, 12.4, barH - 0.6);
+    ctx.font = '12px ' + family; ctx.fillStyle = '#333'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    const bs = ticks(low, limit, signed ? 6 : 5);
+    for (const v of bs.values) { const y = barY + (1 - (v - low) / (limit - low)) * (barH - 1); ctx.fillRect(barX + 13, Math.round(y), 4, 1);
+      ctx.fillText((v === limit && largest > limit ? '≥ ' : v === low && signed && largest > limit ? '≤ ' : '') + tickText(v, bs.step).replace('-', '−'), barX + 20, y); }
+    ctx.font = '600 13px ' + family; ctx.fillStyle = '#1F2933'; ctx.textBaseline = 'alphabetic'; ctx.fillText('ΔF/F₀', barX - 2, barY - 9);
   }
   function heatmapAt(event) {
-    const box = $('heatmap').getBoundingClientRect(), y = event.clientY - box.top, x = event.clientX - box.left, row = Math.floor((y - TOP) / ROW);
-    if (!S.results || !Heat.geom || row < 0 || row >= Heat.names.length) return null;
-    const time = S.results.time, f = Math.max(0, Math.min(time.length - 1, Math.floor((x - LEFT) / Heat.geom.W * time.length)));
+    const g = Heat.geom; if (!S.results || !g) return null;
+    const box = $('heatmap').getBoundingClientRect(), y = event.clientY - box.top, x = event.clientX - box.left, row = Math.floor((y - TOP) / g.H * g.rows);
+    if (row < 0 || row >= Heat.names.length || x < LEFT - 12 || x > LEFT + g.W) return null;
+    const time = S.results.time, f = Math.max(0, Math.min(time.length - 1, Math.floor((x - LEFT) / g.W * time.length)));
     return { name: Heat.names[row], frame: f, inside: x >= LEFT };
   }
 
@@ -436,6 +481,9 @@
     $('zoom-cell').addEventListener('click', zoomToCell); $('zoom-all').addEventListener('click', () => { Pic.zoom = 1; Pic.panX = Pic.panY = 0; drawPicture(); });
     $('play').addEventListener('click', () => play(!S.timer)); $('time').addEventListener('input', () => setFrame(Number($('time').value)));
     $('order').addEventListener('change', () => { S.order = $('order').value; drawHeatmap(); });
+    $('palette').addEventListener('change', () => { S.palette = $('palette').value; drawHeatmap(); });
+    $('range').addEventListener('change', () => { S.range = $('range').value; drawHeatmap(); });
+    $('tall').addEventListener('change', () => { S.tall = $('tall').checked; drawHeatmap(); });
     $('save-plot').addEventListener('click', () => save($('plot'), 'traces.png')); $('save-heatmap').addEventListener('click', () => save($('heatmap'), 'heatmap.png'));
 
     const picture = $('picture');
@@ -473,7 +521,7 @@
     document.addEventListener('keydown', (event) => { const tag = (event.target.tagName || '').toLowerCase(); if (tag === 'input' || tag === 'select' || tag === 'textarea' || $('panel-review').hidden) return;
       if (event.key === 'ArrowLeft') { stepCell(-1); event.preventDefault(); } else if (event.key === 'ArrowRight') { stepCell(1); event.preventDefault(); } else if (event.key === ' ' && S.results) { play(!S.timer); event.preventDefault(); } });
     window.addEventListener('resize', redraw);
-    if (window.ResizeObserver) new ResizeObserver(redraw).observe($('panel-review'));
+    if (window.ResizeObserver) { new ResizeObserver(redraw).observe($('panel-review')); new ResizeObserver(() => drawHeatmap()).observe($('heatmap-box')); }
   }
   function redraw() { Plot.dirty = true; drawPlot(); drawPicture(); drawHeatmap(); }
 

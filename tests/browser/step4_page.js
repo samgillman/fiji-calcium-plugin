@@ -58,10 +58,16 @@ const assert = require('assert');
 
   // heatmap, tables and the folder button
   await page.click('.tab[data-tab=heatmap]');
-  assert.deepStrictEqual(await page.evaluate(() => window.calciumStep4.Heat.names), ['Cell001', 'Cell005', 'Cell002', 'Cell003', 'Cell004', 'Cell006']);
+  assert.deepStrictEqual(await page.evaluate(() => window.calciumStep4.Heat.names), ['Cell001', 'Cell005', 'Cell002', 'Cell006', 'Cell003', 'Cell004']);   // by call, strongest on top; cells with no trace last
   await page.screenshot({ path: out + '/page-heatmap.png' });
-  await page.selectOption('#order', 'measured'); assert.strictEqual(await page.evaluate(() => window.calciumStep4.Heat.names[1]), 'Cell002');
-  const heat = await (await page.$('#heatmap')).boundingBox(); await page.mouse.click(heat.x + 200, heat.y + 26 + 15 * 4 + 7);
+  // every cell fits the picture; the app's orderings and palettes are offered; a click on a row selects that cell
+  assert.ok(await page.evaluate(() => { const c = document.getElementById('heatmap'), b = document.getElementById('heatmap-box'); return c.clientHeight <= b.clientHeight && b.scrollHeight <= b.clientHeight + 2; }), 'the whole heatmap is visible without scrolling');
+  await page.selectOption('#order', 'tpeak'); assert.strictEqual(await page.evaluate(() => window.calciumStep4.Heat.names.length), 6);
+  await page.selectOption('#palette', 'plasma'); await page.selectOption('#range', 'full'); await page.screenshot({ path: out + '/page-heatmap-plasma.png' });
+  await page.selectOption('#palette', 'signed'); await page.selectOption('#range', 'robust');
+  await page.selectOption('#order', 'orig'); assert.strictEqual(await page.evaluate(() => window.calciumStep4.Heat.names[1]), 'Cell002');
+  await page.check('#tall');
+  const heat = await (await page.$('#heatmap')).boundingBox(); await page.mouse.click(heat.x + 200, heat.y + 30 + 15 * 4 + 7);
   assert.strictEqual(await page.inputValue('#cell'), 'Cell005'); assert.strictEqual(await text('.tab.on'), 'Cells and traces');
   await page.click('.tab[data-tab=calls]'); assert.strictEqual(await page.$$eval('#table-calls tbody tr', (r) => r.length), 6);
   await page.click('#table-calls tbody tr:nth-child(2)'); assert.strictEqual(await page.evaluate(() => window.calciumStep4.S.cell), 'Cell002');

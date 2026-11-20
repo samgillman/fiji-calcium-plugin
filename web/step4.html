@@ -37,13 +37,13 @@
     </section>
     <label class="check confirm"><input type="checkbox" id="confirmed"> I checked the frame rate, baseline and stimulus times</label>
     <div class="actions">
-      <button class="primary" id="analyze" type="button">Analyze responses</button>
+      <button class="primary" id="analyze" type="button" disabled>Analyze responses</button>
       <button id="cancel" type="button" disabled>Cancel</button>
     </div>
     <div class="progress" id="progress" hidden><div id="bar"></div></div>
     <p class="status" id="status" role="status"></p>
     <div class="actions">
-      <button id="setup" type="button" title="One time: downloads a private copy of R for this plugin (needs internet)">Set up analysis engine</button>
+      <button id="setup" type="button" disabled title="One time: downloads a private copy of R for this plugin (needs internet)">Set up analysis engine</button>
       <button id="log" type="button" disabled>View log</button>
     </div>
     <p class="fine">Uses the background-corrected fluorescence as measured: no lift, no second background subtraction.</p>
@@ -103,13 +103,22 @@
 
     <section class="panel" id="panel-heatmap" hidden>
       <div class="toolbar">
-        <label>Order <select id="order"><option value="response">Responders first, strongest on top</option><option value="measured">As measured (Cell001, Cell002, …)</option><option value="peak">Time of the largest rise</option></select></label>
-        <span class="key"><span id="key-low">−1</span><i class="ramp"></i><span id="key-high">+1</span></span>
-        <span class="fine">ΔF/F₀ · strip on the left: response call · click a row to see that cell</span>
+        <label>Sort <select id="order">
+          <option value="call">Response call, strongest on top</option>
+          <option value="tpeak">Time to peak</option>
+          <option value="amp">Peak amplitude</option>
+          <option value="orig">Original order</option></select></label>
+        <label>Colours <select id="palette" title="Blue–white–red keeps values below zero. The other palettes start at zero, so anything below zero takes the darkest colour.">
+          <option value="signed">Blue–white–red</option>
+          <option value="plasma">plasma</option><option value="viridis">viridis</option><option value="magma">magma</option>
+          <option value="inferno">inferno</option><option value="cividis">cividis</option></select></label>
+        <label>Range <select id="range" title="“99 % of values” stops one extreme cell from washing out all the others; values beyond the range take the end colour.">
+          <option value="robust">99 % of values</option><option value="full">Largest value</option></select></label>
+        <label class="check" title="One readable row per cell, with its name; the list scrolls"><input type="checkbox" id="tall"> Cell names</label>
         <div class="grow"></div>
-        <button class="ghost small" id="save-heatmap" type="button" disabled>Save heatmap as PNG</button>
+        <button class="ghost small" id="save-heatmap" type="button" disabled>Save as PNG</button>
       </div>
-      <div class="scroller"><canvas id="heatmap"></canvas><div class="empty" id="heatmap-empty">Run the analysis to see the heatmap.</div></div>
+      <div class="scroller" id="heatmap-box"><canvas id="heatmap"></canvas><div class="empty" id="heatmap-empty">Run the analysis to see the heatmap.</div></div>
     </section>
 
     <section class="panel" id="panel-metrics" hidden><div class="scroller"><table id="table-metrics"></table></div></section>
