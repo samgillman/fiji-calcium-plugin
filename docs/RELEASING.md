@@ -42,6 +42,8 @@ python3 tools/build_release.py
 
 For Step 4 changes, run `python3 tools/embed_analysis.py` after editing the analysis adapter or pinned sources; validation rejects stale embedded code. `python3 tools/run_tests.py --analysis-only` installs the managed R runtime and exercises actual Java → R → CSV analysis, cached setup, paths containing spaces, provenance and parity with the pinned SimpleCa functions. CI runs this on Windows, Linux and macOS in addition to the native GUI regressions. Preserve the upstream license and update `analysis/provenance.tsv` whenever intentionally updating pinned upstream sources.
 
+The Step 4 page lives in `web/` and travels inside the single plugin file. After editing it, run `python3 tools/embed_analysis.py` to refresh the embedded copy; validation fails if they differ. `python3 tools/run_tests.py --browser` drives the real page in a browser (needs Node with Playwright) and writes screenshots to `build/web-step4`; CI does not run it.
+
 With a desktop display available, `python3 tools/run_tests.py --gui` also exercises the actual Install update/Later prompt, offline startup, detection details window, resizing/scrolling, image-canvas cell selection and removal, Undo, and rendered outline contrast with the real plugin controls. Release metadata is simulated. CI runs these GUI checks on Windows and on Linux with a virtual display.
 
 The package, standalone plugin file, standalone installer, version file, checksum file, and release notes are written to ignored `dist/`. Tests use a mock Cellpose process and real ROI ZIPs; do a real Fiji/Cellpose smoke test for changes to detection or image measurements.

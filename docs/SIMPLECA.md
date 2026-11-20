@@ -2,6 +2,12 @@
 
 Version 2026.11.19.8 adds native analysis for one recording at a time. Install it using **Install update**, save your work and restart Fiji. Existing installers can install this update: the R analysis source and its license are embedded in the plugin script.
 
+## Where Step 4 opens
+
+**Analyze responses** opens Step 4 as a page in your default browser. The plugin serves that page from your own computer: it is reachable only from this computer, its address carries a long random key, nothing is uploaded and no internet is needed (except for the one-time engine setup). Keep the plugin window in Fiji open while you use the page; closing it stops the page. If you measure again in Fiji, the page reloads with the new cells.
+
+Everything below works the same on the page and in the Fiji window. On the page you can also hover a trace to see which cell it is, click a trace to select that cell, scroll over the plot to zoom the time axis (double-click to reset), sort any table by clicking a column name, and hide the settings column. **Use a Fiji window instead** opens the same analysis in a Fiji window; the plugin also falls back to it if a browser page cannot be opened.
+
 ## First use
 
 1. Choose cells and **Measure and save**. If you edit the selected outlines afterward, measure again before opening Step 4.

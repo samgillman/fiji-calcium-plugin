@@ -32,6 +32,11 @@ try {
         try {
             assert precise.fields.sampling_hz.text=='1' && precise.fields.stimulus_start.text=='72.996' && precise.fields.stimulus_end.text=='298.984'
             assert precise.fields.sampling_hz.toolTipText.contains('1.0000537066691941')
+            // The Fiji window and the Step 4 web page offer the same settings, shown the same way.
+            def Settings=loader.loadClass('CalciumAnalysisSettings')
+            def offered=Settings.suggested([frames:300,hz:1.0000537066691941d,baselineStart:55,baselineEnd:74])
+            assert offered.keySet()==precise.fields.keySet()
+            offered.each{key,value->assert precise.fields[key].text==Settings.shown(value) : key}
             precise.confirmed.selected=true
             def sent=precise.settings()
             assert sent.sampling_hz=='1.0000537066691941' && sent.stimulus_start==''+(73/1.0000537066691941d) && sent.stimulus_end==''+(299/1.0000537066691941d)

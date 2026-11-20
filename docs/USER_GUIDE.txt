@@ -2,7 +2,9 @@ CALCIUM IMAGING: CELLS STEP BY STEP
 A plugin for Fiji / ImageJ.  Version 2026.11.20.2.
 
 NEW: STEP 4 — SIMPLECA ANALYSIS INSIDE FIJI
-After Measure and save, open Analyze responses. On first use, click Set up analysis engine
+After Measure and save, press Analyze responses. Step 4 opens as a page in your browser; the plugin
+serves it from your own computer only, and nothing is sent anywhere. ("Use a Fiji window instead"
+opens the same analysis inside Fiji.) On first use, click Set up analysis engine
 (internet required). The same interface supports 64-bit Windows, Mac and x64 Linux.
 Confirm the recording frame rate, baseline frames and stimulus times before running analysis.
 Traces, heatmap, metrics, cell response calls and counts open inside Fiji. Selecting a trace,
