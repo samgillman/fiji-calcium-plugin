@@ -129,8 +129,25 @@ const assert = require('assert/strict');
     await slider(3); assert.ok(await gray() < 60, 'scrubbing back changes the actual image to the resting frame');
     assert.match(await text('#time-label'), /1\.00 s.*Frame 3 \/ 30/);
 
-    // Play uses the movie clock immediately; a manual seek stops the timer.
-    await page.selectOption('#speed', '5'); await page.click('#play');
+    // Playback: 10× by default, on a clock in recording time, from a buffer that makes scrubbing back free.
+    assert.equal(await page.inputValue('#speed'), '10');
+    let frameRequests = 0; const countFrames = (request) => { if (request.url().includes('/api/frame?')) frameRequests++; }; page.on('request', countFrames);
+    await slider(1); const started = Date.now(); await page.click('#play');
+    await page.waitForFunction(() => window.calciumStep4.S.timer === null, null, { timeout: 15000 });
+    const took = (Date.now() - started) / 1000;
+    assert.equal(await page.inputValue('#time'), '30', 'playback stops at the last frame');
+    assert.ok(took > 1.1 && took < 4, '14.5 s of recording at 10× plays in about 1.45 s, not ' + took + ' s');
+    await waitFrame(30); frameRequests = 0;
+    for (const f of [24, 17, 9, 2]) await slider(f);
+    assert.equal(frameRequests, 0, 'scrubbing back over frames already seen makes no requests');
+    page.off('request', countFrames);
+    await page.selectOption('#speed', '50'); await page.click('#play');
+    await page.waitForFunction(() => /playing every 4th frame/.test(document.getElementById('picture-note').textContent));
+    await page.click('#play');
+    assert.ok(!(await page.evaluate(() => window.calciumStep4.S.timer)));
+    // A manual seek stops the timer.
+    await slider(3);
+    await page.selectOption('#speed', '0.5'); await page.click('#play');
     await page.waitForFunction(() => window.calciumStep4.S.frame >= 5);
     await slider(12);
     assert.equal(await page.evaluate(() => window.calciumStep4.S.timer), null);
@@ -146,7 +163,8 @@ const assert = require('assert/strict');
 
     // A slow old response cannot replace the frame now requested by the slider.
     await slider(3);
-    const delayedFrame = '**/api/frame?f=8&mode=raw';
+    await page.evaluate(() => window.calciumStep4.resetFrames());   // frames already seen are buffered; these checks need fresh requests
+    const delayedFrame = '**/api/frame?f=8&mode=raw&*';
     await page.route(delayedFrame, async (route) => {
       const response = await route.fetch();
       await new Promise((resolve) => setTimeout(resolve, 200)); await route.fulfill({ response });
@@ -156,7 +174,7 @@ const assert = require('assert/strict');
       window.browserMovieObserver = new MutationObserver(() => window.browserMovieNotes.push(document.getElementById('picture-note').textContent));
       window.browserMovieObserver.observe(document.getElementById('picture-note'), { childList: true, subtree: true });
     });
-    const slowRequest = page.waitForRequest((request) => request.url().includes('/api/frame?f=8&mode=raw'));
+    const slowRequest = page.waitForRequest((request) => request.url().includes('/api/frame?f=8&mode=raw&'));
     await page.locator('#time').evaluate((element) => { element.value = 8; element.dispatchEvent(new Event('input')); });
     await slowRequest; await slider(20); await page.unroute(delayedFrame);
     assert.ok(await page.evaluate(() => {
@@ -165,7 +183,8 @@ const assert = require('assert/strict');
     assert.ok(await gray() < 60);
 
     // A failed frame fetch is visible and the next manual seek recovers.
-    const failedFrame = '**/api/frame?f=9&mode=raw'; injectedFrameFailure = true;
+    await page.evaluate(() => window.calciumStep4.resetFrames());
+    const failedFrame = '**/api/frame?f=9&mode=raw&*'; injectedFrameFailure = true;
     await page.route(failedFrame, (route) => route.fulfill({ status: 503, body: 'Synthetic unavailable frame' }));
     await page.locator('#time').evaluate((element) => { element.value = 9; element.dispatchEvent(new Event('input')); });
     await page.waitForFunction(() => /could not load/.test(document.getElementById('movie-message').textContent));

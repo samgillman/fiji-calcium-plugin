@@ -12,7 +12,15 @@
   const S = { info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'raw', viewChosen: false,
     every: true, outlines: true, order: 'call', palette: 'signed', range: 'robust', tall: false, timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false };
   const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, hover: null, geom: null, scrubbing: false, drawn: [] };
-  const Pic = { base: null, shown: null, zoom: 1, panX: 0, panY: 0, pending: null, loading: false, drag: null, moved: false, shownFrame: null, error: null };
+  const Pic = { base: null, shown: null, zoom: 1, panX: 0, panY: 0, drag: null, moved: false, shownFrame: null, error: null };
+  // Movie frames: compressed images are kept for the session (about 40 MB for 300 full-size frames, much less at display size),
+  // decoded ones only near the playhead. Keys carry the server's frame version, which changes with the baseline behind
+  // "Change from baseline" and the display range, so a stale image is never reused.
+  const Buf = { version: null, blobs: new Map(), bitmaps: new Map(), inflight: new Map(), decoding: new Map(), failed: new Map(), bytes: 0 };
+  const PARALLEL = 4, DECODED_AROUND = 30, MAX_BYTES = 90e6, MAX_FPS = 30;
+  Object.defineProperty(Pic, 'loading', { get: () => Buf.inflight.size > 0 || Buf.decoding.size > 0 });
+  // The playback clock runs in recording seconds; frames are shown when the playhead reaches their timestamps.
+  const Clock = { t: 0, last: 0, step: 1, times: [], real: false, waitingSince: 0 };
   const Heat = { geom: null, names: [] };
 
   async function api(path, body) {
@@ -298,7 +306,7 @@
   function acceptState(state) {
     // A poll begun before a draft save must not erase the pending warning or export provenance.
     if (S.state && (Number(state.draftRevision) < Number(S.state.draftRevision) || Number(state.version) < Number(S.state.version))) return false;
-    S.state = state; return true;
+    S.state = state; if (Buf.version !== (state.frameVersion || '')) resetFrames(state.frameVersion || ''); return true;
   }
   function hasPending() { return !!S.results && (!!(S.state && S.state.settingsPending) || JSON.stringify(collectDraft()) !== S.draftAck); }
   async function start() {
@@ -457,61 +465,140 @@
     updateTransport(); drawPlot(); requestFrame();
   }
   function seek(t) { setFrame(nearestFrame(t), true); }
+  /** Frame times for the clock: the displayed time base, or 20 frames per second at 1× when there is none. */
+  function clockTimes() {
+    const n = S.info.frames, t = frameTimes(), real = t.length >= n && t.slice(0, n).every(finite) && t.slice(1, n).every((v, i) => v > t[i]);
+    Clock.real = real; return real ? t.slice(0, n) : Array.from({ length: n }, (_, i) => i / 20);
+  }
   function play(on) {
-    if (S.timer) clearTimeout(S.timer); S.timer = null;
+    if (S.timer) cancelAnimationFrame(S.timer); S.timer = null; Plot.playhead = null; Clock.waitingSince = 0;
     if (on && S.info && S.info.hasMovie && S.view !== 'picture' && S.info.frames > 1) {
+      Buf.failed.clear();   // pressing Play retries frames that failed before
       if (S.frame >= S.info.frames) setFrame(1);
-      const schedule = () => {
-        const times = frameTimes(), delta = times[S.frame] - times[S.frame - 1], delay = (finite(delta) && delta > 0 ? delta * 1000 : 50) / Number($('speed').value);
-        S.timer = setTimeout(() => {
-          const advance = () => {
-            if (!S.timer) return;
-            if (Pic.loading) { S.timer = setTimeout(advance, 20); return; }
-            if (S.frame >= S.info.frames) { play(false); return; }
-            setFrame(S.frame + 1); schedule();
-          }; advance();
-        }, Math.max(10, delay));
-      }; schedule();
+      const times = clockTimes(), gaps = times.slice(1).map((v, i) => v - times[i]).sort((a, b) => a - b), typical = gaps[Math.floor(gaps.length / 2)] || 0.05;
+      // above 30 frames per second, every Nth frame is shown instead of slowing down
+      Clock.times = times; Clock.step = Math.max(1, Math.ceil(Number($('speed').value) / typical / MAX_FPS));
+      Clock.t = times[S.frame - 1]; Clock.last = performance.now(); S.timer = requestAnimationFrame(tick);
     }
     $('play').textContent = S.timer ? '❚❚ Pause' : '▶ Play'; $('play').setAttribute('aria-pressed', String(!!S.timer));
+    if (S.info && S.info.hasMovie) { frameNote(); pumpFrames(); } if (S.results) drawPlot();
+  }
+  function nextFrame(f) { return f >= S.info.frames ? null : Math.min(S.info.frames, f + Clock.step); }
+  function tick(now) {
+    if (!S.timer) return;
+    S.timer = requestAnimationFrame(tick);
+    const times = Clock.times, speed = Number($('speed').value), n = S.info.frames;
+    Clock.t += Math.min(0.1, Math.max(0, (now - Clock.last) / 1000)) * speed; Clock.last = now;   // a hidden tab does not jump ahead
+    let target = S.frame, waiting = false;
+    for (let k = nextFrame(S.frame); k && times[k - 1] <= Clock.t; k = nextFrame(k)) {
+      if (bitmapFor(k, S.view)) { target = k; continue; }
+      if (Buf.failed.has(frameKey(k, S.view))) { frameFailed(k, S.view); return; }
+      Clock.t = times[k - 1]; waiting = true; break;   // the playhead never runs ahead of the picture
+    }
+    if (waiting && !Clock.waitingSince) Clock.waitingSince = now; else if (!waiting && Clock.waitingSince) { Clock.waitingSince = 0; frameNote(); }
+    if (target !== S.frame) setFrame(target);
+    else if (S.frame === n) { play(false); return; }
+    else if (waiting) { if (now - Clock.waitingSince > 250) frameNote(); }
+    const ahead = nextFrame(S.frame);   // a long gap between recorded frames waits at most about 1 s
+    if (ahead && !waiting && times[ahead - 1] - Clock.t > speed) Clock.t = times[ahead - 1] - speed;
+    if (S.results && Clock.real) { Plot.playhead = Math.min(Clock.t, times[n - 1]); drawPlot(); }
+    pumpFrames();
   }
   function movieMessage(message, error) { const box = $('movie-message'); box.textContent = message; box.hidden = !message; box.classList.toggle('error', !!error); }
-  // ---------------------------------------------------------------- movie loading: latest requested frame wins, and failures stay visible
+  // ---------------------------------------------------------------- movie loading: buffered, latest requested frame wins, failures stay visible
+  const frameKey = (f, mode) => Buf.version + '|' + mode + '|' + f;
+  function resetFrames(version) {
+    for (const entry of Buf.bitmaps.values()) if (entry.bitmap !== Pic.shown && entry.bitmap.close) entry.bitmap.close();
+    Buf.version = version; Buf.blobs.clear(); Buf.bitmaps.clear(); Buf.failed.clear(); Buf.bytes = 0;
+    if (S.info && S.info.hasMovie && S.view !== 'picture') requestFrame();
+  }
+  /** Frames are fetched at the size they are drawn, or at full resolution when zoomed in or when that is nearly as large. */
+  function frameWidth() {
+    const full = S.info.width, canvas = $('picture');
+    if (Pic.zoom > 1.01 || !canvas.clientWidth) return full;
+    const need = full * place(canvas.clientWidth, canvas.clientHeight).z * (window.devicePixelRatio || 1);
+    return need >= full * 0.75 ? full : Math.min(full, Math.max(160, Math.ceil(need / 160) * 160));
+  }
+  function bitmapFor(f, mode) { const entry = Buf.bitmaps.get(frameKey(f, mode)); return entry && entry.w >= frameWidth() ? entry.bitmap : null; }
+  function fetchFrame(f, mode, w) {
+    const key = frameKey(f, mode), busy = Buf.inflight.get(key); if (busy && busy.w >= w) return busy.promise;
+    const job = { w };
+    job.promise = (async () => {
+      const response = await fetch('api/frame?f=' + f + '&mode=' + mode + '&w=' + w + '&v=' + encodeURIComponent(Buf.version));
+      if (!response.ok) throw new Error('The recording frame could not be loaded.');
+      const blob = await response.blob();
+      if (key.startsWith(Buf.version + '|')) {
+        const old = Buf.blobs.get(key); if (old) Buf.bytes -= old.blob.size;
+        Buf.blobs.set(key, { f, w, blob }); Buf.bytes += blob.size; Buf.failed.delete(key); trimFrames();
+      }
+      return blob;
+    })();
+    job.promise.catch(() => { Buf.failed.set(key, performance.now()); }).finally(() => { if (Buf.inflight.get(key) === job) Buf.inflight.delete(key); pumpFrames(); });
+    Buf.inflight.set(key, job); return job.promise;
+  }
+  function decodeFrame(f, mode) {
+    const key = frameKey(f, mode), w = frameWidth(), have = Buf.bitmaps.get(key); if (have && have.w >= w) return Promise.resolve(have.bitmap);
+    const busy = Buf.decoding.get(key); if (busy && busy.w >= w) return busy.promise;
+    const stored = Buf.blobs.get(key), job = { w: stored && stored.w >= w ? stored.w : w };
+    job.promise = (stored && stored.w >= w ? Promise.resolve(stored.blob) : fetchFrame(f, mode, w)).then((blob) => createImageBitmap(blob)).then((bitmap) => {
+      const old = Buf.bitmaps.get(key); if (old && old.bitmap !== Pic.shown && old.bitmap.close) old.bitmap.close();
+      if (key.startsWith(Buf.version + '|')) Buf.bitmaps.set(key, { f, w: job.w, bitmap }); return bitmap;
+    });
+    job.promise.catch(() => {}).finally(() => { if (Buf.decoding.get(key) === job) Buf.decoding.delete(key); });
+    Buf.decoding.set(key, job); return job.promise;
+  }
+  /** Keeps the buffer filled: the frame on screen first, then about 3 s of playback ahead (a few frames when paused). */
+  function pumpFrames() {
+    if (!S.info || !S.info.hasMovie || S.view === 'picture') return;
+    const mode = S.view, w = frameWidth(), speed = Number($('speed').value), wanted = [S.frame];
+    const ahead = S.timer ? Math.min(120, Math.ceil(3 * speed / Math.max(1e-6, (Clock.times[Math.min(Clock.times.length - 1, S.frame)] - Clock.times[S.frame - 1]) || 0.05) / Clock.step)) : 3;
+    for (let k = nextFrame(S.frame), i = 0; k && i < ahead; k = nextFrame(k), i++) wanted.push(k);
+    if (!S.timer && S.frame > 1) wanted.push(S.frame - 1);
+    wanted.forEach((f, i) => {
+      const key = frameKey(f, mode), stored = Buf.blobs.get(key), failed = Buf.failed.get(key);
+      if ((!stored || stored.w < w) && Buf.inflight.size < PARALLEL && !Buf.inflight.has(key) && !(f !== S.frame && failed && performance.now() - failed < 2000)) fetchFrame(f, mode, w).catch(() => {});
+      else if (stored && stored.w >= w && i < 8 && !bitmapFor(f, mode)) decodeFrame(f, mode).catch(() => {});
+    });
+    trimFrames();
+  }
+  /** Decoded frames are kept near the playhead only; compressed ones until the memory budget is reached, farthest first. */
+  function trimFrames() {
+    for (const [key, entry] of Buf.bitmaps) if (Math.abs(entry.f - S.frame) > DECODED_AROUND && entry.bitmap !== Pic.shown) { if (entry.bitmap.close) entry.bitmap.close(); Buf.bitmaps.delete(key); }
+    if (Buf.bytes <= MAX_BYTES) return;
+    const far = Array.from(Buf.blobs.entries()).sort((a, b) => Math.abs(b[1].f - S.frame) - Math.abs(a[1].f - S.frame));
+    for (const [key, entry] of far) { if (Buf.bytes <= MAX_BYTES * 0.8) break; Buf.blobs.delete(key); Buf.bytes -= entry.blob.size; }
+  }
+  function frameNote() {
+    if (S.view === 'picture' || !S.info.hasMovie || !Pic.shownFrame || Pic.error) return;
+    const f = Pic.shownFrame, rest = S.results ? S.results.baselineFrames : (S.state && S.state.rest), ordinal = (n) => n + (n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : n % 10 === 1 && n % 100 !== 11 ? 'st' : 'th');
+    $('picture-note').textContent = (S.view === 'change' ? 'Frame ' + f + ' − mean of baseline frames ' + (rest ? rest[0] + '–' + rest[1] : '(preview)') + ' · display smoothed' : 'Frame ' + f + ' · as recorded') +
+      (S.timer && Clock.step > 1 ? ' · playing every ' + ordinal(Clock.step) + ' frame' : '') + (S.timer && Clock.waitingSince && performance.now() - Clock.waitingSince > 250 ? ' · buffering' : '');
+  }
+  function showFrame(f, mode, bitmap) {
+    if (S.view !== mode || S.frame !== f) return;
+    Pic.shown = bitmap; Pic.shownFrame = f; Pic.error = null; movieMessage(''); frameNote(); drawPicture();
+  }
+  function frameFailed(f, mode) {
+    if (S.view !== mode || S.frame !== f && !S.timer) return;
+    Pic.error = 'The recording frame could not be loaded.'; play(false);
+    movieMessage('Frame ' + f + ' could not load. Keep the recording open in Fiji, then move the slider to retry.', true);
+    $('picture-note').textContent = Pic.shownFrame ? 'Last displayed frame: ' + Pic.shownFrame : 'No movie frame loaded';
+  }
   function requestFrame() {
     if (!(S.info.hasPicture || S.info.hasMovie)) return;
     if (S.view === 'picture' || !S.info.hasMovie) {
-      Pic.pending = null; Pic.shown = Pic.base; Pic.shownFrame = null;
+      Pic.shown = Pic.base; Pic.shownFrame = null;
       $('picture-note').textContent = 'Static overview · not a movie frame'; movieMessage(Pic.base ? '' : 'Loading the static overview…'); drawPicture(); return;
     }
-    Pic.pending = { f: S.frame, mode: S.view };
-    if (Pic.shownFrame !== S.frame || Pic.error) movieMessage('Loading frame ' + S.frame + '…');
-    if (!Pic.loading) pump();
-  }
-  async function pump() {
-    Pic.loading = true;
-    try {
-      while (Pic.pending) {
-        const want = Pic.pending; Pic.pending = null;
-        try {
-          const response = await fetch('api/frame?f=' + want.f + '&mode=' + want.mode, { cache: 'no-store' });
-          if (!response.ok) throw new Error('The recording frame could not be loaded.');
-          const bitmap = await createImageBitmap(await response.blob());
-          if (S.view === want.mode && S.frame === want.f) {
-            if (Pic.shown && Pic.shown !== Pic.base && Pic.shown.close) Pic.shown.close();
-            Pic.shown = bitmap; Pic.shownFrame = want.f; Pic.error = null; movieMessage('');
-            const rest = S.results ? S.results.baselineFrames : (S.state && S.state.rest);
-            $('picture-note').textContent = want.mode === 'change' ? 'Frame ' + want.f + ' − mean of baseline frames ' + (rest ? rest[0] + '–' + rest[1] : '(preview)') + ' · display smoothed' : 'Frame ' + want.f + ' · as recorded';
-            drawPicture();
-          } else if (bitmap.close) bitmap.close();
-        } catch (problem) {
-          if (S.view === want.mode && S.frame === want.f) {
-            Pic.error = problem.message; play(false);
-            movieMessage('Frame ' + want.f + ' could not load. Keep the recording open in Fiji, then move the slider to retry.', true);
-            $('picture-note').textContent = Pic.shownFrame ? 'Last displayed frame: ' + Pic.shownFrame : 'No movie frame loaded';
-          }
-        }
-      }
-    } finally { Pic.loading = false; }
+    const f = S.frame, mode = S.view, ready = bitmapFor(f, mode);
+    if (ready) showFrame(f, mode, ready);
+    else {
+      const any = Buf.bitmaps.get(frameKey(f, mode));   // a smaller copy stands in while the full-size one loads
+      if (any) showFrame(f, mode, any.bitmap); else if (!S.timer && (Pic.shownFrame !== f || Pic.error)) movieMessage('Loading frame ' + f + '…');
+      if (Pic.error) Buf.failed.delete(frameKey(f, mode));
+      decodeFrame(f, mode).then((bitmap) => showFrame(f, mode, bitmap), () => frameFailed(f, mode));
+    }
+    pumpFrames();
   }
   function place(w, h) {
     const iw = S.info.width, ih = S.info.height, fitted = Math.max(0.01, Math.min((w - 8) / iw, (h - 8) / ih)), z = fitted * Pic.zoom;
@@ -657,7 +744,7 @@
       const y = r.traces[Plot.hover], gapLimit = samplingSupport().gap; ctx.strokeStyle = CALL[kind(callOf(Plot.hover))]; ctx.lineWidth = 2.2; ctx.lineJoin = 'round'; ctx.beginPath(); let pen = false;
       for (let i = 0; i < time.length; i++) { if (finite(y[i])) { if (pen && time[i] - time[i - 1] <= gapLimit) ctx.lineTo(X(time[i]), Y(y[i])); else ctx.moveTo(X(time[i]), Y(y[i])); pen = true; } else pen = false; } ctx.stroke();
     }
-    const t = S.frame <= time.length ? time[S.frame - 1] : NaN;
+    const t = Plot.playhead != null ? Plot.playhead : S.frame <= time.length ? time[S.frame - 1] : NaN;   // glides with the playhead while playing
     if (isFinite(t) && t >= g.x0 && t <= g.x1) {
       const x = Math.round(X(t)) + 0.5; ctx.strokeStyle = 'rgba(31,41,51,0.8)'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(x, g.T); ctx.lineTo(x, g.T + g.H); ctx.stroke();
       const own = S.cell ? r.traces[S.cell] : null; let text = t.toFixed(1) + ' s';
@@ -987,5 +1074,5 @@
 
   wire();
   start().catch((problem) => { $('lost').classList.add('on'); $('status').textContent = problem.message; });
-  window.calciumStep4 = { S, Plot, Pic, Heat, pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, exportMetadata, heatmapAt };   // for the browser test
+  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, exportMetadata, heatmapAt };   // for the browser test
 })();

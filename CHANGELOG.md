@@ -18,6 +18,8 @@
 - Step 4: cells with long stable IDs are shown as "Cell N" (their measured order) on the picture, plot, heatmap and lists, with the full ID in tooltips. Tables and exports keep the IDs.
 - Step 4: **Use frame on screen** under "Stimulus added at" sets the onset from the movie frame shown.
 - Step 4: a warning while editing when a response baseline cannot hold the minimum number of baseline samples, which would leave every cell unscorable. Discard and protocol import clear old messages. Field names in number errors use their on-screen labels.
+- Step 4 movie playback is faster and steadier. Speeds now run from 0.5× to 50×, with **10×** as the default. Frames are shown on a clock in recording time, so they arrive at even intervals. Above 30 frames per second on screen, every Nth frame is shown and the frame note says so. A long gap between recorded frames waits at most about one second.
+- Step 4 frames are loaded up to 4 at a time, about 3 s of playback ahead, and kept for the session (within 90 MB), so scrubbing back over frames already seen makes no new requests. If loading falls behind, the picture holds and the note says "buffering". Frames are fetched at the size they are drawn (full size when zoomed in) and may be cached by the browser. Each frame is keyed to the baseline and display range, so a changed baseline never shows an old image. While playing, the trace cursor glides with the clock. The displayed images and measurements are unchanged.
 
 ## 2026.11.20.5
 
