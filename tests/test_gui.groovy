@@ -23,8 +23,10 @@ def binding = new Binding([
     row:{ java.awt.Component... children -> def p = new JPanel(); children.each{p.add(it)}; p },
 ])
 def hooks, frame, progress
+def Updates = loader.loadClass('CalciumUpdatesPanel')
 // Step 1: the styled dialog returns the recording, the response choice, the folder and any file chosen from disk, or nothing when cancelled.
 def Start = loader.loadClass('CalciumStartDialog')
+Start.updatesFactory = { -> def panel = Updates.newInstance(); panel.updateCheck.fetch = { -> throw new IOException('offline fixture') }; panel }
 def everything; everything = { c -> [c] + (c instanceof java.awt.Container ? c.components.collectMany { everything(it) } : []) }
 def movie = '1:  movie.tif   (300 frames, 16-bit)', disk = 'Choose a file from disk...'
 String offered = null; int asked = 0
@@ -79,11 +81,11 @@ try {
     SwingUtilities.invokeAndWait {
         frame = Window.newInstance('Calcium UI regression test')
         def root = new JPanel(); root.setLayout(new BoxLayout(root,BoxLayout.Y_AXIS))
-        binding.setVariable('frame',frame); binding.setVariable('root',root)
-        def updatesCard = loader.loadClass('CalciumCard').newInstance('', 'Updates', true); root.add(updatesCard)
-        binding.setVariable('updatesCard',updatesCard)
-        def fragment = source.substring(source.indexOf('def updateBtn ='),source.indexOf('frame.pack(); frame.setAlwaysOnTop'))
-        hooks = new GroovyShell(loader,binding).evaluate('import ij.IJ\nimport ij.Prefs\n'+fragment+'\nreturn [check:checkUpdates, controller:updateCheck, button:updateBtn, note:updateNote, checkbox:autoUpdateBox, install:installBtn, busy:installBusy, bar:installBar, start:startInstall, setInstaller:{ Closure c -> installRelease = c }]')
+        def panel = Updates.newInstance(); root.add(panel); frame.contentPane.add(root)
+        hooks = [check:{ automatic -> panel.checkUpdates(automatic) }, controller:panel.updateCheck,
+            button:panel.updateBtn, note:panel.updateNote, checkbox:panel.autoUpdateBox, install:panel.installBtn,
+            later:panel.laterBtn, busy:panel.installBusy, bar:panel.installBar, start:{ data -> panel.startInstall(data) },
+            setInstaller:{ Closure c -> panel.installRelease = c }, panel:panel]
         frame.pack()
         assert frame.height <= frame.graphicsConfiguration.bounds.height - 60
         hooks.controller.enabled = true
@@ -94,14 +96,12 @@ try {
     long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
     while (hooks.controller.busy.get() && System.nanoTime() < end) Thread.sleep(10)
     SwingUtilities.invokeAndWait {
-        def prompt = frame.ownedWindows.find{it instanceof JDialog && it.visible}
-        assert prompt != null && !prompt.modal && hooks.button.enabled
-        assert hooks.note.text.contains('2099.1.1.1')
-        def descendants; descendants = { c -> [c] + (c instanceof java.awt.Container ? c.components.collectMany { descendants(it) } : []) }
-        def controls = descendants(prompt).findAll { it instanceof JButton }
-        assert controls*.text.containsAll(['Install update','Later'])
-        controls.find{it.text == 'Later'}.doClick()
-        assert !prompt.displayable
+        assert !frame.ownedWindows.any { it.visible } : 'Updates stay inline on Step 1'
+        assert hooks.button.enabled && hooks.note.text.contains('2099.1.1.1')
+        assert hooks.install.visible && hooks.later.visible
+        hooks.later.doClick()
+        assert !hooks.install.visible && !hooks.later.visible
+        hooks.install.visible=true // retain the found release while exercising failure/retry below
         progress = Panel.newInstance(); frame.contentPane.add(progress,java.awt.BorderLayout.SOUTH)
         progress.begin().report(40,'Finding cells','Testing the details view')
         progress.detailsButton.doClick()
@@ -146,7 +146,7 @@ try {
         assert new File(testDirectory,'calcium-plugin-backups').listFiles().size()==1
         assert !hooks.button.enabled
     }
-    println 'PASS: Step 1 dialog answer, cancel and in-dialog file choice, actual Install update button, retry after error, background verified replacement, backup, restart feedback, Later and offline startup'
+    println 'PASS: Step 1 dialog answer, cancel and in-dialog file choice, inline Install update button, retry after error, background verified replacement, backup, restart feedback, Later and offline startup'
 } finally {
     SwingUtilities.invokeAndWait { progress?.close(); hooks?.controller?.close(); frame?.dispose() }
     testDirectory.deleteDir()

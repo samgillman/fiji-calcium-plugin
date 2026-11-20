@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.11.20.4
+
+- Move Check for updates, Install update, Later, Release notes and the startup-check preference onto Step 1, before choosing or opening a recording. Show update offers and installation progress inline on that screen.
+- Keep recording selection responsive during update checks, including offline startup. Pause Next/Cancel only while installing; show retryable errors or the installed version and restart instructions without losing the chosen recording or folder.
+- Remove the duplicate update area and delayed automatic check from the cell-selection window. Make Step 1 scrollable on smaller screens, with Next and Cancel always outside the scrolling area.
+
 ## 2026.11.20.3
 
 - Bring the portable response-protocol workflow into the local Step 4 browser page while preserving the 2026.11.20.2 movie, interactive traces, heatmap, cell navigation and native Fiji fallback. Browser displays read the shared engine's saved results; they do not recalculate response calls.

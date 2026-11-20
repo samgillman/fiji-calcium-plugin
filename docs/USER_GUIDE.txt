@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.3.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.4.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -367,3 +367,11 @@ to its folder, the installer reports this; use a writable Fiji folder and retry.
 cannot replace the same installation at once, and an older release cannot overwrite a newer one.
 
 For GitHub notifications, choose Watch > Custom > Releases > Apply on the repository.
+
+UPDATE CONTROLS ON STEP 1
+Check for updates, Install update, Later, Release notes and the automatic-check preference
+are now on the Choose the recording screen, before a movie is opened. You can continue
+while an update check is running, including when offline. During installation, wait for
+the completion message; save your work and restart Fiji to use the installed version.
+A failed installation leaves the controls available to retry. Your recording and folder
+choices stay in place. The first screen scrolls if needed; Next and Cancel stay visible.

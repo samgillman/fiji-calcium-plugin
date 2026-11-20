@@ -1,4 +1,4 @@
-// Calcium imaging: cells step by step                                                    version 2026.11.20.3
+// Calcium imaging: cells step by step                                                    version 2026.11.20.4
 // One plugin for the whole job on one recording:
 //   1. choose the recording (already open in Fiji, or a file) and a folder for the results
 //   2. the plugin makes the cells visible: all-frames picture, response (found automatically, if there is one), and a
@@ -87,7 +87,7 @@ class CalciumSteps {
     /** Steps 1-2: pictures. The movie is only read. */
     void prepare(ImagePlus imp, boolean lookForResponse) {
         movie = imp; n = imp.getStackSize(); w = imp.getWidth(); h = imp.getHeight()
-        say("Calcium imaging plugin, version 2026.11.20.3")
+        say("Calcium imaging plugin, version 2026.11.20.4")
         say("Recording: " + imp.getTitle() + " (" + n + " frames, " + w + " x " + h + ", " + imp.getBitDepth() + "-bit)")
         ImagePlus sum = ZProjector.run(imp, "sum")                                   // Image > Stacks > Z Project, Sum Slices
         FloatProcessor avg = (FloatProcessor) sum.getProcessor().convertToFloat()
@@ -471,7 +471,7 @@ class CalciumSteps {
 
 /** Release lookup sends no recording data. Installation requires an explicit button click. */
 class CalciumRelease {
-    static final String VERSION = "2026.11.20.3"
+    static final String VERSION = "2026.11.20.4"
     static final String REPOSITORY = "https://github.com/samgillman/fiji-calcium-plugin"
     static final String API = "https://api.github.com/repos/samgillman/fiji-calcium-plugin/releases/latest"
     static final String ASSET = "Calcium_Imaging_Fiji_Plugin.zip"
@@ -2858,8 +2858,129 @@ class CalciumTracePanel extends javax.swing.JPanel {
     }
 }
 
+/** Update controls are available before a recording is opened. All UI callbacks stay on the event thread. */
+class CalciumUpdatesPanel extends CalciumCard {
+    def updateBtn = CalciumTheme.button('Check for updates')
+    def installBtn = CalciumTheme.button('Install update', true)
+    def laterBtn = CalciumTheme.button('Later')
+    def releaseBtn = CalciumTheme.button('Release notes')
+    def autoUpdateBox = new javax.swing.JCheckBox('Check for updates when this plugin opens', ij.Prefs.get('calcium.steps.check_updates', true))
+    def updateNote = CalciumTheme.label('Check for an update before opening a recording.', CalciumTheme.MUTED)
+    def installBar = new javax.swing.JProgressBar(0, 100)
+    def updateCheck = new CalciumUpdateCheck()
+    def installBusy = new java.util.concurrent.atomic.AtomicBoolean(false)
+    Map selectedRelease
+    String installedVersion
+    String releasePage = CalciumRelease.REPOSITORY + '/releases/latest'
+    boolean closed = false
+    Closure onBusy = { boolean busy -> }
+    Closure installRelease = { Map found, Closure progress ->
+        String directory = ij.IJ.getDirectory('imagej')
+        new CalciumInstaller(applicationDirectory: directory ? new File(directory) : null).install(found, progress)
+    }
+    Closure browse = { String page -> java.awt.Desktop.getDesktop().browse(new java.net.URI(page)) }
+    CalciumUpdatesPanel() {
+        super('', 'Plugin updates', false)
+        def buttons = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 0))
+        buttons.setOpaque(false); buttons.setAlignmentX(0f)
+        [updateBtn, installBtn, laterBtn, releaseBtn].each { buttons.add(it) }
+        [installBtn, laterBtn].each { it.setVisible(false) }
+        CalciumTheme.plain(autoUpdateBox)
+        updateCheck.enabled = autoUpdateBox.isSelected()
+        installBar.setStringPainted(true); installBar.setVisible(false); installBar.setAlignmentX(0f)
+        installBar.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 22))
+        [buttons, javax.swing.Box.createVerticalStrut(6), autoUpdateBox, updateNote, installBar].each { body.add(it) }
+        updateBtn.addActionListener({ e -> checkUpdates(false) } as java.awt.event.ActionListener)
+        installBtn.addActionListener({ e -> startInstall(selectedRelease) } as java.awt.event.ActionListener)
+        laterBtn.addActionListener({ e ->
+            installBtn.setVisible(false); laterBtn.setVisible(false)
+            message('Update postponed. You can continue or check again when ready.')
+        } as java.awt.event.ActionListener)
+        releaseBtn.addActionListener({ e ->
+            try { browse.call(releasePage) }
+            catch (Exception problem) { message('Open this page in your browser: '+CalciumInstaller.escape(releasePage)) }
+        } as java.awt.event.ActionListener)
+        autoUpdateBox.addActionListener({ e ->
+            updateCheck.enabled = autoUpdateBox.isSelected()
+            ij.Prefs.set('calcium.steps.check_updates', updateCheck.enabled)
+            // A disabled automatic request suppresses its callback. Restore the manual control now.
+            if (!updateCheck.enabled && !installBusy.get() && installedVersion == null) {
+                updateBtn.setEnabled(true); updateBtn.setText('Check for updates')
+            }
+        } as java.awt.event.ActionListener)
+    }
+    void message(String text) {
+        updateNote.setText("<html><body style='width:300px'>"+text+'</body></html>')
+        revalidate(); repaint()
+    }
+    void checkUpdates(boolean automatic) {
+        if (closed || installBusy.get() || installedVersion != null) return
+        boolean accepted = updateCheck.check(automatic, { Map found ->
+            if (closed || installBusy.get() || installedVersion != null) return
+            updateBtn.setEnabled(true); updateBtn.setText('Check for updates')
+            if (automatic && found.error) return // Offline startup never interrupts choosing a recording.
+            if (found.error) {
+                message('Could not check for updates: '+CalciumInstaller.escape(found.error)+'. You can retry or open Release notes.')
+                return
+            }
+            releasePage = found.page; selectedRelease = found
+            installBtn.setVisible(found.newer && found.installable); laterBtn.setVisible(found.newer)
+            message(found.newer ? '<b>Update available: '+CalciumInstaller.escape(found.version)+'.</b> '+
+                (found.installable ? 'Install it here, then restart Fiji to use it.' : 'Open Release notes for installation instructions.') :
+                'You are up to date (installed '+CalciumRelease.VERSION+'; latest release '+CalciumInstaller.escape(found.version)+').')
+        })
+        if (accepted) {
+            updateBtn.setEnabled(false); updateBtn.setText('Checking...')
+            if (!automatic) message('Checking the latest GitHub release...')
+        }
+    }
+    void startInstall(Map found) {
+        if (closed || installedVersion != null || found == null || !found.installable || !installBusy.compareAndSet(false, true)) return
+        installBtn.setEnabled(false); updateBtn.setEnabled(false); laterBtn.setEnabled(false)
+        autoUpdateBox.setEnabled(false); onBusy.call(true)
+        installBar.setValue(0); installBar.setString('Preparing installation...'); installBar.setVisible(true)
+        message('Downloading and verifying the update. Please keep this window open until installation finishes.')
+        Thread.start('Calcium plugin installation') {
+            Map installed = null; String problem = null
+            try {
+                installed = installRelease.call(found, { int percent, String text ->
+                    javax.swing.SwingUtilities.invokeLater { if (!closed) { installBar.setValue(percent); installBar.setString(text) } }
+                })
+                if (installed == null) throw new IOException('The installer did not confirm completion')
+            } catch (Exception failure) { problem = failure.message ?: failure.toString() }
+            final Map completed = installed; final String error = problem
+            javax.swing.SwingUtilities.invokeLater {
+                installBusy.set(false)
+                if (completed != null) { installedVersion = completed.version; updateCheck.close() }
+                if (closed) return
+                onBusy.call(false); autoUpdateBox.setEnabled(true); laterBtn.setEnabled(true)
+                if (error != null) {
+                    installBar.setString('Update was not installed')
+                    installBtn.setEnabled(true); updateBtn.setEnabled(true)
+                    message('Could not install: '+CalciumInstaller.escape(error)+'<br>You can retry Install update or open Release notes.')
+                } else {
+                    installBar.setValue(100); installBar.setString('Installed '+completed.version)
+                    installBtn.setText('Installed — restart Fiji'); installBtn.setEnabled(false); laterBtn.setVisible(false)
+                    message('<b>Installed '+CalciumInstaller.escape(completed.version)+'.</b> Save your work, then restart Fiji to use it. This session continues with the version already loaded.'+
+                        (completed.backup ? '<br>The previous file was backed up in calcium-plugin-backups inside Fiji’s folder.' : ''))
+                    updateNote.setToolTipText('Installed file: '+completed.target+(completed.backup ? '; backup: '+completed.backup : ''))
+                }
+            }
+        }
+    }
+    void close() { closed = true; updateCheck.close() }
+}
+
 /** Step 1: which recording, whether to look for a response, and where the results go. */
 class CalciumStartDialog {
+    static Closure updatesFactory = { -> new CalciumUpdatesPanel() }
+    static void fit(javax.swing.JDialog dialog) {
+        dialog.pack()
+        def config = dialog.getGraphicsConfiguration(), bounds = config.getBounds()
+        def insets = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(config)
+        dialog.setSize(Math.min(dialog.getWidth(), (int) bounds.getWidth() - insets.left - insets.right - 40),
+            Math.min(dialog.getHeight(), (int) bounds.getHeight() - insets.top - insets.bottom - 60))
+    }
     /** The file and folder choosers; tests replace them so no native dialog opens. Each returns a path, or null when cancelled. */
     static Closure chooseFile = { -> def od = new ij.io.OpenDialog("Choose the recording (.zvi, .czi, .tif ...)"); od.getFileName() == null ? null : od.getPath() }
     static Closure chooseFolder = { String from -> ij.io.DirectoryChooser.setDefaultDirectory(from); new ij.io.DirectoryChooser("Folder for the results").getDirectory() }
@@ -2896,7 +3017,7 @@ class CalciumStartDialog {
                     if (chosen) { file = chosen; fileName.setText(new File(chosen).getName()); fileName.setForeground(CalciumTheme.INK); fileName.setToolTipText(chosen); fileButton.setText("Change file…") }
                 } finally { choosing = false }
             }
-            def showFileRow = { -> fileRow.setVisible(choice.getSelectedItem() == diskLabel); dialog.pack() }
+            def showFileRow = { -> fileRow.setVisible(choice.getSelectedItem() == diskLabel); fit(dialog) }
             fileButton.addActionListener({ e -> pickFile() } as java.awt.event.ActionListener)
             choice.addActionListener({ e -> showFileRow(); if (dialog.isVisible() && choice.getSelectedItem() == diskLabel) javax.swing.SwingUtilities.invokeLater { pickFile() } } as java.awt.event.ActionListener)
             fileRow.setVisible(choice.getSelectedItem() == diskLabel)
@@ -2910,22 +3031,37 @@ class CalciumStartDialog {
             def buttons = new javax.swing.JPanel(new java.awt.BorderLayout()); buttons.setOpaque(false); buttons.setAlignmentX(0f)
             def right = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 6, 0)); right.setOpaque(false); right.add(cancel); right.add(next)
             buttons.add(CalciumTheme.label("Version " + CalciumRelease.VERSION, CalciumTheme.FAINT, java.awt.Font.PLAIN, -1f), java.awt.BorderLayout.WEST); buttons.add(right, java.awt.BorderLayout.EAST)
-            [recording, javax.swing.Box.createVerticalStrut(10), results, javax.swing.Box.createVerticalStrut(14), buttons].each { content.add(it) }
+            def updates = updatesFactory.call()
+            updates.onBusy = { boolean busy -> next.setEnabled(!busy); cancel.setEnabled(!busy) }
+            def dismiss = { -> if (!updates.installBusy.get()) { updates.close(); dialog.dispose() } }
+            [recording, javax.swing.Box.createVerticalStrut(10), results, javax.swing.Box.createVerticalStrut(10), updates].each { content.add(it) }
             browse.addActionListener({ e ->
                 String chosen = chooseFolder.call(folder.getText())
                 if (chosen) folder.setText(chosen)
             } as java.awt.event.ActionListener)
             next.addActionListener({ e ->
+                if (updates.installBusy.get()) return
                 boolean disk = choice.getSelectedItem() == diskLabel
                 if (disk && file == null) pickFile()          // Next without a file still asks for one,
                 if (disk && file == null) return              // and stays here if that was cancelled
-                answer = [recording: choice.getSelectedItem() as String, look: look.isSelected(), folder: folder.getText(), file: disk ? file : null]; dialog.dispose()
+                answer = [recording: choice.getSelectedItem() as String, look: look.isSelected(), folder: folder.getText(), file: disk ? file : null]; dismiss()
             } as java.awt.event.ActionListener)
-            cancel.addActionListener({ e -> dialog.dispose() } as java.awt.event.ActionListener)
+            cancel.addActionListener({ e -> dismiss() } as java.awt.event.ActionListener)
             dialog.getRootPane().setDefaultButton(next)
-            dialog.getRootPane().registerKeyboardAction({ e -> dialog.dispose() } as java.awt.event.ActionListener, javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0), javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
-            dialog.setContentPane(content); dialog.setDefaultCloseOperation(javax.swing.WindowConstants.DISPOSE_ON_CLOSE)
-            dialog.pack(); dialog.setResizable(false); dialog.setLocationRelativeTo(null); dialog.setVisible(true)
+            dialog.getRootPane().registerKeyboardAction({ e -> dismiss() } as java.awt.event.ActionListener, javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0), javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW)
+            def scroll = new javax.swing.JScrollPane(content)
+            scroll.setBorder(javax.swing.BorderFactory.createEmptyBorder()); scroll.getViewport().setBackground(CalciumTheme.PAGE)
+            scroll.getVerticalScrollBar().setUnitIncrement(24); scroll.setWheelScrollingEnabled(true)
+            def page = new javax.swing.JPanel(new java.awt.BorderLayout()); page.setBackground(CalciumTheme.PAGE)
+            buttons.setBorder(javax.swing.BorderFactory.createEmptyBorder(4, 20, 14, 20))
+            page.add(scroll, java.awt.BorderLayout.CENTER); page.add(buttons, java.awt.BorderLayout.SOUTH)
+            dialog.setContentPane(page); dialog.setDefaultCloseOperation(javax.swing.WindowConstants.DO_NOTHING_ON_CLOSE)
+            dialog.addWindowListener(new java.awt.event.WindowAdapter() {
+                void windowClosing(java.awt.event.WindowEvent event) { dismiss() }
+                void windowClosed(java.awt.event.WindowEvent event) { updates.close() }
+                void windowOpened(java.awt.event.WindowEvent event) { updates.checkUpdates(true) }
+            })
+            fit(dialog); dialog.setResizable(true); dialog.setLocationRelativeTo(null); dialog.setVisible(true)
         }
         if (javax.swing.SwingUtilities.isEventDispatchThread()) show.call() else javax.swing.SwingUtilities.invokeAndWait(show as Runnable)
         return answer
@@ -3089,117 +3225,8 @@ def openStep = { CalciumCard card -> stepCards.each { it.setExpanded(it.is(card)
 stepCards.each { it.onToggle = { CalciumCard card -> if (card.expanded) { card.setExpanded(false); frame.refreshContents() } else openStep(card) } }
 s3.setExpanded(false); s4.setExpanded(false); s3.setSummary("after choosing cells"); s4.setSummary("SimpleCa²⁺, after measuring")
 continueBtn.addActionListener({ e -> openStep(s3) } as java.awt.event.ActionListener)
-// Version and update controls stay out of the way until asked for (or until an update is found).
-def updatesCard = new CalciumCard("", "Updates", false); updatesCard.setVisible(false); updatesCard.setSummary("Version " + CalciumRelease.VERSION)
-def updatesBtn = btn("Updates"); updatesBtn.setToolTipText("Check for a newer version of this plugin")
-updatesBtn.addActionListener({ e -> updatesCard.setVisible(!updatesCard.isVisible()); frame.refreshContents() } as java.awt.event.ActionListener)
 [s1, s2, s3, s4].each { root.add(it); root.add(javax.swing.Box.createVerticalStrut(8)) }
-root.add(row(closeBtn, updatesBtn, CalciumTheme.label("Version " + CalciumRelease.VERSION, CalciumTheme.FAINT, java.awt.Font.PLAIN, -1f)))
-root.add(javax.swing.Box.createVerticalStrut(4)); root.add(updatesCard)
-def updateBtn = btn("Check for updates")
-def installBtn = btn("Install update"); installBtn.setVisible(false)
-def releaseBtn = btn("Release notes"); releaseBtn.setVisible(false)
-def installBar = new javax.swing.JProgressBar(0,100); installBar.setStringPainted(true); installBar.setVisible(false); installBar.setAlignmentX(0f)
-installBar.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE,22))
-def autoUpdateBox = box("Check for updates when this plugin opens", Prefs.get("calcium.steps.check_updates", true))
-def updateCheck = new CalciumUpdateCheck(enabled: autoUpdateBox.isSelected())
-def updateNote = note("New releases offer Install update or Later. Restart Fiji after installation.")
-def installBusy = new java.util.concurrent.atomic.AtomicBoolean(false)
-Map selectedRelease = null
-String installedVersion = null
-def installRelease = { Map found, Closure progress ->
-    String directory = IJ.getDirectory("imagej")
-    new CalciumInstaller(applicationDirectory: directory ? new File(directory) : null).install(found, progress)
-}
-updatesCard.body.add(row(updateBtn, installBtn, releaseBtn)); updatesCard.body.add(autoUpdateBox); updatesCard.body.add(updateNote); updatesCard.body.add(installBar)
-def releasePage = CalciumRelease.REPOSITORY + "/releases/latest"
-def openRelease = { ->
-    try { java.awt.Desktop.getDesktop().browse(new java.net.URI(releasePage)) }
-    catch (Exception problem) { IJ.showMessage("Plugin updates", "Open this page in your browser:\n" + releasePage) }
-}
-def startInstall = { Map found ->
-    if (installedVersion != null || found == null || !found.installable || !installBusy.compareAndSet(false,true)) return
-    installBtn.setEnabled(false); updateBtn.setEnabled(false)
-    installBar.setValue(0); installBar.setString("Preparing installation..."); installBar.setVisible(true)
-    updateNote.setText("Downloading and verifying the update. Your current session stays open.")
-    frame.refreshContents()
-    Thread.start("Calcium plugin installation") {
-        Map installed = null; String problem = null
-        try {
-            installed = installRelease.call(found, { int percent, String message ->
-                javax.swing.SwingUtilities.invokeLater {
-                    if (frame.isDisplayable()) { installBar.setValue(percent); installBar.setString(message) }
-                }
-            })
-        } catch (Exception failure) { problem = failure.message ?: failure.toString() }
-        final Map completed = installed; final String error = problem
-        javax.swing.SwingUtilities.invokeLater {
-            installBusy.set(false)
-            if (completed != null) { installedVersion = completed.version; updateCheck.close() }
-            if (!frame.isDisplayable()) return
-            if (error != null) {
-                installBar.setString("Update was not installed")
-                updateNote.setText("<html><body style='width:300px'>Could not install: " + CalciumInstaller.escape(error) + "<br>You can retry Install update or use the release page.</body></html>")
-                installBtn.setEnabled(true); updateBtn.setEnabled(true)
-            } else {
-                installBar.setValue(100); installBar.setString("Installed " + completed.version)
-                installBtn.setText("Installed — restart Fiji"); installBtn.setEnabled(false)
-                updateNote.setText("<html><body style='width:300px'><b>Installed " + completed.version + ".</b> Save your work, then restart Fiji to use it. This session continues with the version already loaded." +
-                    (completed.backup ? "<br>The previous file was backed up in calcium-plugin-backups inside Fiji's folder." : "") + "</body></html>")
-                updateNote.setToolTipText("Installed file: " + completed.target + (completed.backup ? "; backup: " + completed.backup : ""))
-            }
-            frame.refreshContents()
-        }
-    }
-}
-def checkUpdates = { boolean automatic ->
-    if (installBusy.get() || installedVersion != null) return
-    boolean accepted = updateCheck.check(automatic, { Map found ->
-        if (installBusy.get() || installedVersion != null) return
-        updateBtn.setEnabled(true); updateBtn.setText("Check for updates")
-        if (automatic && found.error) return
-        String message
-        if (found.error) message = "Could not check for updates: " + CalciumInstaller.escape(found.error) + ". You can open the release page manually."
-        else {
-            releasePage = found.page; selectedRelease = found
-            installBtn.setVisible(found.newer && found.installable)
-            updatesCard.setSummary(found.newer ? "Update available: " + found.version : "Up to date · " + CalciumRelease.VERSION)
-            if (found.newer) updatesCard.setVisible(true)
-            message = found.newer ? "<b>Update available: " + found.version + ".</b> " + (found.installable ? "Click Install update; downloading, backup and replacement are handled for you." : "This release requires installation from its download page.") : "You are up to date (installed " + CalciumRelease.VERSION + "; latest release " + found.version + ")."
-        }
-        releaseBtn.setVisible(true)
-        updateNote.setText("<html><body style='width:300px'>" + message + "</body></html>")
-        frame.refreshContents()
-        if (found.prompt) {
-            def prompt = new javax.swing.JDialog(frame, "Calcium plugin update available", false)
-            def content = new javax.swing.JPanel(); content.setBorder(javax.swing.BorderFactory.createEmptyBorder(12, 12, 12, 12))
-            content.setLayout(new javax.swing.BoxLayout(content, javax.swing.BoxLayout.Y_AXIS))
-            content.add(note("<b>Version " + found.version + " is available.</b><br>" + (found.installable ? "Install update downloads, verifies and replaces the plugin for you. Restart Fiji after saving your work." : "Open the release page to download this version.")))
-            def install = btn(found.installable ? "Install update" : "Open release page"), later = btn("Later")
-            content.add(row(install, later)); prompt.add(content)
-            install.addActionListener({ e -> prompt.dispose(); if (found.installable) startInstall(found) else openRelease() } as java.awt.event.ActionListener)
-            later.addActionListener({ e -> prompt.dispose() } as java.awt.event.ActionListener)
-            prompt.setDefaultCloseOperation(javax.swing.WindowConstants.DISPOSE_ON_CLOSE)
-            prompt.pack(); prompt.setLocationRelativeTo(frame); prompt.setVisible(true)
-        }
-    })
-    if (accepted) {
-        updateBtn.setEnabled(false); updateBtn.setText("Checking...")
-        if (!automatic) updateNote.setText("Checking the latest GitHub release...")
-    }
-}
-autoUpdateBox.addActionListener({ e ->
-    updateCheck.enabled = autoUpdateBox.isSelected()
-    Prefs.set("calcium.steps.check_updates", updateCheck.enabled)
-    updateBtn.setEnabled(!installBusy.get() && installedVersion == null); updateBtn.setText("Check for updates")
-} as java.awt.event.ActionListener)
-updateBtn.addActionListener({ e -> checkUpdates(false) } as java.awt.event.ActionListener)
-installBtn.addActionListener({ e -> startInstall(selectedRelease) } as java.awt.event.ActionListener)
-releaseBtn.addActionListener({ e -> openRelease() } as java.awt.event.ActionListener)
-frame.addWindowListener(new java.awt.event.WindowAdapter() {
-    void windowClosed(java.awt.event.WindowEvent e) { updateCheck.close() }
-    void windowClosing(java.awt.event.WindowEvent e) { updateCheck.close() }
-})
+root.add(row(closeBtn, CalciumTheme.label("Version " + CalciumRelease.VERSION, CalciumTheme.FAINT, java.awt.Font.PLAIN, -1f)))
 def scroll = new javax.swing.JScrollPane(root, javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED)
 scroll.setBorder(javax.swing.BorderFactory.createEmptyBorder()); scroll.getViewport().setBackground(CalciumTheme.PAGE)
 scroll.setWheelScrollingEnabled(true)
@@ -3719,4 +3746,3 @@ if (testGui) { binding.setVariable("hooks", [detectionProgress: detectionProgres
 frame.setVisible(true)
 timer.start()
 refresh(true)
-javax.swing.SwingUtilities.invokeLater { checkUpdates(true) }

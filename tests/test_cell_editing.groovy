@@ -49,7 +49,7 @@ try {
         def binding = new Binding(imp:picture,steps:steps,look:false,rm:manager,testGui:true,outDir:new File('build/results/cells').absoluteFile)
         ui = new GroovyShell(loader,binding).evaluate(imports + construction.replace('frame.setAlwaysOnTop(true)','frame.setAlwaysOnTop(false)') +
             '\nshowBg.setSelected(false)\n' + logic + listeners +
-            '\nreturn [frame:frame, progress:detectionProgress, updates:updateCheck, proposals:proposals, refresh:refresh, click:clickCellAt, remove:removeBtn, undo:undoBtn, mode:removeMode, hint:editHint, show:showSug, edge:edgeBox, add:addBtn, oval:ovalBtn, free:freeBtn, acceptAll:acceptAll, edits:cellEdits, status:status]')
+            '\nreturn [frame:frame, progress:detectionProgress, proposals:proposals, refresh:refresh, click:clickCellAt, remove:removeBtn, undo:undoBtn, mode:removeMode, hint:editHint, show:showSug, edge:edgeBox, add:addBtn, oval:ovalBtn, free:freeBtn, acceptAll:acceptAll, edits:cellEdits, status:status]')
         def installed = picture.getCanvas().getMouseListeners().findAll { !originalMouseListeners.contains(it) }
         assert installed.size() == 1
         pluginMouse = installed.first()
@@ -168,6 +168,6 @@ try {
     failure.printStackTrace()
     System.exit(1)
 } finally {
-    onUI { ui?.progress?.close(); ui?.updates?.close(); ui?.frame?.dispose(); manager?.close(); picture?.close(); imagej?.dispose() }
+    onUI { ui?.progress?.close(); ui?.frame?.dispose(); manager?.close(); picture?.close(); imagej?.dispose() }
 }
 System.exit(0)

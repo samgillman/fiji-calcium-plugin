@@ -33,10 +33,10 @@ The progress percentage represents detection stages, not remaining time. Cellpos
 
 ## Get updates
 
-- **Inside the plugin:** startup checks and **Updates → Check for updates** offer **Install update** or **Later** when a newer release is available. Install update downloads the plugin, verifies its SHA-256 checksum and version, backs up the previous file, and replaces it safely. Save your work and restart Fiji to load the new version; your running session remains open.
+- **On Step 1, Choose the recording:** startup checks and **Check for updates** offer **Install update** or **Later** when a newer release is available. Install update downloads the plugin, verifies its SHA-256 checksum and version, backs up the previous file, and replaces it safely. Save your work and restart Fiji to load the new version; your running session remains open.
 - **Earlier versions:** versions before 2026.11.19.6 need the installer above run once to gain one-click installation. The older update button still opens a release page; choose `Install_Calcium_Plugin.groovy` there instead of copying files manually.
 - **Backup and recovery:** previous scripts are saved with `.groovy.bak` filenames in `calcium-plugin-backups` inside Fiji's folder. To roll back, close Fiji and copy the chosen backup over the installed `.groovy` script. Existing recordings, Cellpose environments, settings and results are preserved.
-- **Preferences:** under **Updates**, turn off **Check for updates when this plugin opens** if preferred. Manual checks remain available.
+- **Preferences:** on Step 1, turn off **Check for updates when this plugin opens** if preferred. Manual checks remain available.
 - **GitHub notifications:** sign in and choose **Watch → Custom → Releases → Apply** on this repository.
 
 Installation happens only after you click Install update or run the standalone installer. Updates are checked and downloaded from GitHub; no recordings, images, traces or results are sent. Failed downloads or verification leave the installed plugin unchanged. If Fiji cannot write to its folder, installation reports the problem and can be retried after correcting folder permissions.
