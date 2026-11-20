@@ -23,29 +23,57 @@ def binding = new Binding([
     row:{ java.awt.Component... children -> def p = new JPanel(); children.each{p.add(it)}; p },
 ])
 def hooks, frame, progress
-// Step 1: the styled dialog returns the recording, the response choice and the folder, or nothing when cancelled.
+// Step 1: the styled dialog returns the recording, the response choice, the folder and any file chosen from disk, or nothing when cancelled.
 def Start = loader.loadClass('CalciumStartDialog')
 def everything; everything = { c -> [c] + (c instanceof java.awt.Container ? c.components.collectMany { everything(it) } : []) }
-def answerStep1 = { Closure act ->
+def movie = '1:  movie.tif   (300 frames, 16-bit)', disk = 'Choose a file from disk...'
+String offered = null; int asked = 0
+Start.chooseFile = { -> asked++; offered }                       // stands in for the native file chooser
+Start.chooseFolder = { String from -> 'browsed folder' }
+def answerStep1 = { String preselected, Closure... acts ->
     def answer = 'not answered'
-    def asking = Thread.start { answer = Start.ask(['1:  movie.tif   (300 frames, 16-bit)', 'Choose a file from disk...'], 'Choose a file from disk...', 'default folder') }
+    def asking = Thread.start { answer = Start.ask([movie, disk], preselected, 'default folder', disk) }
     def dialog = null
     long limit = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
     while (dialog == null && System.nanoTime() < limit) { Thread.sleep(20); dialog = java.awt.Window.getWindows().find { it instanceof JDialog && it.visible && it.modal } }
     assert dialog != null : 'Step 1 dialog did not open'
-    SwingUtilities.invokeAndWait { act(everything(dialog)) }
+    acts.each { act -> SwingUtilities.invokeAndWait { act(everything(dialog)) }; SwingUtilities.invokeAndWait { } } // the second call lets queued choosers run
     asking.join(5000); assert !asking.alive && !dialog.displayable
     answer
 }
-assert answerStep1 { parts ->
-    def choice = parts.find { it instanceof JComboBox }; assert choice.selectedItem == 'Choose a file from disk...'
+def button = { parts, String text -> parts.find { it instanceof JButton && it.text == text } }
+// A recording that is already open: no file row, no file in the answer.
+assert answerStep1(disk, { parts ->
+    def choice = parts.find { it instanceof JComboBox }; assert choice.selectedItem == disk
+    assert button(parts, 'Choose file…').isShowing() && parts.any { it instanceof JLabel && it.text == 'No file chosen yet' }
     choice.selectedIndex = 0
+    assert !button(parts, 'Choose file…').isShowing()
     parts.find { it instanceof JTextField }.text = 'chosen folder'
     parts.find { it instanceof JCheckBox }.doClick()
     assert parts.findAll { it instanceof JButton }*.text.containsAll(['Browse…', 'Cancel', 'Next'])
-    parts.find { it instanceof JButton && it.text == 'Next' }.doClick()
-} == [recording: '1:  movie.tif   (300 frames, 16-bit)', look: false, folder: 'chosen folder']
-assert answerStep1 { parts -> parts.find { it instanceof JButton && it.text == 'Cancel' }.doClick() } == null
+    button(parts, 'Next').doClick()
+}) == [recording: movie, look: false, folder: 'chosen folder', file: null]
+assert asked == 0
+assert answerStep1(disk, { parts -> button(parts, 'Cancel').doClick() }) == null
+// Picking "from disk" in the list asks for the file at once and shows its name; a cancelled chooser keeps the dialog open.
+def chosen = new File(testDirectory, 'recording 1.zvi').path
+assert answerStep1(movie, { parts ->
+    assert !button(parts, 'Choose file…').isShowing()
+    offered = null; parts.find { it instanceof JComboBox }.selectedItem = disk
+}, { parts ->
+    assert asked == 1 && button(parts, 'Choose file…').isShowing() : 'Choosing "from disk" must open the file chooser straight away'
+    button(parts, 'Next').doClick()                              // still no file: asks again, stays open when cancelled
+    assert asked == 2 && button(parts, 'Next').isShowing()
+    offered = chosen; button(parts, 'Choose file…').doClick()
+    assert asked == 3 && parts.any { it instanceof JLabel && it.text == 'recording 1.zvi' && it.toolTipText == chosen }
+    assert button(parts, 'Change file…') != null
+    button(parts, 'Browse…').doClick(); assert parts.find { it instanceof JTextField }.text == 'browsed folder'
+    button(parts, 'Next').doClick()
+}) == [recording: disk, look: true, folder: 'browsed folder', file: chosen]
+assert asked == 3
+// Next alone is enough when "from disk" was already selected: it asks for the file and continues.
+assert answerStep1(disk, { parts -> button(parts, 'Next').doClick() }) == [recording: disk, look: true, folder: 'default folder', file: chosen]
+assert asked == 4
 try {
     SwingUtilities.invokeAndWait {
         frame = Window.newInstance('Calcium UI regression test')
@@ -117,7 +145,7 @@ try {
         assert new File(testDirectory,'calcium-plugin-backups').listFiles().size()==1
         assert !hooks.button.enabled
     }
-    println 'PASS: Step 1 dialog answer and cancel, actual Install update button, retry after error, background verified replacement, backup, restart feedback, Later and offline startup'
+    println 'PASS: Step 1 dialog answer, cancel and in-dialog file choice, actual Install update button, retry after error, background verified replacement, backup, restart feedback, Later and offline startup'
 } finally {
     SwingUtilities.invokeAndWait { progress?.close(); hooks?.controller?.close(); frame?.dispose() }
     testDirectory.deleteDir()

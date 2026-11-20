@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026.11.20.2
+
+- Step 4 now opens as a page in your browser, built with the same web technology and styling as the SimpleCa²⁺ app: results first, interactive traces (hover a trace to name it, click to select it, scroll to zoom the time axis), the recording played beside the traces, an ordered heatmap and sortable tables. The page is served by the plugin from your own computer; nothing is sent anywhere and no internet is needed.
+- The page drives the same analysis engine with the same settings and checks as before, and reads the tables that engine saves. Nothing is recalculated in the browser. **Use a Fiji window instead** opens the previous Step 4 window, which is also used automatically if a browser page cannot be opened.
+- The page is reachable only from this computer and only with a long random key in its address.
+- The page's heatmap is drawn the way the SimpleCa²⁺ app draws its own: every cell in one picture, axes with ticks, a colour bar with values, the app's blue–white–red for signed values or one of its palettes (plasma, viridis, magma, inferno, cividis) from zero up, and sorting by response call, time to peak, peak amplitude or original order. The colour range covers 99 % of the values by default, or the largest value as in the app.
+- Step 1: choosing **Choose a file from disk...** now opens the file chooser straight away, and a **Choose file…** button with the chosen file's name sits under the list. Before, the chooser only appeared after **Next**, so picking that entry looked as if nothing happened.
+- **Next** still asks for the file if none was chosen, and stays on Step 1 if that is cancelled instead of closing the plugin.
+- Step 4, movie beside the traces: a time slider, a **Play** button and a line on the plot move together, and the picture can show the recording at that moment. **Movie: change from rest** shows each frame minus the average of the baseline frames (lightly smoothed), so a responding cell lights up as its trace rises; **Movie: as recorded** shows the frame itself. **Zoom to cell** and **All outlines** help follow one cell. The recording is only read. Display only: nothing measured or saved changes.
+- Step 4, every trace: all cells are drawn behind the mean, coloured by response call (the SimpleCa²⁺ colours), with the selected cell on top. The y-axis covers 99 % of all values so one extreme cell cannot flatten the rest.
+- Step 4, cell groups: list and draw only responders, non-responders, or excluded and unscorable cells, from the **Show** list or by clicking a headline tile. A line under the list says what was decided for the selected cell, with the largest rise and the threshold from the saved table. Left and right arrow keys step through the cells.
+- Step 4 heatmap: responders first with the strongest on top (or as measured), a colour scale that covers 99 % of the values instead of the single largest, taller rows with readable names, a strip for each cell's call, and markers for the baseline and the stimulus.
+- Step 4 layout: narrower settings column that can be hidden, picture and traces side by side, larger default window. **Also score a separate KCl window** is now **Include a KCl control**, with an explanation.
+- Main window: a long recording name or folder name is shortened in the middle (full text in the tooltip), so it no longer pushes the window contents off the right edge.
+
 ## 2026.11.20.1
 
 - Redesign every plugin window to match SimpleCa²⁺: the computer's own interface font instead of a fixed one, the SimpleCa²⁺ colours, white cards, and one clearly marked main button per step. Measurements, thresholds and saved tables are unchanged.

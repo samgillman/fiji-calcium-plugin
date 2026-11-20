@@ -1,12 +1,17 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.1.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.2.
 
 NEW: STEP 4 — SIMPLECA ANALYSIS INSIDE FIJI
-After Measure and save, open Analyze responses. On first use, click Set up analysis engine
+After Measure and save, press Analyze responses. Step 4 opens as a page in your browser; the plugin
+serves it from your own computer only, and nothing is sent anywhere. ("Use a Fiji window instead"
+opens the same analysis inside Fiji.) On first use, click Set up analysis engine
 (internet required). The same interface supports 64-bit Windows, Mac and x64 Linux.
 Confirm the recording frame rate, baseline frames and stimulus times before running analysis.
 Traces, heatmap, metrics, cell response calls and counts open inside Fiji. Selecting a trace,
 table cell or heatmap row highlights its outline on the cell picture inside the same window.
+A time slider and Play button move a line on the traces; with "Movie: change from rest" chosen
+above the picture, the picture shows the recording at that moment, so you can watch a cell
+brighten as its trace rises. Every cell's trace is drawn behind the mean, coloured by its call.
 Step 4 uses the UNLIFTED background-corrected fluorescence. It keeps invalid-baseline and
 unscorable cells in the quality/count tables and reports the evaluable denominator explicitly.
 The older "every cell kept" export below is retained for compatibility; Step 4 never uses it.
@@ -53,6 +58,8 @@ HOW TO USE IT
   1. Empty the ROI Manager if it holds outlines from other work (the plugin uses whatever is in it).
   2. Choose  Plugins > Calcium Imaging > Calcium Cells Step By Step.
   3. In the first window pick the recording: one that is open in Fiji, or "Choose a file from disk...".
+     For a file from disk, the file chooser opens as soon as you pick that entry (or press
+     "Choose file…"), and the file's name is shown under the list.
      Pick the original recording, not a processed copy. Choose a folder for the results. Press Next.
   4. The colour picture opens on the left, and a window with one card per step stays on top at the
      right. Step 2 is open; click the title of another step to open it (the open one closes).

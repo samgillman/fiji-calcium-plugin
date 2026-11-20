@@ -49,8 +49,34 @@ def main():
     if "--analysis-only" in sys.argv:
         subprocess.run([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", "tests/test_analysis_runtime.groovy"], cwd=ROOT, env=env, check=True, timeout=1200)
         return
+    if "--browser" in sys.argv:
+        # Optional: drive the real Step 4 page in a browser. Needs Node with Playwright; screenshots land in build/web-step4.
+        node = shutil.which("node")
+        if not node:
+            raise RuntimeError("The browser check needs Node with Playwright")
+        folder = ROOT / "build/web-step4"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "url.txt").unlink(missing_ok=True)
+        served = subprocess.Popen([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", "tests/browser/serve_step4.groovy"], cwd=ROOT, env=env)
+        try:
+            deadline = time.time() + 60
+            while not (folder / "url.txt").is_file():
+                if served.poll() is not None or time.time() > deadline:
+                    raise RuntimeError("The Step 4 page did not start")
+                time.sleep(0.2)
+            subprocess.run([node, "tests/browser/step4_page.js", str(folder)], cwd=ROOT, env=env, check=True, timeout=120)
+        finally:
+            (folder / "stop").write_text("stop", encoding="utf-8")
+            try:
+                served.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                served.kill()
+        return
     if "--gui-only" not in sys.argv:
-        for test in ["tests/test_progress.groovy", "tests/test_detection_start.groovy", "tests/test_updates.groovy", "tests/test_install.groovy", "tests/test_latest_base.groovy", "tests/test_analysis_bridge.groovy"]:
+        node = shutil.which("node")
+        if node:  # the page's script must at least parse; the full browser check is --browser
+            subprocess.run([node, "--check", "web/step4.js"], cwd=ROOT, env=env, check=True)
+        for test in ["tests/test_progress.groovy", "tests/test_detection_start.groovy", "tests/test_updates.groovy", "tests/test_install.groovy", "tests/test_latest_base.groovy", "tests/test_analysis_bridge.groovy", "tests/test_web_step4.groovy"]:
             subprocess.run([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", test], cwd=ROOT, env=env, check=True)
         subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"], cwd=ROOT, env=env, check=True)
         subprocess.run([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", "tests/test_bootstrap.groovy"], cwd=ROOT, env=env, check=True)

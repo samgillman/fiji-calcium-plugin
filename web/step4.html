@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimpleCa²⁺ · Analyze responses</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">SimpleCa²⁺ <span>in Fiji · Step 4</span></div>
+  <div class="recording" id="recording" title=""></div>
+  <div class="grow"></div>
+  <button class="ghost" id="toggle-settings" type="button">Hide settings</button>
+  <span class="pill" id="engine">Checking the analysis engine…</span>
+</header>
+
+<div class="gone" id="lost" role="alert">This page lost its connection to Fiji. Keep the plugin window open, then press <b>Analyze responses</b> there again.</div>
+
+<div class="layout">
+  <aside id="side">
+    <section class="card">
+      <h2>Timing</h2>
+      <label class="row"><span>Frames per second</span><input id="sampling_hz" inputmode="decimal"></label>
+      <div class="row"><span>Baseline frames</span><span class="pair"><input id="baseline_start" inputmode="numeric" aria-label="Baseline first frame"><i>to</i><input id="baseline_end" inputmode="numeric" aria-label="Baseline last frame"></span></div>
+      <label class="row"><span>Stimulus name</span><input id="stimulus" class="wide"></label>
+      <div class="row"><span>Stimulus window (s)</span><span class="pair"><input id="stimulus_start" inputmode="decimal" aria-label="Stimulus start in seconds"><i>to</i><input id="stimulus_end" inputmode="decimal" aria-label="Stimulus end in seconds"></span></div>
+      <label class="row"><span>Baseline before it (s)</span><input id="response_baseline_seconds" inputmode="decimal"></label>
+    </section>
+    <section class="card">
+      <h2>Response rule</h2>
+      <label class="row"><span>Minimum rise (fraction)</span><input id="amplitude_floor" inputmode="decimal"></label>
+      <label class="row"><span>Baseline SD multiplier</span><input id="noise_multiplier" inputmode="decimal"></label>
+      <label class="row"><span>Consecutive samples</span><input id="consecutive_samples" inputmode="numeric"></label>
+      <label class="check" title="For recordings where KCl was added after the stimulus as a positive control. Tick it and enter when the KCl was on; each cell is then also scored for that window. Leave it unticked if no KCl was used."><input type="checkbox" id="kcl"> Include a KCl control</label>
+      <div class="row" id="kcl-row" hidden><span>KCl window (s)</span><span class="pair"><input id="kcl_start" inputmode="decimal" aria-label="KCl start in seconds"><i>to</i><input id="kcl_end" inputmode="decimal" aria-label="KCl end in seconds"></span></div>
+    </section>
+    <label class="check confirm"><input type="checkbox" id="confirmed"> I checked the frame rate, baseline and stimulus times</label>
+    <div class="actions">
+      <button class="primary" id="analyze" type="button" disabled>Analyze responses</button>
+      <button id="cancel" type="button" disabled>Cancel</button>
+    </div>
+    <div class="progress" id="progress" hidden><div id="bar"></div></div>
+    <p class="status" id="status" role="status"></p>
+    <div class="actions">
+      <button id="setup" type="button" disabled title="One time: downloads a private copy of R for this plugin (needs internet)">Set up analysis engine</button>
+      <button id="log" type="button" disabled>View log</button>
+    </div>
+    <p class="fine">Uses the background-corrected fluorescence as measured: no lift, no second background subtraction.</p>
+    <p class="fine" id="version"></p>
+  </aside>
+
+  <main>
+    <div class="tiles">
+      <button class="tile big" id="tile-responding" type="button" data-group="1" title="Show only the cells that responded"><b>–</b><span>responding</span></button>
+      <button class="tile" id="tile-registered" type="button" data-group="0" title="Show all cells"><b>–</b><span>cells registered</span></button>
+      <button class="tile" id="tile-excluded" type="button" data-group="3" title="Show only excluded or unscorable cells"><b>–</b><span>excluded</span></button>
+      <button class="tile" id="tile-unscorable" type="button" data-group="3" title="Show only excluded or unscorable cells"><b>–</b><span>unscorable</span></button>
+    </div>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab on" data-tab="review" type="button" role="tab">Cells and traces</button>
+      <button class="tab" data-tab="heatmap" type="button" role="tab">Heatmap</button>
+      <button class="tab" data-tab="metrics" type="button" role="tab">Metrics + quality</button>
+      <button class="tab" data-tab="calls" type="button" role="tab">Cell response calls</button>
+      <button class="tab" data-tab="counts" type="button" role="tab">Responder counts</button>
+      <div class="grow"></div>
+      <button class="ghost" id="open-folder" type="button" disabled>Open analysis folder</button>
+    </nav>
+
+    <section class="panel" id="panel-review">
+      <div class="toolbar">
+        <label>Show <select id="group"><option>All cells</option></select></label>
+        <label>Cell <select id="cell"></select></label>
+        <button id="previous" type="button" title="Previous cell (left arrow)" disabled>‹</button>
+        <button id="next" type="button" title="Next cell (right arrow)" disabled>›</button>
+        <label class="check"><input type="checkbox" id="every" checked> Every trace</label>
+        <div class="verdict" id="verdict"></div>
+      </div>
+      <div class="split">
+        <div class="card flush" id="picture-card">
+          <div class="toolbar dark">
+            <select id="view" title="What the picture shows. “Change from rest” is each frame minus the average of the baseline frames, so a responding cell lights up."><option value="picture">Colour picture</option></select>
+            <label class="check"><input type="checkbox" id="outlines" checked> All outlines</label>
+            <button id="zoom-cell" type="button" disabled>Zoom to cell</button>
+            <button id="zoom-all" type="button">Whole picture</button>
+          </div>
+          <div class="stage"><canvas id="picture"></canvas></div>
+          <div class="caption dark"><span class="chip"><i style="background:#3ddbb5"></i>responded</span><span class="chip"><i style="background:#ffa24a"></i>did not respond</span><span class="chip"><i class="dash"></i>excluded or unscorable</span><span class="grow"></span><span id="picture-note"></span></div>
+        </div>
+        <div class="card flush" id="plot-card">
+          <div class="legend" id="legend"></div>
+          <div class="stage light"><canvas id="plot"></canvas><div class="empty" id="plot-empty">Run the analysis to see every cell's trace.</div></div>
+          <div class="caption"><span title="Click a trace to select that cell. Drag to move through time. Scroll to zoom the time axis; double-click to reset it.">Click a trace to select it · drag for time · scroll to zoom</span><span class="grow"></span><button class="ghost small" id="save-plot" type="button" disabled>Save plot as PNG</button></div>
+        </div>
+      </div>
+      <div class="timebar">
+        <button id="play" type="button" disabled>▶ Play</button>
+        <input type="range" id="time" min="1" max="2" value="1" aria-label="Moment in the recording">
+        <span id="time-label">frame 1</span>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-heatmap" hidden>
+      <div class="toolbar">
+        <label>Sort <select id="order">
+          <option value="call">Response call, strongest on top</option>
+          <option value="tpeak">Time to peak</option>
+          <option value="amp">Peak amplitude</option>
+          <option value="orig">Original order</option></select></label>
+        <label>Colours <select id="palette" title="Blue–white–red keeps values below zero. The other palettes start at zero, so anything below zero takes the darkest colour.">
+          <option value="signed">Blue–white–red</option>
+          <option value="plasma">plasma</option><option value="viridis">viridis</option><option value="magma">magma</option>
+          <option value="inferno">inferno</option><option value="cividis">cividis</option></select></label>
+        <label>Range <select id="range" title="“99 % of values” stops one extreme cell from washing out all the others; values beyond the range take the end colour.">
+          <option value="robust">99 % of values</option><option value="full">Largest value</option></select></label>
+        <label class="check" title="One readable row per cell, with its name; the list scrolls"><input type="checkbox" id="tall"> Cell names</label>
+        <div class="grow"></div>
+        <button class="ghost small" id="save-heatmap" type="button" disabled>Save as PNG</button>
+      </div>
+      <div class="scroller" id="heatmap-box"><canvas id="heatmap"></canvas><div class="empty" id="heatmap-empty">Run the analysis to see the heatmap.</div></div>
+    </section>
+
+    <section class="panel" id="panel-metrics" hidden><div class="scroller"><table id="table-metrics"></table></div></section>
+    <section class="panel" id="panel-calls" hidden><div class="scroller"><table id="table-calls"></table></div></section>
+    <section class="panel" id="panel-counts" hidden><div class="scroller"><table id="table-counts"></table></div><p class="fine pad">Counts describe the cells you chose; cell N is not animal N.</p></section>
+  </main>
+</div>
+<div class="tip" id="tip" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
