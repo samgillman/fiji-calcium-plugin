@@ -98,6 +98,8 @@ def main():
         folder = ROOT / "build/web-step4"
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "url.txt").unlink(missing_ok=True)
+        # Settings remembered from an earlier run would change what the page opens with; every run starts as a clean checkout does.
+        (folder / "step4_last_settings.json").unlink(missing_ok=True)
         served = subprocess.Popen([java, "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", "tests/browser/serve_step4.groovy"], cwd=ROOT, env=env)
         try:
             deadline = time.time() + 60

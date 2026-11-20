@@ -1,6 +1,8 @@
 import ij.ImagePlus
 import ij.process.ByteProcessor
 import ij.gui.Roi
+import ij.gui.OvalRoi
+import ij.gui.PolygonRoi
 import ij.io.RoiEncoder
 import java.util.zip.ZipOutputStream
 import java.util.zip.ZipEntry
@@ -159,6 +161,15 @@ assert Steps.blindOutlinesToAdd([sq(50,50,3)], [sq(40,40,30)], 100) == [] : 'a b
 assert Steps.blindOutlinesToAdd([sq(0,0,10), sq(40,0,10)], [sq(60,60,10), sq(1,1,10), sq(20,0,10)], 100) == [0, 2]
 assert Steps.blindOutlinesToAdd([], [sq(0,0,10)], 100) == [0] && Steps.blindOutlinesToAdd([sq(0,0,10)], [], 100) == []
 println 'PASS: blind merge rule (10 % of the smaller outline, kept outlines never removed)'
+
+// An outline too thin to be a cell body: a strip along another outline's edge is left out, one standing alone is kept as unsure.
+def strip = new PolygonRoi([10, 60, 60, 10] as int[], [40, 40, 43, 43] as int[], 4, Roi.POLYGON)          // 50 x 3 pixels
+def cell = new OvalRoi(10, 10, 50, 30), far = new OvalRoi(200, 200, 40, 40)
+assert Steps.tooThin(strip) && !Steps.tooThin(cell) && !Steps.tooThin(sq(0, 0, 12)) && !Steps.tooThin(new OvalRoi(0, 0, 14, 10))
+assert Steps.tooThin(new PolygonRoi([0, 100, 100, 0] as int[], [0, 0, 6, 6] as int[], 4, Roi.POLYGON)) : 'a 100 x 6 pixel band: wide enough on average, but not round (0.17)'
+assert Steps.alongAnother(strip, [cell, far, strip]) : 'the strip runs along the lower edge of the cell'
+assert !Steps.alongAnother(strip, [far, strip]) && !Steps.alongAnother(new PolygonRoi([300, 350, 350, 300] as int[], [300, 300, 303, 303] as int[], 4, Roi.POLYGON), [cell, far])
+println 'PASS: thin outlines (under 4 pixels wide on average or roundness under 0.2; a strip on another outline is left out)'
 
 // Blind detection runs Cellpose on both pictures, each in its own folder, combines the outlines and splits the bar.
 def blindDir = new File(runDir.parentFile, 'automatic_outlines_blind')

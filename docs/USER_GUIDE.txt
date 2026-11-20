@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.14.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.15.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served

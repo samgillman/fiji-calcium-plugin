@@ -89,57 +89,61 @@ const assert = require('assert/strict');
     assert.equal(originalProtocol.windows.length, 2);
     await screenshots('before');
 
-    // Stimulus timing: one stimulus time drives the linked fields, and the page says in frames what will be used.
+    // Stimulus timing in frames: one number, "after frame N". F₀, the baseline and the response window follow it unless set separately,
+    // and the seconds sent to the engine are the recording's own frame times.
     const editor0 = page.locator('.window-editor[data-index="0"]'), window0 = () => page.evaluate(() => window.calciumStep4.collectDraft().protocol.windows[0]);
     const times = await page.evaluate(() => window.calciumStep4.frameTimes());
-    assert.equal(await editor0.locator('.row.linked').count(), 2, 'baseline end and scoring start follow the stimulus time by default');
-    assert.match(await text('#frames-preview-0'), /F₀: frames 1–5\. Noise baseline: frames 2–6 \(5 samples\)\. Stimulus: at frame 7\. Scoring: frames 7–15\./);
-    assert.match(await text('#suggestion-0'), /suggested starting value \(frame 7\), not a measured stimulus time/);
-    assert.doesNotMatch(await text('#validation'), /Stimulus: the noise baseline holds/, 'five baseline samples are enough');
-    await page.fill('#window-0-Stimulus_onset_s', '2');
+    assert.equal(await page.inputValue('#stim-frame-0'), '6');
+    assert.equal(await editor0.locator('.derived[data-linked="1"]').count(), 0, 'a loaded protocol with windows of its own opens with those rows set separately');
+    assert.deepEqual([await page.inputValue('#base-from-0'), await page.inputValue('#base-to-0'), await page.inputValue('#resp-from-0'), await page.inputValue('#resp-to-0')], ['2', '6', '7', '15']);
+    assert.match(await text('#suggestion-0'), /From the frames used in Fiji\. Set it to when the stimulus was added/);
+    for (const cell of ['#f0-cell', '#base-cell-0', '#resp-cell-0']) await page.locator(cell + ' .relink').click();
+    assert.equal(await editor0.locator('.derived[data-linked="1"]').count(), 3);
     let edited = await window0();
-    assert.ok(edited.Stimulus_onset_s === times[4] && edited.Baseline_end_s === times[4] && edited.Start_s === times[4], 'linked fields take the identical stored number');
-    assert.equal(await page.locator('#side .field-error').count(), 0); assert.equal(await editor0.locator('[aria-invalid]').count(), 0);
-    assert.match(await text('#frames-preview-0'), /Noise baseline: frames 2–4 \(3 samples\)\. Stimulus: at frame 5\. Scoring: frames 5–15\./);
+    assert.ok(edited.Stimulus_onset_s === times[6] && edited.Baseline_start_s === times[0] && edited.Baseline_end_s === times[6] && edited.Start_s === times[6] && edited.End_s === times[29], 'rows that follow the stimulus use exact frame times');
+    assert.equal(await page.inputValue('#baseline_start'), '1'); assert.equal(await page.inputValue('#baseline_end'), '6');
+    assert.equal(await page.locator('#base-cell-0 .link-toggle').textContent(), 'same as F₀'); assert.equal(await page.locator('#resp-cell-0 .link-toggle').textContent(), '7–30 (end)');
+    // One number moves everything.
+    await page.fill('#stim-frame-0', '4'); edited = await window0();
+    assert.ok(edited.Stimulus_onset_s === times[4] && edited.Baseline_end_s === times[4] && edited.Start_s === times[4] && edited.End_s === times[29]);
+    assert.equal(await page.inputValue('#baseline_end'), '4'); assert.equal(await page.locator('#side .field-error').count(), 0); assert.equal(await editor0.locator('[aria-invalid]').count(), 0);
     assert.ok(await page.isHidden('#suggestion-0'));
-    // The F₀ frames now reach the stimulus: the warning carries its repair.
-    assert.match(await text('#validation'), /The F₀ frames \(1–5\) include the stimulus time or later frames\./);
-    await page.locator('#validation .repair', { hasText: 'Use frames 1–4' }).click();
-    assert.equal(await page.inputValue('#baseline_end'), '4'); assert.doesNotMatch(await text('#validation'), /F₀ frames/);
-    // "Use frame" names the frame and moves everything linked.
+    assert.equal(await text('#frames-preview-0'), 'In seconds: baseline 0–1.5 · stimulus 2 · response 2–19.5');
+    assert.match(await text('#confirm-text'), /Timing checked: recorded timestamps, stimulus after frame 4/);
+    // "Use frame" sets it to the frame on screen.
     await page.evaluate(() => window.calciumStep4.setFrame(9));
-    assert.equal(await editor0.locator('.from-frame').textContent(), 'Use frame 9 (4 s)');
+    assert.equal(await editor0.locator('.from-frame').textContent(), 'Use frame 9');
     await editor0.locator('.from-frame').click(); edited = await window0();
-    assert.ok(edited.Stimulus_onset_s === times[8] && edited.Baseline_end_s === times[8] && edited.Start_s === times[8]);
+    assert.equal(await page.inputValue('#stim-frame-0'), '9'); assert.ok(edited.Stimulus_onset_s === times[9] && edited.Baseline_end_s === times[9] && edited.Start_s === times[9]);
     assert.equal(await page.locator('#side .field-error').count(), 0);
-    // A field set separately that conflicts is the one marked, with both values and a one-click repair; one message only.
-    await editor0.locator('.link-toggle').first().click(); await page.fill('#window-0-Baseline_end_s', '6');
+    // A row set separately that is wrong: one message beside it, naming the frames, with a one-click repair.
+    await page.locator('#base-cell-0 .link-toggle').click(); await page.fill('#base-to-0', '12');
     assert.equal(await page.locator('#side .field-error').count(), 1);
-    assert.match(await editor0.locator('.field-error').textContent(), /Stimulus: the noise baseline ends at 6 s, after the stimulus at 4 s\.\s*Set to 4 s/);
-    assert.equal(await page.getAttribute('#window-0-Baseline_end_s', 'aria-invalid'), 'true'); assert.equal(await page.getAttribute('#window-0-Stimulus_onset_s', 'aria-invalid'), 'true');
-    assert.ok(await page.isDisabled('#analyze'));
+    assert.match(await editor0.locator('.field-error').textContent(), /Stimulus: baseline frames 10–12 come after the stimulus\.\s*Use 1–9/);
+    assert.equal(await page.getAttribute('#base-to-0', 'aria-invalid'), 'true'); assert.ok(await page.isDisabled('#analyze'));
     await page.waitForFunction(() => JSON.stringify(window.calciumStep4.collectDraft()) === window.calciumStep4.S.draftAck);
-    assert.doesNotMatch(await text('#validation'), /[Bb]aseline must|noise baseline ends/, 'the same problem is not repeated in the list');
+    assert.doesNotMatch(await text('#validation'), /Stimulus: baseline/, 'the same problem is not repeated in the list');
     await editor0.locator('.field-error .repair').click();
-    assert.equal(await page.locator('#side .field-error').count(), 0); assert.equal((await window0()).Baseline_end_s, times[8]);
-    assert.equal(await editor0.locator('.row.linked').count(), 2);
-    // Too few baseline samples is counted correctly and named.
-    await page.fill('#window-0-Stimulus_onset_s', '1');
-    assert.match(await text('#validation'), /Stimulus: the noise baseline holds 1 sample \(frame 2\) but at least 3 are needed/);
-    // A typed time that reads the same as a frame time is that frame, hidden digits included.
-    assert.ok(await page.evaluate(() => {
-      const app = window.calciumStep4, box = document.getElementById('window-0-Stimulus_onset_s'); app.S.state.frameTimes[10] = 5.000000004;
-      box.value = '5'; box.dispatchEvent(new Event('input', { bubbles: true })); const w = app.collectDraft().protocol.windows[0];
-      return w.Stimulus_onset_s === 5.000000004 && w.Baseline_end_s === 5.000000004 && w.Start_s === 5.000000004;
-    }));
+    assert.equal(await page.locator('#side .field-error').count(), 0); assert.equal((await window0()).Baseline_end_s, times[9]);
+    // F₀ frames after the stimulus: a warning with its repair.
+    await page.locator('#f0-cell .link-toggle').click(); await page.fill('#baseline_end', '11');
+    assert.match(await text('#validation'), /F₀ frames 10–11 come after the stimulus\./);
+    await page.locator('#validation .repair', { hasText: 'Use 1–9' }).click();
+    assert.equal(await page.inputValue('#baseline_end'), '9'); assert.doesNotMatch(await text('#validation'), /F₀ frame/);
+    // Too few baseline frames would leave every cell without a call: the run is stopped and the reason is given.
+    await page.locator('#base-cell-0 .relink').click(); await page.fill('#stim-frame-0', '2');
+    assert.match(await editor0.locator('.field-error').textContent(), /Stimulus: the baseline holds 2 frames but at least 3 are needed\. No cell would get a call\./);
+    assert.ok(await page.isDisabled('#analyze'));
     // The windows are drawn under the frame slider.
+    await page.fill('#stim-frame-0', '6');
     assert.ok(await page.locator('#time-windows .baseline').count() === 1 && await page.locator('#time-windows .scoring').count() === 1 && await page.locator('#time-windows .stimulus').count() === 1);
     await page.click('#discard');
     await page.waitForFunction((wanted) => JSON.stringify(window.calciumStep4.collectDraft()) === wanted, JSON.stringify(initial));
-    assert.equal(await editor0.locator('.row.linked').count(), 2, 'discard restores the values and the links');
+    assert.equal(await page.inputValue('#stim-frame-0'), '6'); assert.equal(await editor0.locator('.derived[data-linked="1"]').count(), 0, 'discard restores the values and which rows are set separately');
 
     // Clearing the time source must not reuse the initial session clock.
-    await page.getByText('Use recorded timestamps', { exact: true }).click();
+    const openAdvanced = () => page.evaluate(() => { document.getElementById('protocol-details').open = true; });   // timestamps, rule type, protocol file, diagnostics, log
+    await openAdvanced();
     await page.click('#timestamps-clear'); await page.fill('#sampling_hz', '');
     await page.waitForFunction(() => window.calciumStep4.S.state.frameTimes === null);
     await page.waitForFunction(() => /20 frames per second/.test(document.getElementById('playback-note').textContent));
@@ -227,7 +231,7 @@ const assert = require('assert/strict');
     await page.locator('#time').evaluate((element) => { element.value = 8; element.dispatchEvent(new Event('input')); });
     await slowRequest; await slider(20); await page.unroute(delayedFrame);
     assert.ok(await page.evaluate(() => {
-      window.browserMovieObserver.disconnect(); return !window.browserMovieNotes.some((s) => /^Frame 8 ·/.test(s));
+      window.browserMovieObserver.disconnect(); return !window.browserMovieNotes.some((s) => /^Frame 8\b/.test(s));
     }), 'a stale frame must not be labeled as the current image');
     assert.ok(await gray() < 60);
 
@@ -243,7 +247,7 @@ const assert = require('assert/strict');
     assert.equal(await page.evaluate(() => window.calciumStep4.Pic.error), null);
 
     // Portable JSON retains precise untouched values and imported timing overrides.
-    await page.click('#protocol-details > summary');
+    await openAdvanced();
     const precise = JSON.parse(JSON.stringify(originalProtocol));
     precise.name = 'Browser protocol round trip'; precise.validation_status = 'user_defined';
     for (const window of precise.windows) { window.Protocol_name = precise.name; window.Validation_status = precise.validation_status; }
@@ -253,7 +257,8 @@ const assert = require('assert/strict');
       Baseline_start_s: first.Baseline_start_s, Baseline_end_s: first.Baseline_end_s,
       Stimulus_onset_s: first.Stimulus_onset_s, Start_s: first.Start_s, End_s: first.End_s }];
     await page.check('#confirmed'); await importProtocol(precise, 'precise-protocol.json');
-    assert.ok(!(await page.isChecked('#confirmed')), 'imported protocols need timing confirmation');
+    assert.ok(!(await page.isChecked('#confirmed')), 'an imported protocol with other timing needs timing confirmation');
+    assert.match(await text('#status'), /Imported “Browser protocol round trip”\. Its timing replaced yours/, 'an import says what it did');
     const protocolDownload = page.waitForEvent('download'); await page.click('#protocol-export');
     const downloaded = await protocolDownload;
     assert.match(downloaded.suggestedFilename(), /^Fixture_recording_response-protocol_\d{8}-\d{6}\.json$/, 'exported protocol names say which recording and when');
@@ -261,7 +266,8 @@ const assert = require('assert/strict');
     const portable = JSON.parse(fs.readFileSync(portablePath, 'utf8'));
     assert.equal(portable.windows[0].Floor_local_fraction, precise.windows[0].Floor_local_fraction, 'display formatting must not round an untouched protocol');
     assert.deepEqual(portable.field_overrides, precise.field_overrides);
-    await importProtocol(portable, 'saved-protocol.json');
+    await page.check('#confirmed'); await importProtocol(portable, 'saved-protocol.json');
+    assert.ok(await page.isChecked('#confirmed'), 'importing the same timing again keeps the confirmation'); assert.match(await text('#status'), /The timing is unchanged/);
     assert.equal(await page.evaluate(() => window.calciumStep4.collectDraft().protocol.windows[0].Floor_local_fraction), precise.windows[0].Floor_local_fraction);
     await importProtocol(originalProtocol, 'original-protocol.json');
 
@@ -273,20 +279,21 @@ const assert = require('assert/strict');
     assert.ok(await page.isDisabled('#window-0-Duration_mode') && await page.isDisabled('#window-0-Min_duration_s'));
     assert.ok(await page.isEnabled('#window-0-Consecutive_samples'));
     assert.equal(await page.inputValue('#window-1-Stimulus'), 'KCl');
-    // In the legacy rule the baseline end and scoring start always follow the stimulus time, with no way to separate them.
-    await page.fill('#window-0-Stimulus_onset_s', '5');
-    assert.equal(await page.inputValue('#window-0-Baseline_end_s'), '5');
-    assert.equal(await page.inputValue('#window-0-Start_s'), '5');
-    assert.ok(await page.locator('#window-0-Start_s').isHidden() && await page.locator('.window-editor[data-index="0"] .link-toggle').first().isHidden());
+    // In the legacy rule the baseline always ends, and the response window always starts, at the stimulus.
+    await page.fill('#stim-frame-0', '10');
+    assert.equal(await page.inputValue('#window-0-Baseline_end_s'), '5'); assert.equal(await page.inputValue('#window-0-Start_s'), '5'); assert.equal(await page.inputValue('#window-0-Stimulus_onset_s'), '5');
+    assert.ok(await page.isDisabled('#base-to-0') && await page.isDisabled('#resp-from-0'));
     await page.uncheck('#control'); await page.check('#control');
     assert.equal(await page.inputValue('#window-1-Duration_mode'), 'samples');
     assert.equal(await page.inputValue('#window-1-Start_s'), '');
     assert.ok(await page.isDisabled('#analyze'));
-    assert.match(await text('#validation'), /Control:/);
+    // A control that was just ticked asks for its one number, in one message beside that box.
+    assert.match(await page.locator('.window-editor[data-index="1"] .field-error').textContent(), /Control: enter the frame after which it was added\./);
+    assert.equal(await page.locator('.window-editor[data-index="1"] .field-error').count(), 1); assert.doesNotMatch(await text('#validation'), /needs a number/);
     await importProtocol(originalProtocol, 'analysis-protocol.json');
 
     // The real HTTP submission carries v2 and the timestamp snapshot.
-    await page.click('#analyze'); assert.match(await text('#status'), /Confirm/);
+    await page.click('#analyze'); assert.match(await text('#status'), /Timing checked/);
     await page.check('#confirmed'); await page.click('#analyze');
     await page.waitForFunction(() => window.calciumStep4.S.results && !window.calciumStep4.S.state.busy, null, { timeout: 15000 });
     await page.waitForFunction(() => document.getElementById('review-stage').textContent === 'Completed analysis');
@@ -456,9 +463,9 @@ const assert = require('assert/strict');
     await page.fill('#window-0-Floor_local_fraction','-1');assert.ok(await page.isDisabled('#analyze'));await page.click('#discard');
     // The stimulus onset can be taken from the frame on screen; Discard clears it and any old note.
     await page.evaluate(() => window.calciumStep4.setFrame(9));
-    const onScreen = await page.evaluate(() => window.calciumStep4.frameTimes()[window.calciumStep4.S.frame - 1]);
+    const afterScreen = await page.evaluate(() => window.calciumStep4.frameTimes()[window.calciumStep4.S.frame]);   // the first frame after the one on screen
     await page.locator('#windows-editor .from-frame').first().click();
-    assert.equal(Number(await page.inputValue('#window-0-Stimulus_onset_s')), onScreen);
+    assert.equal(await page.inputValue('#stim-frame-0'), '9'); assert.equal(Number(await page.inputValue('#window-0-Stimulus_onset_s')), afterScreen);
     await page.waitForFunction(() => window.calciumStep4.S.state.settingsPending);
     await page.evaluate(() => { window.calciumStep4.S.note = 'an old message'; });
     await page.click('#discard'); await page.waitForFunction(() => !window.calciumStep4.S.state.settingsPending);
@@ -468,6 +475,11 @@ const assert = require('assert/strict');
     console.log('PASS: movie preview and pointer scrubbing, Play/manual seek, static view, stale/error frames, portable protocols/precision, primary/control results, irregular-time heatmap, pending settings, exports and responsive layouts');
   } catch (error) {
     if (page) {
+      // what the movie was doing, read before the screenshot (a full-page screenshot resizes the page and reloads the frame)
+      const movie = await page.evaluate(() => { const app = window.calciumStep4; return !app ? 'page not loaded' : JSON.stringify({ frame: app.S.frame, shown: app.Pic.shownFrame, error: app.Pic.error,
+        message: document.getElementById('movie-message').textContent, note: document.getElementById('picture-note').textContent, buffer: app.Buf && { version: app.Buf.version, failed: Array.from(app.Buf.failed.keys()), inflight: Array.from(app.Buf.inflight.keys()), decoding: Array.from(app.Buf.decoding.keys()) },
+        serverVersion: app.S.state && app.S.state.frameVersion }); }).catch((problem) => 'unreadable: ' + problem.message);
+      console.error('Movie state at failure: ' + movie);
       await page.screenshot({ path: path.join(out, 'page-failure.png'), fullPage: true }).catch(() => {});
       fs.writeFileSync(path.join(out, 'browser-failure.txt'), String(error.stack || error));
     }

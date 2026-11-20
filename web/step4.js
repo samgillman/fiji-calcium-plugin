@@ -6,12 +6,14 @@
   const CALL = { responded: '#177465', not: '#925223', other: '#8A94A0' };
   const ON_PICTURE = { responded: '#3ddbb5', not: '#ffa24a', other: '#aeb8c2' };
   const GROUPS = ['All cells', 'Responded', 'Did not respond', 'Excluded', 'Unscorable', 'Needs quality review'];
+  /** The colour overview and the background areas are still pictures; every other view is a frame of the recording. */
+  const still = () => S.view === 'picture' || S.view === 'background';
   const kind = (call) => call === 'Responded' ? 'responded' : call === 'Did not respond' ? 'not' : 'other';
   const inGroup = (call, group, name) => group === 0 || (group === 1 && call === 'Responded') || (group === 2 && call === 'Did not respond') ||
     (group === 3 && call === 'Excluded') || (group === 4 && call === 'Unscorable') || (group === 5 && qualityFor(name).length > 0 && (!S.qualityFlag || qualityFor(name).includes(S.qualityFlag)));
-  const S = { unlinked: new Set(), validationShown: null, info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'raw', viewChosen: false,
+  const S = { unlinked: new Set(), validationShown: null, exportScale: null, imported: null, info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'raw', viewChosen: false,
     every: false, plotMode: 'mean', signal: 'dff', outlines: true, outlineWidth: 1, order: 'call', palette: 'plasma', range: 'robust', tall: false, timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false };
-  const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, hover: null, geom: null, scrubbing: false, drawn: [], series: [] };
+  const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, y: {}, hover: null, geom: null, scrubbing: false, drawn: [], series: [] };
   const Pic = { base: null, shown: null, zoom: 1, panX: 0, panY: 0, drag: null, moved: false, shownFrame: null, error: null };
   // Movie frames: compressed images are kept for the session (about 40 MB for 300 full-size frames, much less at display size),
   // decoded ones only near the playhead. Keys carry the server's frame version, which changes with the baseline behind
@@ -85,8 +87,8 @@
     if (TIME_KEYS.includes(box.dataset.key)) { const shown = fmt(value); for (const t of editedTimes() || []) if (fmt(t) === shown) return t; }
     return value / box._scale;
   }
-  const TIME_KEYS = ['Baseline_start_s', 'Baseline_end_s', 'Stimulus_onset_s', 'Start_s', 'End_s'], LINKED_KEYS = ['Baseline_end_s', 'Start_s'];
-  const FIELD_TITLES = { Baseline_start_s: 'noise baseline start', Baseline_end_s: 'noise baseline end', Stimulus_onset_s: 'stimulus time', Start_s: 'scoring start', End_s: 'scoring end',
+  const TIME_KEYS = ['Baseline_start_s', 'Baseline_end_s', 'Stimulus_onset_s', 'Start_s', 'End_s'];
+  const FIELD_TITLES = { Baseline_start_s: 'baseline start', Baseline_end_s: 'baseline end', Stimulus_onset_s: 'stimulus time', Start_s: 'response window start', End_s: 'response window end',
     Floor_local_fraction: 'minimum rise', SD_multiplier: 'baseline SD multiplier', Min_duration_s: 'minimum duration', Consecutive_samples: 'consecutive samples', Max_gap_s: 'maximum gap',
     Min_baseline_samples: 'minimum baseline samples', Noise_floor_local_fraction: 'noise floor', Expected_interval_s: 'expected interval' };
   const seconds = (v) => fmt(v) + ' s';
@@ -111,22 +113,61 @@
       baseline: Number.isFinite(b0) && Number.isFinite(b1) ? span((t) => t >= b0 - tol && t < b1 - tol) : null,
       scoring: Number.isFinite(s0) && Number.isFinite(s1) ? span((t) => t >= s0 - tol && t <= s1 + tol) : null };
   }
-  const frameSpan = (s) => !s || !s.count ? 'no frames' : s.count === 1 ? 'frame ' + s.first : 'frames ' + s.first + '–' + s.last;
-  /** "Noise baseline to" and "Score response from" follow the stimulus time unless they are set separately. A linked box mirrors
-   *  the stimulus box exactly, stored number included, so the protocol is the same as if the value had been typed three times. */
-  function syncLinks(index) {
-    const onset = $('window-' + index + '-Stimulus_onset_s'); if (!onset) return;
-    for (const key of LINKED_KEYS) {
-      const box = $('window-' + index + '-' + key); if (!box || box.dataset.linked !== '1') continue;
-      box.value = onset.value; box.dataset.shown = onset.dataset.shown; box._exact = onset._exact; box._scale = 1; box.classList.remove('changed');
-      box.closest('label').querySelector('.link-text').textContent = onset.value.trim() === '' ? '= stimulus time (not set)' : '= stimulus time (' + onset.value.trim() + ' s)';
+  /** The timing is entered in frames: one fact, "the stimulus was added after frame N". F₀ frames, the baseline and the response
+   *  window follow from it until a row is set separately. The seconds the engine needs are taken from the recording's own frame
+   *  times, never from a typed round number: the stimulus is the time of the first frame after it; a baseline runs up to, not
+   *  including, the frame after its last frame; the response window runs from its first frame to its last, both included.
+   *  The hidden boxes named window-<i>-<key> hold those seconds exactly as before, so the protocol file is unchanged. */
+  const frameRule = (N) => [Math.max(1, N - 19), N];   // F₀, and a baseline of its own: the last 20 frames before the stimulus, or all of them when there are fewer
+  const wholeIn = (box) => { const text = box ? String(box.value).trim() : '', v = Number(text); return text !== '' && Number.isInteger(v) ? v : NaN; };
+  const frameBox = (id, index) => $(id + '-' + index);
+  function applyFrames(index) {
+    const times = editedTimes(), n = S.info ? S.info.frames : 0, i = String(index), get = (id) => frameBox(id, i), legacy = Number($('protocol-mode').value) === 1;
+    if (!times || !get('stim-frame')) return;
+    const put = (key, value) => exactInput($('window-' + i + '-' + key), value);
+    const N = wholeIn(get('stim-frame')), okN = N >= 1 && N < n;
+    if (i === '0' && okN && $('f0-cell').dataset.linked === '1') { const f = frameRule(N); exactInput($('baseline_start'), f[0]); exactInput($('baseline_end'), f[1]); }
+    if (okN && get('base-cell').dataset.linked === '1') {
+      const own = [wholeIn($('baseline_start')), wholeIn($('baseline_end'))], f = i === '0' && own[0] >= 1 && own[1] >= own[0] && own[0] <= N ? [own[0], Math.min(own[1], N)] : frameRule(N);
+      get('base-from').value = f[0]; get('base-to').value = f[1];
     }
+    if (okN && get('resp-cell').dataset.linked === '1') { get('resp-from').value = N + 1; get('resp-to').value = n; }
+    if (legacy && okN) { get('base-to').value = N; get('resp-from').value = N + 1; }
+    const a = wholeIn(get('base-from')), b = wholeIn(get('base-to')), c = wholeIn(get('resp-from')), d = String(get('resp-to').value).trim() === '' ? n : wholeIn(get('resp-to'));
+    const at = (frame) => (frame >= 1 && frame <= n ? times[frame - 1] : null);
+    put('Stimulus_onset_s', okN ? times[N] : null);
+    put('Baseline_start_s', at(a)); put('Baseline_end_s', b >= 1 && b < n ? times[b] : null);
+    put('Start_s', at(c)); put('End_s', at(d));
   }
-  function setLinked(box, linked, fixed) {
-    const label = box.closest('label'), toggle = label.nextElementSibling;
-    box.dataset.linked = linked ? '1' : ''; label.classList.toggle('linked', linked);
-    toggle.textContent = linked ? 'Set separately' : 'Link to stimulus time'; toggle.hidden = !!fixed;
-    toggle.title = linked ? 'Give this its own value instead of the stimulus time' : 'Make this follow the stimulus time again';
+  function applyAllFrames() { for (const section of document.querySelectorAll('.window-editor')) applyFrames(section.dataset.index); }
+  /** Fills the frame boxes from the seconds of a loaded window, by the engine's own rule, and decides which rows follow the stimulus. */
+  function showFrames(index, row) {
+    const i = String(index), get = (id) => frameBox(id, i), used = windowFrames(row, editedTimes()), n = S.info.frames;
+    const N = used && used.stimulus ? used.stimulus.before : NaN, okN = N >= 1 && N < n, has = (s) => s && s.count > 0;
+    get('stim-frame').closest('.window-editor').dataset.framesShown = used ? '1' : '';   // with recorded timestamps the frame times arrive a moment later
+    get('stim-frame').value = Number.isFinite(N) ? N : '';
+    get('base-from').value = used && has(used.baseline) ? used.baseline.first : ''; get('base-to').value = used && has(used.baseline) ? used.baseline.last : '';
+    get('resp-from').value = used && has(used.scoring) ? used.scoring.first : ''; get('resp-to').value = used && has(used.scoring) ? used.scoring.last : '';
+    const rule = okN ? frameRule(N) : null, same = (pair, a, b) => !!pair && pair[0] === a && pair[1] === b, last = used ? used.times[n - 1] : NaN, end = Number(row.End_s);
+    const f0 = [wholeIn($('baseline_start')), wholeIn($('baseline_end'))];
+    const set = (cellId, key, follows) => { const cell = i === '0' && cellId === 'f0-cell' ? $('f0-cell') : get(cellId); cell.dataset.linked = follows && !S.unlinked.has(key) ? '1' : ''; };
+    if (i === '0') set('f0-cell', 'f0', !okN || same(rule, f0[0], f0[1]));
+    const baseRule = okN ? (i === '0' && f0[0] >= 1 && f0[1] >= f0[0] && f0[0] <= N ? [f0[0], Math.min(f0[1], N)] : rule) : null;
+    set('base-cell', 'base-cell-' + i, !okN || !has(used.baseline) && row.Baseline_start_s == null || has(used.baseline) && same(baseRule, used.baseline.first, used.baseline.last));
+    set('resp-cell', 'resp-cell-' + i, !okN || !has(used.scoring) && row.Start_s == null || has(used.scoring) && used.scoring.first === N + 1 && used.scoring.last === n && !(Number.isFinite(end) && end > last + 1e-9));
+  }
+  /** What each row that follows the stimulus says, and the same windows in seconds on one line. */
+  function paintFrames(index) {
+    const i = String(index), get = (id) => frameBox(id, i), times = editedTimes(), n = S.info.frames; if (!get('stim-frame')) return;
+    const pair = (from, to) => { const a = wholeIn(from), b = wholeIn(to); return Number.isFinite(a) && Number.isFinite(b) ? [a, b] : null; }, text = (p) => (p ? p[0] + '–' + p[1] : 'not set');
+    const f0 = pair($('baseline_start'), $('baseline_end')), base = pair(get('base-from'), get('base-to')), resp = pair(get('resp-from'), get('resp-to')), N = wholeIn(get('stim-frame'));
+    const chip = (cell, words, hint) => { const button = cell.querySelector('.link-toggle'); button.textContent = words; button.title = hint + ' Click to set it yourself.'; };
+    if (i === '0') chip($('f0-cell'), text(f0), 'Follows the stimulus: the frames before it, or the last 20 of a long wait.');
+    chip(get('base-cell'), i === '0' && base && f0 && base[0] === f0[0] && base[1] === f0[1] ? 'same as F₀' : text(base), 'Follows the stimulus.');
+    chip(get('resp-cell'), resp ? resp[0] + '–' + resp[1] + (resp[1] === n ? ' (end)' : '') : 'not set', 'Follows the stimulus: from the first frame after it to the last frame.');
+    const s = (frame) => (times && frame >= 1 && frame <= n ? fmt(+times[frame - 1].toFixed(2)) : '?');
+    $('frames-preview-' + i).textContent = !times ? 'Enter the frame rate to set the timing.' : !(N >= 1 && N < n) ? '' :
+      'In seconds: baseline ' + (base ? s(base[0]) + '–' + s(base[1]) : '?') + ' · stimulus ' + s(N + 1) + ' · response ' + (resp ? s(resp[0]) + '–' + s(resp[1]) : '?');
   }
   const FILES = ['timestamps', 'sensitivity', 'negative_control'];
   const NUMBERS = ['Baseline_start_s', 'Baseline_end_s', 'Stimulus_onset_s', 'Start_s', 'End_s', 'Floor_local_fraction', 'SD_multiplier', 'Min_duration_s', 'Consecutive_samples', 'Max_gap_s', 'Min_baseline_samples', 'Noise_floor_local_fraction', 'Expected_interval_s'];
@@ -154,37 +195,42 @@
       const heading = document.createElement('h3'); heading.textContent = index === 0 ? 'Primary stimulus' : 'Positive control'; section.appendChild(heading);
       const add = (target, key, title, opts) => { const label = windowInput(index, key, title, opts); target.appendChild(label); const box = label.lastChild;
         if (box.tagName === 'SELECT' || key === 'Stimulus') box.value = w[key] == null ? '' : String(w[key]); else exactInput(box, w[key], opts && opts.scale); return box; };
-      // A field that can follow the stimulus time: shown as text while linked, with a control to set it separately.
-      const same = (a, b) => (a == null || a === '') ? (b == null || b === '') : (b != null && b !== '' && Number(a) === Number(b));
-      const linkable = (key, title) => {
-        const box = add(section, key, title), label = box.closest('label'), text = document.createElement('span'); text.className = 'link-text'; label.appendChild(text);
-        const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = 'ghost small link-toggle'; label.after(toggle);
-        toggle.addEventListener('click', () => {
-          if (box.dataset.linked === '1') { S.unlinked.add(box.id); setLinked(box, false); box.focus(); box.select(); }
-          else { S.unlinked.delete(box.id); setLinked(box, true); syncLinks(index); draftChanged(); }
-        });
-        setLinked(box, legacy || (same(w[key], w.Stimulus_onset_s) && !S.unlinked.has(box.id)), legacy);
-        return box;
+      const frames = (id, label) => { const box = document.createElement('input'); box.id = id; box.inputMode = 'numeric'; box.dataset.frames = '1'; box.dataset.window = index; box.setAttribute('aria-label', label); return box; };
+      const line = (title, hint) => { const r = document.createElement('div'); r.className = 'row'; const name = document.createElement('span'); name.textContent = title; name.title = hint || ''; r.appendChild(name); section.appendChild(r); return r; };
+      // A row that follows the stimulus shows its frames as a dashed chip. A click shows two boxes instead; "auto" puts it back.
+      const derived = (title, hint, cellId, key, first, last) => {
+        const r = line(title, hint), cell = document.createElement('span'); cell.className = 'cell derived'; cell.id = cellId; cell.dataset.linked = '1'; r.appendChild(cell);
+        const chip = document.createElement('button'); chip.type = 'button'; chip.className = 'link-toggle'; cell.appendChild(chip);
+        const pair = document.createElement('span'); pair.className = 'pair'; const to = document.createElement('i'); to.textContent = 'to'; pair.append(first, to, last);
+        const back = document.createElement('button'); back.type = 'button'; back.className = 'relink'; back.textContent = 'auto'; back.title = 'Follow the stimulus again'; pair.appendChild(back); cell.appendChild(pair);
+        chip.addEventListener('click', () => { S.unlinked.add(key); cell.dataset.linked = ''; first.focus(); first.select(); });
+        back.addEventListener('click', () => { S.unlinked.delete(key); cell.dataset.linked = '1'; applyFrames(index); draftChanged(); });
       };
-      add(section, 'Stimulus', 'Name');
-      add(section, 'Baseline_start_s', 'Noise baseline from (s)'); linkable('Baseline_end_s', 'Noise baseline to (s)');
-      const onsetBox = add(section, 'Stimulus_onset_s', 'Stimulus added at (s)');
-      const fromFrame = document.createElement('button'); fromFrame.type = 'button'; fromFrame.className = 'ghost small from-frame'; fromFrame.textContent = 'Use frame on screen';
-      fromFrame.title = 'Set the stimulus time to the time of the movie frame shown now; linked fields follow. Scrub the movie to the frame where the stimulus arrives first.';
-      fromFrame.addEventListener('click', () => { const t = frameTime(); if (!finite(t)) return; exactInput(onsetBox, t); onsetBox.dispatchEvent(new Event('input', { bubbles: true })); onsetBox.dispatchEvent(new Event('change', { bubbles: true })); });
-      onsetBox.closest('label').after(fromFrame);
-      const suggestion = document.createElement('p'); suggestion.className = 'fine suggestion'; suggestion.id = 'suggestion-' + index; suggestion.hidden = true; fromFrame.after(suggestion);
-      linkable('Start_s', 'Score response from (s)'); add(section, 'End_s', 'Score response to (s)');
-      syncLinks(index);
+      const holder = document.createElement('span'); holder.className = 'with-button'; line('Stimulus added after frame', 'The last frame before the stimulus was added. The rows below follow it.').appendChild(holder);
+      const stimBox = frames('stim-frame-' + index, 'Stimulus added after frame'); holder.appendChild(stimBox);
+      const fromFrame = document.createElement('button'); fromFrame.type = 'button'; fromFrame.className = 'small from-frame'; fromFrame.textContent = 'Use frame';
+      fromFrame.addEventListener('click', () => { stimBox.value = S.frame; applyFrames(index); draftChanged(); });
+      holder.appendChild(fromFrame);
+      const suggestion = document.createElement('p'); suggestion.className = 'fine suggestion'; suggestion.id = 'suggestion-' + index; suggestion.hidden = true; section.appendChild(suggestion);
+      if (index === 0) {
+        const first = frames('baseline_start', 'First F₀ frame'), last = frames('baseline_end', 'Last F₀ frame'); exactInput(first, S.draft.values.baseline_start); exactInput(last, S.draft.values.baseline_end);
+        derived('F₀ frames', 'These frames set the zero of ΔF/F₀', 'f0-cell', 'f0', first, last);
+      }
+      derived('Baseline', 'The frames before the stimulus that set the noise level a response must exceed', 'base-cell-' + index, 'base-cell-' + index, frames('base-from-' + index, 'First baseline frame'), frames('base-to-' + index, 'Last baseline frame'));
+      derived('Response window', 'The frames in which a response is looked for', 'resp-cell-' + index, 'resp-cell-' + index, frames('resp-from-' + index, 'First frame of the response window'), frames('resp-to-' + index, 'Last frame of the response window'));
+      if (index === 0 && S.info && S.info.fijiFrames) { const chosen = document.createElement('p'); chosen.className = 'fine fiji-frames'; chosen.id = 'fiji-frames'; chosen.textContent = 'Cells chosen in Fiji on frames ' + S.info.fijiFrames.first + '–' + S.info.fijiFrames.last + '.'; section.appendChild(chosen); }
+      // the same timing in seconds, exactly as the engine gets it: filled from the frames, not shown
+      const exact = document.createElement('div'); exact.hidden = true; exact.className = 'exact'; for (const key of TIME_KEYS) add(exact, key, key); section.appendChild(exact);
       const preview = document.createElement('p'); preview.className = 'frames-preview'; preview.id = 'frames-preview-' + index; section.appendChild(preview);
-      const summary = document.createElement('p'); summary.className = 'rule-summary'; summary.id = 'rule-summary-' + index; section.appendChild(summary);
-      const details = document.createElement('details'); const summaryTitle = document.createElement('summary'); summaryTitle.textContent = 'Adjust the response rule'; details.appendChild(summaryTitle);
+      const details = document.createElement('details'); details.className = 'rule'; const summaryTitle = document.createElement('summary'); summaryTitle.title = 'The response rule. Click to adjust it.';
+      const summary = document.createElement('span'); summary.className = 'rule-summary'; summary.id = 'rule-summary-' + index; summaryTitle.appendChild(summary); details.appendChild(summaryTitle);
       add(details, 'Floor_local_fraction', 'Minimum rise (%)', { scale: 100 }); add(details, 'SD_multiplier', 'Baseline SD multiplier');
       add(details, 'Duration_mode', 'Persistence measured in', { choices: [['seconds', 'Seconds'], ['samples', 'Consecutive samples']] });
       add(details, 'Min_duration_s', 'Minimum duration (s)'); add(details, 'Consecutive_samples', 'Consecutive samples');
-      add(details, 'Min_baseline_samples', 'Minimum baseline samples'); add(details, 'Max_gap_s', 'Maximum gap (s; blank = auto)');
-      add(details, 'Expected_interval_s', 'Expected interval (s; blank = auto)'); add(details, 'Noise_floor_local_fraction', 'Noise floor (%)', { scale: 100 });
-      section.appendChild(details); container.appendChild(section);
+      add(details, 'Min_baseline_samples', 'Minimum baseline samples'); add(details, 'Max_gap_s', 'Maximum gap (s)').placeholder = 'auto';
+      add(details, 'Expected_interval_s', 'Expected interval (s)').placeholder = 'auto'; add(details, 'Noise_floor_local_fraction', 'Noise floor (%)', { scale: 100 });
+      add(details, 'Stimulus', 'Name in the output');
+      section.appendChild(details); container.appendChild(section); showFrames(index, w);
       if (index === 0) keep.forEach((e) => container.appendChild(e));
     });
     if (!S.draft.protocol.windows.length) keep.forEach((e) => container.appendChild(e));
@@ -204,34 +250,38 @@
         const key = field.dataset.key;
         field.disabled = busy || (legacy && (['Baseline_end_s', 'Start_s', 'Duration_mode', 'Min_duration_s', 'Min_baseline_samples', 'Noise_floor_local_fraction', 'Expected_interval_s'].includes(key) || (i === '1' && key === 'Stimulus'))) || (!legacy && ((key === 'Min_duration_s' && mode !== 'seconds') || (key === 'Consecutive_samples' && mode !== 'samples')));
       }
-      for (const button of section.querySelectorAll('button')) button.disabled = busy;
+      for (const button of section.querySelectorAll('button')) button.disabled = busy || button.dataset.fixed === '1';
       const row = {}; for (const key of TIME_KEYS) row[key] = readInput(box(key), false);
-      const used = windowFrames(row, editedTimes()), numeric = (v) => typeof v === 'number' && Number.isFinite(v);
-      const f0 = [$('baseline_start'), $('baseline_end')].map((b) => readInput(b, false));
-      $('frames-preview-' + i).textContent = !used ? 'Frame numbers appear here once the frame rate or timestamps are valid.' :
-        (i === '0' && f0.every((f) => f !== null && f !== '' && Number.isInteger(Number(f))) ? 'F₀: frames ' + f0[0] + '–' + f0[1] + '. ' : '') +
-        'Noise baseline: ' + (used.baseline ? frameSpan(used.baseline) + ' (' + plural(used.baseline.count, 'sample') + ')' : 'not set') + '. ' +
-        'Stimulus: ' + (!used.stimulus ? 'not set' : used.stimulus.at ? 'at frame ' + (used.stimulus.before + 1) : used.stimulus.before === 0 ? 'before frame 1' : used.stimulus.before >= used.n ? 'after the last frame' : 'between frames ' + used.stimulus.before + ' and ' + (used.stimulus.before + 1)) + '. ' +
-        'Scoring: ' + (used.scoring ? frameSpan(used.scoring) : 'not set') + '.';
-      const note = $('suggestion-' + i), first = S.initialDraft && S.initialDraft.protocol.windows[i], suggested = i === '0' && !S.results && first && numeric(row.Stimulus_onset_s) && Number(first.Stimulus_onset_s) === row.Stimulus_onset_s;
-      note.hidden = !suggested; if (suggested) note.textContent = 'A suggested starting value' + (used && used.stimulus && used.stimulus.at ? ' (frame ' + (used.stimulus.before + 1) + ')' : '') + ', not a measured stimulus time. Set it to when the stimulus was added.';
+      if (!section.dataset.framesShown && editedTimes()) showFrames(i, row);
+      const used = windowFrames(row, editedTimes());
+      for (const id of ['base-to', 'resp-from']) frameBox(id, i).disabled = busy || legacy;
+      paintFrames(i);
+      // where the starting stimulus frame came from, until it is changed
+      const note = $('suggestion-' + i), first = S.initialDraft && S.initialDraft.protocol.windows[i], from = S.info && S.info.stimulusFrom;
+      const untouched = i === '0' && !S.results && !!first && typeof row.Stimulus_onset_s === 'number' && Number(first.Stimulus_onset_s) === row.Stimulus_onset_s;
+      const words = !untouched ? '' : from === 'last-session' ? 'From your last session on this recording.' : from === 'last-recording' ? 'Same as your last recording.' : from === 'fiji' ? 'From the frames used in Fiji. Set it to when the stimulus was added.' : 'A suggestion, not a measured time.';
+      if (note.dataset.shown !== words) {
+        note.dataset.shown = words; note.hidden = !words; note.replaceChildren(words);
+        if (words && from === 'last-session' && S.info.fijiDraft) { const use = document.createElement('button'); use.type = 'button'; use.className = 'ghost small repair'; use.textContent = 'Use Fiji’s values';
+          use.addEventListener('click', () => { S.unlinked.clear(); S.initialDraft = clone(S.info.fijiDraft); S.info.stimulusFrom = 'fiji'; fillDraft(S.info.fijiDraft); $('confirmed').checked = false; draftChanged(); }); note.append(' ', use); }
+      }
       if (i === '0') shadeTimeline(used);
-      $('rule-summary-' + i).textContent = 'Rise ≥ ' + box('Floor_local_fraction').value + '% and ≥ ' + box('SD_multiplier').value + ' × baseline SD, for ' + (mode === 'seconds' ? box('Min_duration_s').value + ' s.' : box('Consecutive_samples').value + ' consecutive samples.') + (legacy ? ' Legacy rule.' : '');
+      $('rule-summary-' + i).textContent = 'Rule: rise ≥ ' + box('Floor_local_fraction').value + '% and ≥ ' + box('SD_multiplier').value + ' × SD, for ' + (mode === 'seconds' ? box('Min_duration_s').value + ' s' : box('Consecutive_samples').value + ' samples') + (legacy ? ' (legacy)' : '');
     }
-    $('rule-help').textContent = legacy ? 'Legacy reproduction: the baseline ends at the response start; the optional control is KCl. Sample counts depend on the acquisition rate.' : 'Starter settings are provisional. Check them against your controls before using responder percentages.';
+    $('rule-help').textContent = legacy ? 'Legacy rule: the baseline ends at the response start; the control is KCl. Sample counts depend on the frame rate.' : 'Starting values. Check against your controls.';
   }
   /** Under the frame slider: grey for the noise baseline, a mark for the stimulus, orange for the scored frames of the primary stimulus. */
   function shadeTimeline(used) {
     const strip = $('time-windows'); if (!strip) return; strip.replaceChildren(); if (!used || used.n < 2) return;
     const at = (frame) => (frame - 1) / (used.n - 1) * 100, piece = (className, from, to, title) => { const e = document.createElement('i'); e.className = className; e.style.left = at(from) + '%'; e.style.width = Math.max(0.4, at(to) - at(from)) + '%'; e.title = title; strip.appendChild(e); };
-    if (used.baseline && used.baseline.count) piece('baseline', used.baseline.first, used.baseline.last, 'Noise baseline');
-    if (used.scoring && used.scoring.count) piece('scoring', used.scoring.first, used.scoring.last, 'Scored frames');
+    if (used.baseline && used.baseline.count) piece('baseline', used.baseline.first, used.baseline.last, 'Baseline');
+    if (used.scoring && used.scoring.count) piece('scoring', used.scoring.first, used.scoring.last, 'Response window');
     if (used.stimulus && used.stimulus.before < used.n) { const e = document.createElement('i'); e.className = 'stimulus'; e.style.left = at(used.stimulus.at ? used.stimulus.before + 1 : Math.max(1, used.stimulus.before + 0.5)) + '%'; e.title = 'Stimulus added'; strip.appendChild(e); }
   }
   const frameTime = () => (S.info ? (editedTimes() || frameTimes())[S.frame - 1] : NaN);   // of the frame on screen, in the time base being edited
   function frameButtons() {
     const t = frameTime();
-    for (const button of document.querySelectorAll('.from-frame')) button.textContent = finite(t) ? 'Use frame ' + S.frame + ' (' + fmt(t) + ' s)' : 'Use frame on screen';
+    for (const button of document.querySelectorAll('.from-frame')) { button.textContent = S.info ? 'Use frame ' + S.frame : 'Use frame'; button.title = 'Set it to the movie frame on screen' + (finite(t) ? ' (frame ' + S.frame + ', ' + fmt(+t.toFixed(2)) + ' s)' : '') + '.'; }
   }
   function collectDraft() {
     const draft = clone(S.draft), p = draft.protocol, legacy = Number($('protocol-mode').value) === 1;
@@ -258,7 +308,7 @@
   }
   function fillDraft(draft) {
     S.draft = clone(draft);
-    for (const key of ['sampling_hz', 'baseline_start', 'baseline_end']) exactInput($(key), draft.values[key]);
+    exactInput($('sampling_hz'), draft.values.sampling_hz);   // the F₀ frame boxes are made with the primary stimulus's rows
     for (const key of ['condition', 'biological_unit']) $(key).value = draft.values[key] || '';
     $('protocol-mode').value = draft.protocol.schema_version;
     $('protocol-name').value = draft.protocol.name; $('protocol-validation').value = draft.protocol.validation_status === 'legacy_unvalidated' ? 'user_defined' : draft.protocol.validation_status;
@@ -277,44 +327,52 @@
     const numeric = (v) => v !== null && v !== '' && typeof v !== 'boolean' && Number.isFinite(Number(v));
     const value = draft.values, n = S.info.frames;
     if (!draft.timestamps && (!numeric(value.sampling_hz) || Number(value.sampling_hz) <= 0)) add('sampling_hz', 'Frame rate must be a positive number, or supply valid timestamps.');
-    if (!numeric(value.baseline_start) || !Number.isInteger(Number(value.baseline_start)) || Number(value.baseline_start) < 1) add('baseline_start', 'First baseline frame must be a whole number from 1.');
-    if (!numeric(value.baseline_end) || !Number.isInteger(Number(value.baseline_end)) || Number(value.baseline_end) < Number(value.baseline_start) || Number(value.baseline_end) >= n) add('baseline_end', 'Last baseline frame must follow the first and be before frame ' + n + '.');
+    if (!numeric(value.baseline_start) || !Number.isInteger(Number(value.baseline_start)) || Number(value.baseline_start) < 1) add('baseline_start', 'F₀: the first frame must be a whole number from 1.');
+    if (!numeric(value.baseline_end) || !Number.isInteger(Number(value.baseline_end)) || Number(value.baseline_end) < Number(value.baseline_start) || Number(value.baseline_end) >= n) add('baseline_end', 'F₀: the last frame must follow the first and be before frame ' + n + '.');
     const legacy = draft.protocol.schema_version === 1, names = new Set();
     draft.protocol.windows.forEach((original, index) => {
       const row = expandWindow(original, legacy), prefix = 'window-' + index + '-', label = index ? 'Control: ' : 'Stimulus: ';
       const required = NUMBERS.filter((key) => !['Max_gap_s', 'Expected_interval_s'].includes(key));
-      const box = (key) => $(prefix + key), linked = (key) => !!box(key) && box(key).dataset.linked === '1', v = (key) => Number(row[key]), has = (key) => numeric(row[key]);
-      for (const key of required) if (!has(key) && !(LINKED_KEYS.includes(key) && linked(key))) add(prefix + key, label + FIELD_TITLES[key] + ' needs a number.');
+      const box = (key) => $(prefix + key), v = (key) => Number(row[key]), has = (key) => numeric(row[key]), fr = (id) => frameBox(id, index);
+      for (const key of required) if (!has(key) && !TIME_KEYS.includes(key)) add(prefix + key, label + FIELD_TITLES[key] + ' needs a number.');
       const name = String(row.Stimulus || '').trim().toLowerCase();
       if (!name || names.has(name)) add(prefix + 'Stimulus', label + 'use a nonempty, distinct name.'); names.add(name);
-      if (numeric(row.Baseline_start_s) && Number(row.Baseline_start_s) < 0) add(prefix + 'Baseline_start_s', label + 'baseline cannot start before 0 s.');
-      const relink = (key) => () => { const b = box(key); S.unlinked.delete(b.id); setLinked(b, true, legacy); syncLinks(index); draftChanged(); };
-      const setTo = (key, value) => () => { exactInput(box(key), value); draftChanged(); };
-      const used = windowFrames(row, times), last = used ? used.times[used.n - 1] : NaN, onset = prefix + 'Stimulus_onset_s';
-      if (has('Baseline_end_s') && has('Stimulus_onset_s') && v('Stimulus_onset_s') < v('Baseline_end_s'))
-        conflict([prefix + 'Baseline_end_s', onset], prefix + 'Baseline_end_s', label + 'the noise baseline ends at ' + seconds(v('Baseline_end_s')) + ', after the stimulus at ' + seconds(v('Stimulus_onset_s')) + '.', { text: 'Set to ' + seconds(v('Stimulus_onset_s')), run: relink('Baseline_end_s') });
-      if (has('Stimulus_onset_s') && has('Start_s') && v('Start_s') < v('Stimulus_onset_s'))
-        conflict([prefix + 'Start_s', onset], prefix + 'Start_s', label + 'scoring starts at ' + seconds(v('Start_s')) + ', before the stimulus at ' + seconds(v('Stimulus_onset_s')) + '.', { text: 'Set to ' + seconds(v('Stimulus_onset_s')), run: relink('Start_s') });
-      if (has('Baseline_start_s') && has('Baseline_end_s') && v('Baseline_end_s') <= v('Baseline_start_s'))
-        conflict([prefix + 'Baseline_start_s', linked('Baseline_end_s') ? onset : prefix + 'Baseline_end_s'], prefix + 'Baseline_start_s', label + 'the noise baseline starts at ' + seconds(v('Baseline_start_s')) + ', at or after its end at ' + seconds(v('Baseline_end_s')) + '.', v('Baseline_end_s') > 0 ? { text: 'Set to 0 s', run: setTo('Baseline_start_s', 0) } : null);
-      if (has('Start_s') && has('End_s') && v('End_s') <= v('Start_s'))
-        conflict([prefix + 'End_s', linked('Start_s') ? onset : prefix + 'Start_s'], prefix + 'End_s', label + 'scoring ends at ' + seconds(v('End_s')) + ', at or before its start at ' + seconds(v('Start_s')) + '.', last > v('Start_s') ? { text: 'Set to the recording end (' + seconds(last) + ')', run: setTo('End_s', last) } : null);
+      const used = windowFrames(row, times), last = used ? used.times[used.n - 1] : NaN, N = wholeIn(fr('stim-frame')), okN = N >= 1 && N < n;
+      const relink = (cellId) => () => { S.unlinked.delete(cellId === 'f0-cell' ? 'f0' : cellId + '-' + index); (cellId === 'f0-cell' ? $('f0-cell') : fr(cellId)).dataset.linked = '1'; applyFrames(index); draftChanged(); };
+      const setFrames = (changes) => () => { for (const [id, frame] of changes) fr(id).value = frame; applyFrames(index); draftChanged(); };
+      const ids = (...names) => names.map((id) => id + '-' + index);
+      if (!times || !fr('stim-frame')) { /* no frame times: the frame rate message says so */ }
+      else if (!okN) conflict(ids('stim-frame'), 'stim-frame-' + index, label + (String(fr('stim-frame').value).trim() === '' ? 'enter the frame after which it was added.' : 'the stimulus must come after a frame from 1 to ' + (n - 1) + '.'));
+      else {
+        const a = wholeIn(fr('base-from')), b = wholeIn(fr('base-to')), c = wholeIn(fr('resp-from')), d = String(fr('resp-to').value).trim() === '' ? n : wholeIn(fr('resp-to')), rule = frameRule(N);
+        if (!(a >= 1 && b >= a)) conflict(ids('base-from', 'base-to'), 'base-from-' + index, label + 'the baseline needs a first and a last frame.', { text: 'Use ' + rule[0] + '–' + rule[1], run: relink('base-cell') });
+        else if (b > N) conflict(ids('base-to'), 'base-to-' + index, label + (Math.max(a, N + 1) === b ? 'baseline frame ' + b + ' comes' : 'baseline frames ' + Math.max(a, N + 1) + '–' + b + ' come') + ' after the stimulus.', a > N ? { text: 'Use ' + rule[0] + '–' + rule[1], run: relink('base-cell') } : { text: 'Use ' + a + '–' + N, run: setFrames([['base-to', N]]) });
+        else if (has('Min_baseline_samples') && used && used.baseline && used.baseline.count < v('Min_baseline_samples')) {
+          // for the primary stimulus this leaves every cell without a call, so the run is stopped; for the control it only loses the control
+          const words = label + 'the baseline holds ' + plural(used.baseline.count, 'frame') + ' but at least ' + v('Min_baseline_samples') + ' are needed. No cell would get a call.', fix = N >= v('Min_baseline_samples') ? { text: 'Use ' + rule[0] + '–' + rule[1], run: relink('base-cell') } : null;
+          if (index) warn(words, fix); else conflict(ids('base-from', 'base-to'), 'base-from-' + index, words, fix);
+        }
+        if (!(c >= 1 && d >= c && d <= n)) conflict(ids('resp-from', 'resp-to'), 'resp-from-' + index, label + 'the response window needs a first and a last frame, up to ' + n + '.', { text: 'Use ' + (N + 1) + '–' + n, run: relink('resp-cell') });
+        else if (c <= N) conflict(ids('resp-from'), 'resp-from-' + index, label + 'the response window starts at frame ' + c + ', before the stimulus.', { text: 'Start at ' + (N + 1), run: setFrames([['resp-from', N + 1]]) });
+        else if (has('End_s') && v('End_s') > last + 1e-9) {   // a loaded setting that runs past the recording
+          if (legacy) warn(label + 'the response window ends after the last frame. Cells may get no call.', { text: 'End at frame ' + n, run: setFrames([['resp-to', n]]) });
+          else conflict(ids('resp-to'), 'resp-to-' + index, label + 'the response window ends after the last frame (' + seconds(+last.toFixed(2)) + '). No cell would get a call.', { text: 'End at frame ' + n, run: setFrames([['resp-to', n]]) });
+        }
+        if (!index) {
+          // F₀ frames after the stimulus, and cells that were chosen on frames after it
+          const f0 = [Number(value.baseline_start), Number(value.baseline_end)], chosen = S.info.fijiFrames;
+          if (Number.isInteger(f0[0]) && Number.isInteger(f0[1]) && f0[1] >= f0[0] && f0[1] > N)
+            warn((Math.max(f0[0], N + 1) === f0[1] ? 'F₀ frame ' + f0[1] + ' comes' : 'F₀ frames ' + Math.max(f0[0], N + 1) + '–' + f0[1] + ' come') + ' after the stimulus.', { text: 'Use ' + rule[0] + '–' + rule[1], run: relink('f0-cell') });
+          if (chosen && chosen.last > N)
+            warn('Cells were chosen on frames ' + chosen.first + '–' + chosen.last + '. Frames ' + Math.max(chosen.first, N + 1) + '–' + chosen.last + ' are after the stimulus, so these cells were not chosen blind to it.');
+        }
+      }
       for (const key of ['Floor_local_fraction', 'SD_multiplier', 'Noise_floor_local_fraction']) if (numeric(row[key]) && Number(row[key]) < 0) add(prefix + key, label + 'thresholds cannot be negative.');
       if (numeric(row.Floor_local_fraction) && numeric(row.SD_multiplier) && Number(row.Floor_local_fraction) === 0 && Number(row.SD_multiplier) === 0) add(prefix + 'Floor_local_fraction', label + 'specify an amplitude or noise threshold.');
       if (legacy && numeric(row.Floor_local_fraction) && Number(row.Floor_local_fraction) <= 0) add(prefix + 'Floor_local_fraction', label + 'legacy mode requires a positive minimum rise.');
       if (numeric(row.Min_duration_s) && Number(row.Min_duration_s) <= 0) add(prefix + 'Min_duration_s', label + 'duration must be positive.');
       for (const [key, minimum] of [['Consecutive_samples', 1], ['Min_baseline_samples', 2]]) if (numeric(row[key]) && (!Number.isInteger(Number(row[key])) || Number(row[key]) < minimum)) add(prefix + key, label + FIELD_TITLES[key] + ' must be a whole number ≥ ' + minimum + '.');
       for (const key of ['Max_gap_s', 'Expected_interval_s']) if (row[key] !== null && row[key] !== '' && (!numeric(row[key]) || Number(row[key]) <= 0)) add(prefix + key, label + FIELD_TITLES[key] + ' must be positive or blank.');
-      if (used) {
-        if (has('Start_s') && v('Start_s') >= last) { if (linked('Start_s')) add(onset, label + 'the stimulus time is at or after the last frame (' + seconds(last) + ').'); else add(prefix + 'Start_s', label + 'scoring must start before the recording ends at ' + seconds(last) + '.'); }
-        if (has('End_s') && v('End_s') > last) warn(label + 'response end exceeds this recording; complete-window rules may mark cells unscorable.');
-        if (used.baseline && has('Min_baseline_samples') && used.baseline.count < v('Min_baseline_samples')) warn(label + 'the noise baseline holds ' + plural(used.baseline.count, 'sample') + ' (' + frameSpan(used.baseline) + ') but at least ' + v('Min_baseline_samples') + ' are needed, so every cell would be unscorable.');
-        const f0 = [Number(value.baseline_start), Number(value.baseline_end)], before = used.stimulus ? used.stimulus.before : 0;
-        if (!index && used.stimulus && numeric(value.baseline_end) && Number.isInteger(f0[1]) && f0[1] >= 1 && f0[1] <= used.n && f0[1] > before) {
-          const first = Math.max(1, Math.min(Number.isInteger(f0[0]) ? f0[0] : 1, before)), same = (now, wanted) => (typeof now === 'string' ? String(wanted) : wanted);
-          warn('The F₀ frames (' + value.baseline_start + '–' + value.baseline_end + ') include the stimulus time or later frames.', before >= 1 ? { text: 'Use frames ' + first + '–' + before, run: () => { exactInput($('baseline_start'), same(value.baseline_start, first)); exactInput($('baseline_end'), same(value.baseline_end, before)); draftChanged(); } } : null);
-        }
-      }
       if (!draft.timestamps && numeric(value.sampling_hz) && Number(value.sampling_hz) > 0) {
         const interval = 1 / Number(value.sampling_hz);
         if (!legacy && row.Duration_mode === 'seconds' && numeric(row.Min_duration_s) && Number(row.Min_duration_s) < interval) warn(label + 'minimum duration (' + row.Min_duration_s + ' s) is shorter than the frame interval (' + fmt(interval) + ' s). Timing is coarsely resolved.');
@@ -326,7 +384,7 @@
     if (signature === S.draftAck && S.state && S.state.validation) {
       // One message per problem: the plugin's general checks are shown only for what this page did not already explain.
       if (!errors.length) for (const message of S.state.validation.errors) { errors.push(message); listed.push(message); }
-      const mine = [/F₀ baseline includes/, /response end exceeds/, /holds \d+ samples/];
+      const mine = [/F₀ baseline includes/, /response end exceeds/, /holds \d+ samples?/, /^Check acquisition timing/];
       for (const message of S.state.validation.warnings) if (!times || !mine.some((p) => p.test(message))) warnings.push(message);
     }
     for (const box of document.querySelectorAll('#side [aria-invalid]')) box.removeAttribute('aria-invalid');
@@ -339,7 +397,7 @@
       for (const old of document.querySelectorAll('#side .field-error')) old.remove();
       for (const entry of inline) {
         const field = $(entry.beside); if (!field) continue;
-        const row = field.closest('label') || field, after = row.nextElementSibling && row.nextElementSibling.classList.contains('link-toggle') ? row.nextElementSibling : row;
+        const after = field.closest('.row') || field;
         const note = document.createElement('div'); note.className = 'field-error'; note.setAttribute('role', 'alert'); const text = document.createElement('span'); text.textContent = entry.message; note.appendChild(text);
         if (entry.repair) note.appendChild(action(entry.repair)); after.after(note);
       }
@@ -375,6 +433,13 @@
     RISE_START_BELOW_BASELINE_SD: 'The legacy 10% rise level is below baseline SD; the rise-time estimate is sensitive to baseline noise'
   };
   const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
+  /** How many cells of the selected window got a call (responded or did not). Zero means the run finished without a single call. */
+  const called = () => { const c = S.results ? ((S.results.countsByWindow || {})[S.window] || S.results.counts || {}) : {}; const v = number(c.Evaluable); return isFinite(v) ? v : 0; };
+  /** Why cells are unscorable, in the engine's words: the reason most of them share. */
+  function unscorableReason() {
+    const seen = new Map(); for (const name of S.info.names) { const row = callRow(name); if (row.Status === 'Unscorable' && row.Reason) seen.set(row.Reason, (seen.get(row.Reason) || 0) + 1); }
+    let best = ''; for (const [reason, n] of seen) if (!best || n > seen.get(best)) best = reason; return best;
+  }
   const flagText = (flag) => FLAG_TEXT[flag] || flag.replace(/_/g, ' ');
   function showQuality() {
     if (!S.results) return;
@@ -383,13 +448,13 @@
       for (const flag of flags) { const item = counts.get(flag) || { total: 0, responders: 0 }; item.total++; if (callOf(name) === 'Responded') item.responders++; counts.set(flag, item); }
     }
     const notices = [], window = selectedCall(), baseline = S.results.baselineFrames;
-    if (baseline && S.results.time[baseline[1] - 1] >= number(window.Stimulus_onset_s || window.Start_s)) notices.push('The saved trace F₀ baseline includes the stimulus onset or later frames. These results keep their original settings; review timing before rerunning.');
+    if (baseline && S.results.time[baseline[1] - 1] > number(window.Stimulus_onset_s || window.Start_s) + 1e-9) notices.push('F₀ frames ' + baseline[0] + '–' + baseline[1] + ' of these results include frames after the stimulus.');
     if (window.Window_warning) notices.push(window.Window_warning);
     if (!window.Window_warning && S.info.names.some((name) => { const q = S.quality[name] || {}, row = callRow(name); return [q.QC_flags, row.QC_flags].some((t) => String(t || '').includes('DURATION_BELOW_SAMPLE_INTERVAL')); }))
       notices.push('Applies to the whole recording: ' + FLAG_TEXT.DURATION_BELOW_SAMPLE_INTERVAL + '.');
     if (S.qualityFlag && !counts.has(S.qualityFlag)) S.qualityFlag = null;
     $('quality-review').hidden = !affected && !notices.length;
-    summary.textContent = affected ? 'Quality review: ' + plural(affected, 'cell') + ' flagged, including ' + plural(responders, 'responder') : 'Review the applied timing';
+    summary.textContent = affected ? 'Quality review: ' + plural(affected, 'cell') + ' flagged' + (called() ? ', including ' + plural(responders, 'responder') : '') : 'Review the applied timing';
     list.replaceChildren();
     for (const [flag, count] of counts) {
       // each flag is a filter of its own, so a small group (for example the cells whose ΔF/F₀ falls below −1) can be isolated
@@ -435,8 +500,8 @@
   function metricRows() { const key = $('metrics-table').value; if (key === 'summary') return metricSummary().long; const data = S.results.tables[key] || { header: [], rows: [] }; return [data.header].concat(data.rows); }
   function showMetricTable() {
     const key = $('metrics-table').value;
-    if (key === 'summary') { $('metric-help').textContent = 'Mean ± SEM and number of cells for each metric: all cells, by response call' + (S.results.chosenBlind ? ', and by how the cells were chosen' : '') + '. Worked out here from the per-cell tables below (Table menu); the saved file also has the SD.'; table('table-metrics', metricSummary().wide); return; }
-    $('metric-help').textContent = key === 'metrics' ? 'Legacy metrics: AUC is the signed net integral over the whole recording; negative drift can make it negative. Peak time is a recording timestamp. Rise time is the 10–90% crossing interval after the display baseline and can be noise-sensitive. For stimulus-specific values, choose Response-window metrics (including Peak_latency_s and Window_AUC_fraction_s).' : key === 'windowMetrics' ? 'Stimulus-window metrics use the local prestimulus reference. Peak_latency_s is relative to stimulus onset; Window_AUC_fraction_s covers the declared response window.' : '';
+    if (key === 'summary') { $('metric-help').textContent = 'Mean ± SEM (n) of each metric. The saved file also has the SD.'; table('table-metrics', metricSummary().wide); return; }
+    $('metric-help').textContent = key === 'metrics' ? 'Legacy metrics: AUC is the signed net integral over the whole recording; negative drift can make it negative. Peak time is a recording timestamp. Rise time is the 10–90% crossing interval after the display baseline and can be noise-sensitive. For stimulus-specific values, choose Response-window metrics (including Peak_latency_s and Window_AUC_fraction_s).' : key === 'windowMetrics' ? 'Response-window metrics use the baseline before the stimulus. Peak_latency_s is measured from the stimulus (the first frame after it), to the nearest frame; Window_AUC_fraction_s covers the response window.' : '';
     table('table-metrics', S.results.tables[key]);
   }
 
@@ -476,7 +541,8 @@
     S.initialDraft = clone(S.info.draft);
     S.revision = Math.max(0, Number(S.info.draftRevision) || 0); fillDraft(S.info.draft); S.draftAck = JSON.stringify(collectDraft());
     $('time').max = Math.max(1, S.info.frames);
-    for (const option of Array.from($('view').options)) if ((option.value === 'picture' && !S.info.hasPicture) || (option.value !== 'picture' && !S.info.hasMovie)) option.remove();
+    for (const option of Array.from($('view').options)) if ((option.value === 'picture' && !S.info.hasPicture) || (option.value === 'background' && !S.info.hasBackground) || (!['picture', 'background'].includes(option.value) && !S.info.hasMovie)) option.remove();
+    if (S.info.hasBackground) { const areas = new Image(); areas.onload = () => { Pic.background = areas; if (S.view === 'background') requestFrame(); }; areas.src = 'api/background'; }
     S.view = S.info.hasMovie ? 'raw' : 'picture'; $('view').value = S.view;
     S.paths = S.info.rois.map((points) => { const p = new Path2D(); points.forEach((q, i) => i ? p.lineTo(q[0], q[1]) : p.moveTo(q[0], q[1])); p.closePath(); return p; });
     S.bounds = S.info.rois.map((points) => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const q of points) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); } return { x0, y0, x1, y1 }; });
@@ -498,7 +564,8 @@
   }
   function showState() {
     const state = S.state; if (!state) return;
-    const engine = $('engine'); engine.textContent = state.engineReady ? 'Analysis engine ready' : 'First run: set up analysis engine'; engine.className = 'pill ' + (state.engineReady ? 'good' : 'warn');
+    const engine = $('engine'); engine.textContent = state.engineReady ? 'Analysis engine ready' : 'First run: set up analysis engine'; engine.className = 'pill ' + (state.engineReady ? 'good' : 'warn'); engine.hidden = !!state.engineReady;
+    if (S.reapplyFrames && editedTimes() && JSON.stringify(collectDraft()) === S.draftAck) { S.reapplyFrames = false; const before = JSON.stringify(collectDraft()); applyAllFrames(); if (JSON.stringify(collectDraft()) !== before) { draftChanged(); return; } }
     const validation = validateDraft(collectDraft());
     $('analyze').disabled = state.busy || S.saving || !state.engineReady || validation.errors.length > 0 || JSON.stringify(collectDraft()) !== S.draftAck || S.closed; $('cancel').disabled = !state.busy; $('log').disabled = !state.logAvailable;
     $('setup').hidden = state.engineReady; $('setup').disabled = state.busy; $('setup').classList.toggle('primary', !state.engineReady);
@@ -514,11 +581,22 @@
     const status = $('status');
     if (state.busy) { status.className = 'status'; status.textContent = (state.percent > 0 ? state.percent + '% · ' : '') + state.stage + ' · ' + state.elapsed + ' s elapsed'; }
     else if (S.note) { status.className = 'status bad'; status.textContent = S.note; }
-    else if (!S.results && !state.error && state.tone !== 'bad') { status.className = 'status'; status.textContent = state.engineReady ? (state.message && !/^Check acquisition timing/.test(state.message) ? state.message : 'Check the settings above, confirm the timing, then run. Movie playback works now.') : 'Movie playback is ready. Before the first analysis, choose “Set up analysis engine” below (requires internet).'; }
+    else if (S.imported && S.imported.revision === S.revision) { status.className = 'status good'; status.textContent = S.imported.text; }
+    else if (!S.results && !state.error && state.tone !== 'bad') { status.className = 'status'; status.textContent = state.engineReady ? (state.message && !/^Check acquisition timing/.test(state.message) ? state.message : 'Check the timing, tick the box, then run.') : 'First run: choose “Set up analysis engine” (needs internet).'; }
+    else if (S.results && state.tone === 'good' && !called()) { status.className = 'status warn'; status.textContent = 'Finished, but no cell got a call' + (unscorableReason() ? ': ' + unscorableReason().replace(/\.$/, '').toLowerCase() : '') + '.'; }
+    else if (S.results && state.tone === 'good' && state.folder) { status.className = 'status good'; status.textContent = 'Done.'; }
     else { status.className = 'status ' + (state.tone === 'good' ? 'good' : state.tone === 'bad' ? 'bad' : state.tone === 'warn' ? 'warn' : ''); status.textContent = state.message; }
-    $('open-folder').disabled = !state.folder; $('open-folder').hidden = !state.folder;
+    status.title = state.message || '';
+    // what the tick box confirms, in the user's own numbers
+    { const d = collectDraft(), hz = Number(d.values.sampling_hz), first = d.protocol.windows[0], used = first ? windowFrames(expandWindow(first, d.protocol.schema_version === 1), editedTimes()) : null, st = used && used.stimulus;
+      $('confirm-text').textContent = 'Timing checked' + (d.timestamps || (isFinite(hz) && hz > 0) ? ': ' + (d.timestamps ? 'recorded timestamps' : fmt(+hz.toPrecision(4)) + (hz === 1 ? ' frame/s' : ' frames/s')) + (st ? ', stimulus ' + (st.before >= 1 && st.before < used.n ? 'after frame ' + st.before : 'outside the recording') : '') : '');
+      // the recording's own frame rate, when a different one is typed
+      const own = Number(S.info.recordedHz), note = $('rate-note'), differs = !d.timestamps && isFinite(own) && own > 0 && isFinite(hz) && hz > 0 && Math.abs(hz - own) > 1e-9 * own, text = differs ? 'The file says ' + fmt(+own.toPrecision(6)) + ' (' + fmt(+(1 / own).toPrecision(6)) + ' s per frame). ' : '';
+      if (note.dataset.shown !== text) { note.dataset.shown = text; note.hidden = !differs; note.replaceChildren(text);
+        if (differs) { const use = document.createElement('button'); use.type = 'button'; use.className = 'ghost small repair'; use.textContent = 'Use it'; use.addEventListener('click', () => { exactInput($('sampling_hz'), S.info.recordedHz); applyAllFrames(); draftChanged(); }); note.appendChild(use); } } }
+    $('open-folder').disabled = !state.folder; $('open-folder').hidden = !state.folder; $('open-folder').title = state.folder ? 'Open ' + String(state.folder).split(/[\\/]/).pop() : '';
     const pending = hasPending(), notice = $('applied-note'); notice.hidden = !S.results || !pending; notice.classList.toggle('pending', pending);
-    notice.textContent = pending ? 'Settings changed. The results, movie timing and exports still use the last completed analysis. Choose “Apply changes & reanalyze” to update them.' : 'Showing the completed analysis. Response calls and counts come from the saved results.';
+    notice.textContent = pending ? 'Settings changed. Everything shown is still the last completed analysis.' : '';
     $('workspace-title').textContent = S.results ? 'Review the responses' : 'Review the recording';
     $('review-stage').textContent = S.results ? (pending ? 'Changes pending' : 'Completed analysis') : 'Preview · no analysis yet';
     $('workflow-help').textContent = S.results ? 'Select a cell or response window. Use the same timeline for the movie and traces.' : 'Drag the frame slider or press Play. You can review the movie before running analysis.';
@@ -551,7 +629,7 @@
     for (const id of ['plot-saved', 'heatmap-saved', 'data-saved', 'metrics-saved']) $(id).textContent = '';
     if (!$('panel-data').hidden) showData();
     for (const option of $('signal').options) option.disabled = option.value !== 'dff' && !hasTable(option.value);
-    if ($('signal').selectedOptions[0].disabled) { S.signal = 'dff'; $('signal').value = 'dff'; }
+    if ($('signal').selectedOptions[0].disabled) { S.signal = Data.signal = 'dff'; $('signal').value = 'dff'; $('data-signal').value = 'dff'; }
     Plot.x0 = Plot.x1 = null; updateWindow(); setFrame(S.frame); showState();
   }
   /** The headline numbers for the selected response window (the primary stimulus or its control), from the saved counts. */
@@ -564,7 +642,9 @@
     if (tags && chosen.role !== 'Control') for (const name of S.info.names) if (name in tags) { const status = callOf(name), part = split[tags[name] ? 'blind' : 'later']; if (status === 'Responded') { part[0]++; part[1]++; } else if (status === 'Did not respond') part[1]++; }
     const share = (part) => part[1] ? Math.round(100 * part[0] / part[1]) + '%' : '–';
     // cells chosen blind give the figure that does not depend on the response; it leads, with the others beside it
-    $('tile-responding').innerHTML = tags && split.blind[1] && split.later[1]
+    const reason = unscorableReason();
+    if (!called()) { $('tile-responding').innerHTML = '<b>–</b><span>' + label + ': no cell got a call' + (reason ? ' (' + escape(reason.replace(/\.$/, '').toLowerCase()) + ')' : '') + '</span>'; }
+    else $('tile-responding').innerHTML = tags && split.blind[1] && split.later[1]
       ? '<b>' + share(split.blind) + '</b><span>of the cells chosen blind: ' + split.blind[0] + ' of ' + split.blind[1] + ' &nbsp;·&nbsp; added after the response was shown: ' + share(split.later) + ' (' + split.later[0] + ' of ' + split.later[1] + ') · all cells: ' + (isFinite(percent) ? Math.round(percent) + '%' : '–') + ' (' + whole('Responded') + ' of ' + whole('Evaluable') + ')</span>'
       : '<b>' + (isFinite(percent) ? Math.round(percent) + '%' : '–') + '</b><span>' + all + '</span>';
     $('tile-registered').firstChild.textContent = whole('Registered'); $('tile-excluded').firstChild.textContent = whole('Excluded'); $('tile-unscorable').firstChild.textContent = whole('Unscorable');
@@ -628,7 +708,7 @@
   function nearestFrame(t) { const time = frameTimes(); let best = 0, gap = Infinity; for (let i = 0; i < time.length; i++) { const d = Math.abs(time[i] - t); if (d < gap) { gap = d; best = i; } } return best + 1; }
   function updateTransport() {
     if (!S.info) return;
-    const available = S.info.frames > 1 && (S.info.hasMovie || !!S.results), staticView = S.view === 'picture';
+    const available = S.info.frames > 1 && (S.info.hasMovie || !!S.results), staticView = still();
     $('time').disabled = !available || (staticView && !S.results);
     $('play').disabled = !available || staticView;
     $('frame-back').disabled = $('time').disabled || S.frame <= 1;
@@ -637,7 +717,8 @@
     const t = frameTimes()[S.frame - 1], provisional = !S.results && (!S.state || S.state.timingProvisional !== false);
     const label = (finite(t) ? (provisional ? '≈ ' : '') + t.toFixed(2) + ' s · ' : '') + 'Frame ' + S.frame + ' / ' + S.info.frames;
     $('time-label').textContent = label; $('time').setAttribute('aria-valuetext', label); frameButtons();
-    $('playback-note').textContent = staticView ? 'Static colour overview — this image does not move. Choose “Recording” in View to play or scrub the movie.' : !S.info.hasMovie ? 'The recording is unavailable in this session. Reopen it in Fiji to view its frames.' : frameTimes().length ? (provisional ? 'Preview timing is provisional. Playback follows the displayed frame times; confirm timing before analysis.' : 'Playback follows the applied frame times. Drag the slider to pause and inspect a frame.') : 'Frame-by-frame preview. No valid time base is available; 1× plays 20 frames per second.';
+    $('playback-note').textContent = S.view === 'background' ? 'Background areas: a still picture. Blue marks the pixels whose mean is taken off each cell.' : staticView ? 'Static colour overview — this image does not move. Choose “Recording” in View to play or scrub the movie.' : !S.info.hasMovie ? 'The recording is unavailable in this session. Reopen it in Fiji to view its frames.' : frameTimes().length ? (provisional ? 'Preview timing is provisional. Playback follows the displayed frame times; confirm timing before analysis.' : 'Playback follows the applied frame times. Drag the slider to pause and inspect a frame.') : 'Frame-by-frame preview. No valid time base is available; 1× plays 20 frames per second.';
+    $('playback-note').classList.toggle('help', !staticView && S.info.hasMovie && frameTimes().length > 0);
     $('playback-note').classList.toggle('help', /^Playback follows the applied frame times/.test($('playback-note').textContent));
   }
   function setFrame(wanted, manual) {
@@ -654,7 +735,7 @@
   }
   function play(on) {
     if (S.timer) cancelAnimationFrame(S.timer); S.timer = null; Plot.playhead = null; Clock.waitingSince = 0;
-    if (on && S.info && S.info.hasMovie && S.view !== 'picture' && S.info.frames > 1) {
+    if (on && S.info && S.info.hasMovie && !still() && S.info.frames > 1) {
       Buf.failed.clear();   // pressing Play retries frames that failed before
       if (S.frame >= S.info.frames) setFrame(1);
       const times = clockTimes(), gaps = times.slice(1).map((v, i) => v - times[i]).sort((a, b) => a - b), typical = gaps[Math.floor(gaps.length / 2)] || 0.05;
@@ -692,7 +773,7 @@
   function resetFrames(version) {
     for (const entry of Buf.bitmaps.values()) if (entry.bitmap !== Pic.shown && entry.bitmap.close) entry.bitmap.close();
     Buf.version = version; Buf.blobs.clear(); Buf.bitmaps.clear(); Buf.failed.clear(); Buf.bytes = 0;
-    if (S.info && S.info.hasMovie && S.view !== 'picture') requestFrame();
+    if (S.info && S.info.hasMovie && !still()) requestFrame();
   }
   /** Frames are fetched at the size they are drawn, or at full resolution when zoomed in or when that is nearly as large. */
   function frameWidth() {
@@ -731,7 +812,7 @@
   }
   /** Keeps the buffer filled: the frame on screen first, then about 3 s of playback ahead (a few frames when paused). */
   function pumpFrames() {
-    if (!S.info || !S.info.hasMovie || S.view === 'picture') return;
+    if (!S.info || !S.info.hasMovie || still()) return;
     const mode = S.view, w = frameWidth(), speed = Number($('speed').value), wanted = [S.frame];
     const ahead = S.timer ? Math.min(120, Math.ceil(3 * speed / Math.max(1e-6, (Clock.times[Math.min(Clock.times.length - 1, S.frame)] - Clock.times[S.frame - 1]) || 0.05) / Clock.step)) : 3;
     for (let k = nextFrame(S.frame), i = 0; k && i < ahead; k = nextFrame(k), i++) wanted.push(k);
@@ -750,12 +831,24 @@
     const far = Array.from(Buf.blobs.entries()).sort((a, b) => Math.abs(b[1].f - S.frame) - Math.abs(a[1].f - S.frame));
     for (const [key, entry] of far) { if (Buf.bytes <= MAX_BYTES * 0.8) break; Buf.blobs.delete(key); Buf.bytes -= entry.blob.size; }
   }
+  /** What the colours of the view on screen mean: [colour, words]. "As recorded" is plain gray values and has none. */
+  function viewColours() {
+    const rest = S.results ? S.results.baselineFrames : (S.state && S.state.rest), frames = rest ? ' (frames ' + rest[0] + '–' + rest[1] + ')' : '';
+    return S.view === 'background' ? [['#2896ff', 'pixels taken as the cells’ background']] : S.view === 'picture' ? [['#00e000', 'cells'], ['#ffe600', 'very bright (precipitate)'], ['#ff40ff', 'response']]
+      : S.view === 'magenta' ? [['#00e000', 'cells, background removed'], ['#ff40ff', 'rise above baseline' + frames]]
+      : S.view === 'change' ? [['#ffffff', 'brighter than baseline' + frames]] : S.view === 'flat' ? [['#ffffff', 'background removed']] : [];
+  }
+  function viewKey() {
+    const box = $('view-key'), shown = viewColours().map((c) => c.join('|')).join(';'); if (!box || box.dataset.shown === shown) return;
+    box.dataset.shown = shown; box.replaceChildren();
+    for (const [colour, words] of viewColours()) { const chip = document.createElement('span'); chip.className = 'chip'; const dot = document.createElement('i'); dot.className = 'fill'; dot.style.background = colour; chip.append(dot, words); box.appendChild(chip); }
+  }
   function frameNote() {
-    if (S.view === 'picture' || !S.info.hasMovie || !Pic.shownFrame || Pic.error) return;
+    if (still() || !S.info.hasMovie || !Pic.shownFrame || Pic.error) return;
     const f = Pic.shownFrame, rest = S.results ? S.results.baselineFrames : (S.state && S.state.rest), ordinal = (n) => n + (n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : n % 10 === 1 && n % 100 !== 11 ? 'st' : 'th');
     const frames = rest ? rest[0] + '–' + rest[1] : '(preview)';
-    $('picture-note').textContent = (S.view === 'change' ? 'Frame ' + f + ' − mean of baseline frames ' + frames + ' · display smoothed' : S.view === 'flat' ? 'Frame ' + f + ' · smooth background removed (display only)' : S.view === 'magenta' ? 'Frame ' + f + ' · green: background removed · magenta: rise above baseline frames ' + frames : 'Frame ' + f + ' · as recorded') +
-      (S.timer && Clock.step > 1 ? ' · playing every ' + ordinal(Clock.step) + ' frame' : '') + (S.timer && Clock.waitingSince && performance.now() - Clock.waitingSince > 250 ? ' · buffering' : '');
+    $('picture-note').textContent = 'Frame ' + f + (S.timer && Clock.step > 1 ? ' · playing every ' + ordinal(Clock.step) + ' frame' : '') + (S.timer && Clock.waitingSince && performance.now() - Clock.waitingSince > 250 ? ' · buffering' : '');
+    viewKey();
   }
   function showFrame(f, mode, bitmap) {
     if (S.view !== mode || S.frame !== f) return;
@@ -769,9 +862,9 @@
   }
   function requestFrame() {
     if (!(S.info.hasPicture || S.info.hasMovie)) return;
-    if (S.view === 'picture' || !S.info.hasMovie) {
-      Pic.shown = Pic.base; Pic.shownFrame = null;
-      $('picture-note').textContent = 'Static overview · not a movie frame'; movieMessage(Pic.base ? '' : 'Loading the static overview…'); drawPicture(); return;
+    if (still() || !S.info.hasMovie) {
+      const image = S.view === 'background' ? Pic.background : Pic.base; Pic.shown = image || Pic.base; Pic.shownFrame = null;
+      $('picture-note').textContent = ''; viewKey(); movieMessage(image ? '' : 'Loading the picture…'); drawPicture(); return;
     }
     const f = S.frame, mode = S.view, ready = bitmapFor(f, mode);
     if (ready) showFrame(f, mode, ready);
@@ -886,13 +979,13 @@
     if (S.plotMode === 'calls') {
       const names = S.info.names.filter((n) => shownTraces()[n]);
       return [['Responded', 'responded', CALL.responded], ['Did not respond', 'did not respond', CALL.not]].map(([status, text, colour]) => {
-        const g = groupMean(names.filter((n) => callOf(n) === status)); return { label: text + ', mean ± SEM (n = ' + g.n + ')', short: text, colour, mean: g.mean, sem: g.sem, n: g.n };
+        const g = groupMean(names.filter((n) => callOf(n) === status)); return { label: text + ' ± SEM (n = ' + g.n + ')', short: text, colour, mean: g.mean, sem: g.sem, n: g.n };
       }).filter((s) => s.n > 0);
     }
     const all = isDff() ? { mean: r.mean, sem: r.sem, n: Object.keys(r.traces).length } : groupMean(S.info.names);
     if (S.plotMode === 'mean') {
       const g = S.group === 0 ? all : groupMean(S.listed), who = S.group === 0 ? 'all cells' : GROUPS[S.group].toLowerCase();
-      return [{ label: 'mean of ' + who + ' ± SEM (n = ' + g.n + ')', short: 'mean of ' + who, colour: '#0072B2', mean: g.mean, sem: g.sem, n: g.n }];
+      return [{ label: who + ' ± SEM (n = ' + g.n + ')', short: 'mean of ' + who, colour: '#0072B2', mean: g.mean, sem: g.sem, n: g.n }];
     }
     return [{ label: 'mean ± SEM', short: 'mean of all cells', colour: '#0072B2', mean: all.mean, sem: all.sem, n: all.n }];
   }
@@ -914,17 +1007,17 @@
   function legendItems() {
     const r = S.results; if (!r) return [];
     const oneCell = S.plotMode === 'cell', items = plotSeries().map((s) => ({ kind: 'line', colour: s.colour, text: s.label }));
-    if (oneCell && S.cell) items.push(shownTraces()[S.cell] ? { kind: 'line', colour: '#1F2933', text: shortName(S.cell) } : { kind: 'note', colour: '#9A5B00', text: shortName(S.cell) + ': no ΔF/F₀ trace' + (hasTable('corrected') ? ' — set Signal to gray levels to see this cell' : ' (see Metrics + quality)') });
+    if (oneCell && S.cell) items.push(shownTraces()[S.cell] ? { kind: 'line', colour: '#1F2933', text: shortName(S.cell) } : { kind: 'note', colour: '#9A5B00', text: shortName(S.cell) + ': no ΔF/F₀ trace' + (hasTable('corrected') ? ': choose gray levels under Signal' : '') });
     if (S.every) {
       const drawn = S.listed.filter((n) => shownTraces()[n]), yes = drawn.filter((n) => callOf(n) === 'Responded').length, no = drawn.filter((n) => callOf(n) === 'Did not respond').length;
       if (yes) items.push({ kind: 'line', colour: CALL.responded, text: 'responded (' + yes + ')' }); if (no) items.push({ kind: 'line', colour: CALL.not, text: 'did not respond (' + no + ')' });
       if (drawn.length - yes - no) items.push({ kind: 'line', colour: CALL.other, text: 'no call (' + (drawn.length - yes - no) + ')' });
     }
     const spans = responseSpans(), real = (span) => span && finite(span[0]) && finite(span[1]);
-    if (real(spans.baseline)) items.push({ kind: 'band', colour: '#EDF0F4', text: 'response baseline' }); if (real(spans.response)) items.push({ kind: 'band', colour: '#F5C97A', text: 'response window (strip along the top)' });
+    if (real(spans.baseline)) items.push({ kind: 'band', colour: '#EDF0F4', text: 'baseline' }); if (real(spans.response)) items.push({ kind: 'band', colour: '#F5C97A', text: 'response window' });
     if (oneCell && isDff()) {
-      if (real(spans.run)) items.push({ kind: 'band', colour: '#D5EEDD', text: 'run that counted as the response' });
-      for (const level of referenceLevels().slice(1)) items.push({ kind: 'line', colour: level.colour, text: level.name + ' · dashed' });
+      if (real(spans.run)) items.push({ kind: 'band', colour: '#D5EEDD', text: 'response' });
+      for (const level of referenceLevels().slice(1)) items.push({ kind: 'line', colour: level.colour, text: level.name });
     }
     return items;
   }
@@ -945,6 +1038,8 @@
     // with every cell drawn, the axis covers 99 % of all values (plus the mean and the selected cell); rarer extremes run off the edge
     if (drawn.length) { const rows = drawn.map((n) => shown[n]); values.push(share(rows, 0.005, false), share(rows, 0.995, false)); }
     let lo = Math.min.apply(null, values), hi = Math.max.apply(null, values); if (hi - lo < 0.001) hi = lo + 1; const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+    // limits typed under "Y axis" replace the automatic ones (either end alone, too); they belong to the signal on screen
+    const typed = Plot.y[S.signal] || {}; if (finite(typed.lo)) lo = typed.lo; if (finite(typed.hi)) hi = typed.hi; if (!(hi > lo)) hi = lo + Math.max(1e-6, Math.abs(lo) * 0.1);
     const X = (t) => L + (t - x0) / (x1 - x0) * W, Y = (v) => T + (hi - v) / (hi - lo) * H;
     Plot.geom = { L, T, W, H, x0, x1, lo, hi, full0, full1 };
     ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); ctx.font = '12px ' + getComputedStyle(document.body).fontFamily;
@@ -1209,7 +1304,7 @@
       manifest: S.results.manifest, settingsPending: hasPending(), displayed_window: S.window, cell: S.cell, group: GROUPS[S.group],
       frame: S.frame, time_s: frameTimes()[S.frame - 1], view: S.view, results_folder: S.results.folder || (S.state && S.state.folder) || null,
       time_range: Plot.geom ? [Plot.geom.x0, Plot.geom.x1] : [Plot.x0, Plot.x1], time_zoomed: Plot.x0 !== null, palette: S.palette, range: S.range, order: S.order,
-      plot: S.plotMode, signal: S.results && isDff() ? 'dF/F0' : S.signal, plotted: (Plot.series || []).map((s) => s.label), all_traces_drawn: S.every };
+      plot: S.plotMode, signal: S.results && isDff() ? 'dF/F0' : S.signal, y_axis: Plot.geom ? [Plot.geom.lo, Plot.geom.hi] : null, y_axis_typed: Plot.y[S.signal] || null, plotted: (Plot.series || []).map((s) => s.label), all_traces_drawn: S.every };
   }
   const Save = { format: 'png', size: '8x6', dpi: 300, compression: 'lzw' };
   const inches = () => Save.size === 'screen' ? null : Save.size.split('x').map(Number);
@@ -1230,6 +1325,8 @@
     Plot.dirty = true; drawPlot();   // the page's own plot is measured again for the screen
     return canvas.toDataURL('image/png');
   }
+  /** A saved picture or frame is as wide as Options says (inches × dpi), up to 4 times its recorded pixels; its shape is the recording's. */
+  const pictureScale = () => { const size = inches(), iw = S.info.width || 1; return size ? Math.max(0.25, Math.min(4, size[0] * Save.dpi / iw)) : (Save.dpi >= 600 ? 3 : Save.dpi >= 300 ? 2 : 1); };
   /** The heatmap at the chosen width and resolution; its shape stays as on screen. */
   function heatmapPicture() {
     const canvas = $('heatmap'), size = inches(); S.exportScale = size ? size[0] * Save.dpi / Math.max(1, canvas.clientWidth) : Save.dpi / 96; drawHeatmap();
@@ -1239,11 +1336,7 @@
   const viewMetadata = () => ({ schema: 'simpleca.view-export', schema_version: 1, recording: S.info.recording, plugin_version: S.info.pluginVersion, view: S.view, frame: S.frame, outlines: S.outlines });
   /** What the colours of the picture mean in the view on screen, then what the outlines mean. Each: [colour, text, is an outline]. */
   function pictureKey() {
-    const rest = S.results ? S.results.baselineFrames : (S.state && S.state.rest), frames = rest ? rest[0] + '–' + rest[1] : 'in use';
-    const colours = S.view === 'picture' ? [['#00e000', 'cells (average of all frames)'], ['#ffe600', 'very bright objects (precipitate)'], ['#ff40ff', 'brightened after the stimulus']]
-      : S.view === 'magenta' ? [['#00e000', 'frame ' + S.frame + ', background removed'], ['#ff40ff', 'rise above baseline frames ' + frames]]
-      : S.view === 'change' ? [['#ffffff', 'frame ' + S.frame + ' minus the mean of baseline frames ' + frames]]
-      : S.view === 'flat' ? [['#ffffff', 'frame ' + S.frame + ', background removed']] : [['#ffffff', 'frame ' + S.frame + ', as recorded']];
+    const colours = viewColours().length ? viewColours() : [['#ffffff', 'as recorded']];
     const lines = !S.outlines ? [] : S.results ? [[ON_PICTURE.responded, 'responded', true], [ON_PICTURE.not, 'did not respond', true], [ON_PICTURE.other, 'excluded or unscorable', true]] : [['#ffffff', 'your cells', true]];
     return colours.concat(lines);
   }
@@ -1251,13 +1344,13 @@
    *  key to the colours underneath. One ordinary colour picture. */
   const VIEW_NAMES = { picture: 'colour overview', raw: 'as recorded', flat: 'background removed', magenta: 'response in magenta', change: 'change from baseline' };
   async function viewPicture(frame, labelled) {
-    const f = frame || S.frame; let image = Pic.base;
-    if (S.view !== 'picture') { const reply = await fetch('api/frame?f=' + f + '&mode=' + S.view + '&v=' + encodeURIComponent(Buf.version || ''), { cache: 'no-store' }); if (!reply.ok) throw new Error('Frame ' + f + ' could not be read.'); image = await createImageBitmap(await reply.blob()); }
+    const f = frame || S.frame; let image = S.view === 'background' ? Pic.background : Pic.base;
+    if (!still()) { const reply = await fetch('api/frame?f=' + f + '&mode=' + S.view + '&v=' + encodeURIComponent(Buf.version || ''), { cache: 'no-store' }); if (!reply.ok) throw new Error('Frame ' + f + ' could not be read.'); image = await createImageBitmap(await reply.blob()); }
     if (!image) throw new Error('The picture is not loaded yet.');
-    const iw = S.info.width, ih = S.info.height, scale = Save.dpi >= 600 ? 3 : Save.dpi >= 300 ? 2 : 1, key = labelled ? [] : pictureKey(), font = getComputedStyle(document.body).fontFamily;
+    const iw = S.info.width, ih = S.info.height, scale = pictureScale(), key = labelled ? [] : pictureKey(), font = getComputedStyle(document.body).fontFamily;
     const unit = Math.max(1, iw / 1388), size = Math.round(20 * unit), gap = Math.round(30 * unit), measure = document.createElement('canvas').getContext('2d'); measure.font = size + 'px ' + font;
     const places = []; let x = 14 * unit, row = 0; for (const item of key) { const width = size * 1.4 + measure.measureText(item[1]).width + size * 1.4; if (x + width > iw - 8 && x > 14 * unit) { x = 14 * unit; row++; } places.push([x, row]); x += width; }
-    const keyHeight = labelled ? 0 : Math.round((row + 1) * gap + gap * 1.5), canvas = document.createElement('canvas'); canvas.width = iw * scale; canvas.height = (ih + keyHeight) * scale;
+    const keyHeight = labelled ? 0 : Math.round((row + 1) * gap + gap * 1.5), canvas = document.createElement('canvas'); canvas.width = Math.round(iw * scale); canvas.height = Math.round((ih + keyHeight) * scale);
     const ctx = canvas.getContext('2d'); ctx.scale(scale, scale); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, iw, ih + keyHeight); ctx.drawImage(image, 0, 0, iw, ih);
     const known = !!S.results; ctx.lineJoin = 'round';
     if (S.outlines) S.paths.forEach((path, i) => {
@@ -1276,7 +1369,7 @@
     } else { ctx.fillStyle = '#AEB8C2'; ctx.font = Math.round(size * 0.8) + 'px ' + font; ctx.fillText(S.info.recording, 14 * unit, ih + keyHeight - gap * 0.55); }
     return canvas.toDataURL('image/png');
   }
-  const viewKind = () => 'picture_' + ({ picture: 'colour_overview', raw: 'as_recorded', flat: 'background_removed', magenta: 'response_in_magenta', change: 'change_from_baseline' }[S.view] || S.view) + (S.view === 'picture' ? '' : '_frame' + S.frame);
+  const viewKind = () => 'picture_' + ({ picture: 'colour_overview', background: 'background_areas', raw: 'as_recorded', flat: 'background_removed', magenta: 'response_in_magenta', change: 'change_from_baseline' }[S.view] || S.view) + (still() ? '' : '_frame' + S.frame);
   const badSave = (error) => /fetch/i.test(error.message) ? 'Fiji is not connected. Keep Fiji open, or reopen the analysis from Fiji.' : error.message;
   /** Download through the browser: the same file Save writes (format, size, resolution), plus how it was made. */
   async function save(picture, kind, noteId) {
@@ -1296,7 +1389,7 @@
     try {
       const metadata = Object.assign(S.results ? exportMetadata() : viewMetadata(), { picture: Object.assign({ size: Save.size }, pictureOptions()) }), name = exportName(kind, 'png').replace(/\.png$/, '');
       const reply = await api('export', Object.assign({ name, png: await picture(), csv: csv || null, metadata }, pictureOptions()));
-      note.textContent = 'Saved in ' + reply.folderName + ': ' + reply.saved[0] + (csv ? ', with the numbers (CSV)' : '') + ' ';
+      note.textContent = 'Saved ' + reply.saved[0] + (csv ? ' + CSV' : '') + ' ';
       const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open folder';
       open.addEventListener('click', () => api('open', { what: 'plots' }).catch((error) => { note.className = 'save-note bad'; note.textContent = error.message; }));
       note.appendChild(open);
@@ -1327,22 +1420,40 @@
     dragEdge($('resize-split'), (e) => { const box = document.querySelector('.split').getBoundingClientRect(); return Math.max(20, Math.min(80, (e.clientX - box.left - 7) / box.width * 100)).toFixed(1) + '%'; },
       (value) => { const split = document.querySelector('.split'); if (value) split.style.setProperty('--pic-w', value); else split.style.removeProperty('--pic-w'); }, 'step4.split');
     for (const button of document.querySelectorAll('[data-plot]')) button.addEventListener('click', () => setPlotMode(button.dataset.plot));
-    $('signal').addEventListener('change', () => { S.signal = $('signal').value; Plot.dirty = true; drawPlot(); legend(); });
+    const showY = () => { const now = Plot.y[S.signal] || {}; $('y-min').value = finite(now.lo) ? now.lo : ''; $('y-max').value = finite(now.hi) ? now.hi : ''; };
+    for (const [id, end] of [['y-min', 'lo'], ['y-max', 'hi']]) $(id).addEventListener('input', () => {
+      const text = $(id).value.trim(), value = Number(text), now = Plot.y[S.signal] || (Plot.y[S.signal] = {});
+      now[end] = text !== '' && isFinite(value) ? value : null; Plot.dirty = true; drawPlot();
+    });
+    $('y-auto').addEventListener('click', () => { delete Plot.y[S.signal]; showY(); Plot.dirty = true; drawPlot(); });
+    const setSignal = (value) => { S.signal = Data.signal = value; $('signal').value = value; $('data-signal').value = value; showY(); Plot.dirty = true; drawPlot(); legend(); if (S.results && !$('panel-data').hidden) showData(); };
+    $('signal').addEventListener('change', () => setSignal($('signal').value));
     $('save-plot-folder').addEventListener('click', () => saveToFolder(plotPicture, plotKind(), 'plot-saved', plotNumbers()));
     $('save-heatmap-folder').addEventListener('click', () => saveToFolder(heatmapPicture, 'heatmap', 'heatmap-saved'));
     $('save-picture-folder').addEventListener('click', () => saveToFolder(viewPicture, viewKind(), 'picture-saved'));
     $('save-picture').addEventListener('click', () => save(viewPicture, viewKind(), 'picture-saved'));
     $('outline-width').addEventListener('change', () => { S.outlineWidth = Number($('outline-width').value) || 1; store('step4.outline', $('outline-width').value); drawPicture(); });
     // every Nth frame of the view on screen, each its own labelled picture, in a folder of their own
-    $('save-frames').addEventListener('click', async () => {
+    const framesPanel = $('frames-options'), framesEvery = () => Math.round(Number($('frames-every').value));
+    const framesCount = () => { const every = framesEvery(), ok = every >= 1 && every <= S.info.frames; $('frames-go').disabled = !ok;
+      $('frames-count').textContent = ok ? plural(Math.ceil(S.info.frames / every), 'picture') + ', ' + (Save.format === 'tiff' ? 'TIFF ' + Save.compression.toUpperCase() : 'PNG') + ', ' + Save.dpi + ' dpi.' : 'A whole number from 1 to ' + S.info.frames + '.'; };
+    $('frames-every').addEventListener('input', framesCount); $('frames-cancel').addEventListener('click', () => { framesPanel.hidden = true; });
+    $('frames-every').addEventListener('keydown', (event) => { if (event.key === 'Enter' && !$('frames-go').disabled) $('frames-go').click(); if (event.key === 'Escape') framesPanel.hidden = true; });
+    $('save-frames').addEventListener('click', (event) => {
       const note = $('picture-saved'); note.className = 'save-note';
-      if (S.view === 'picture') { note.className = 'save-note bad'; note.textContent = 'Choose a recording view first (View menu): the colour overview is one still picture.'; return; }
-      const answer = window.prompt('Save every how many frames of “' + (VIEW_NAMES[S.view] || S.view) + '”?\n\nEach is saved as its own picture (' + (Save.format === 'tiff' ? 'TIFF, ' + Save.compression.toUpperCase() : 'PNG') + ', ' + Save.dpi + ' dpi; change this under Options), labelled with its frame and time, with the outlines now shown.', stored('step4.every') || '50');
-      if (answer === null) return; const every = Math.round(Number(answer));
-      if (!(every >= 1) || every > S.info.frames) { note.className = 'save-note bad'; note.textContent = 'Type a whole number from 1 to ' + S.info.frames + '.'; return; }
+      if (still()) { note.className = 'save-note bad'; note.textContent = 'Choose a recording view first: this view is one still picture.'; return; }
+      if (!framesPanel.hidden) { framesPanel.hidden = true; return; }
+      $('frames-every').value = stored('step4.every') || '50'; $('frames-every').max = S.info.frames; framesCount(); framesPanel.hidden = false;
+      const box = $('save-frames').getBoundingClientRect(); framesPanel.style.left = Math.max(8, Math.min(window.innerWidth - 316, box.right - 300)) + 'px'; framesPanel.style.top = ''; framesPanel.style.bottom = '';
+      if (box.top > window.innerHeight / 2) framesPanel.style.bottom = (window.innerHeight - box.top + 6) + 'px'; else framesPanel.style.top = (box.bottom + 6) + 'px';
+      $('frames-every').focus(); $('frames-every').select(); event.stopPropagation();
+    });
+    document.addEventListener('click', (event) => { if (!framesPanel.hidden && !framesPanel.contains(event.target) && event.target.id !== 'save-frames') framesPanel.hidden = true; });
+    // every Nth frame of the view on screen, each its own labelled picture, in a folder of their own
+    $('frames-go').addEventListener('click', async () => {
+      const note = $('picture-saved'), every = framesEvery(); note.className = 'save-note'; framesPanel.hidden = true;
       store('step4.every', String(every));
       const frames = []; for (let f = 1; f <= S.info.frames; f += every) frames.push(f);
-      if (frames.length > 120 && !window.confirm('That is ' + frames.length + ' pictures. Save them all?')) return;
       const stamp = exportName('x', 'png').match(/(\d{8}-\d{6})\.png$/)[1], folder = 'frames_' + viewKind().replace(/^picture_/, '').replace(/_frame\d+$/, '') + '_every_' + every + '_' + stamp, width = String(S.info.frames).length;
       $('save-frames').disabled = true;
       try {
@@ -1362,7 +1473,8 @@
     const showSaveOptions = () => {
       for (const key of Object.keys(saveBoxes)) $(saveBoxes[key]).value = String(Save[key]);
       $('save-compression-label').hidden = Save.format !== 'tiff';
-      const size = inches(); $('save-pixels').textContent = size ? 'The plot will be ' + Math.round(size[0] * Save.dpi) + ' × ' + Math.round(size[1] * Save.dpi) + ' pixels.' : 'The plot keeps its on-screen shape, at ' + Save.dpi + ' dots per inch of screen size.';
+      const size = inches(), wide = S.info ? Math.round(S.info.width * pictureScale()) : 0;
+      $('save-pixels').textContent = (size ? 'Plot ' + Math.round(size[0] * Save.dpi) + ' × ' + Math.round(size[1] * Save.dpi) + ' px.' : 'Plot as on screen, at ' + Save.dpi + ' dpi.') + (wide ? ' Pictures and frames ' + wide + ' px wide' + (size && wide < Math.round(size[0] * Save.dpi) ? ' (4× the recording, the most it allows).' : '.') : '');
     };
     for (const key of Object.keys(saveBoxes)) $(saveBoxes[key]).addEventListener('change', () => { Save[key] = key === 'dpi' ? Number($(saveBoxes[key]).value) : $(saveBoxes[key]).value; store('step4.' + key, String(Save[key])); showSaveOptions(); });
     for (const button of document.querySelectorAll('.save-options-toggle')) button.addEventListener('click', (event) => {
@@ -1384,7 +1496,7 @@
         const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open folder'; open.addEventListener('click', () => api('open', { what: 'plots' }).catch(() => { })); note.appendChild(open);
       } catch (error) { note.className = 'save-note bad'; note.textContent = 'Not saved: ' + (/fetch/i.test(error.message) ? 'Fiji is not connected.' : error.message); }
     });
-    $('data-signal').addEventListener('change', () => { Data.signal = $('data-signal').value; showData(); });
+    $('data-signal').addEventListener('change', () => setSignal($('data-signal').value));
     $('data-back').addEventListener('click', () => { Data.first -= Data.page; showData(); }); $('data-forward').addEventListener('click', () => { Data.first += Data.page; showData(); });
     $('data-download').addEventListener('click', () => download(new Blob([dataCsv()], { type: 'text/csv' }), exportName(dataKind(), 'csv')));
     $('data-save').addEventListener('click', async () => {
@@ -1407,7 +1519,7 @@
       const box = event.target;
       if (!S.draft || box.type === 'file' || ['confirmed', 'control', 'protocol-mode'].includes(box.id)) return;
       if (box.dataset.shown !== undefined) box.classList.toggle('changed', box.value !== box.dataset.shown);
-      if (box.dataset.key === 'Stimulus_onset_s') syncLinks(box.dataset.window);
+      if (box.dataset.frames) applyFrames(box.dataset.window); else if (box.id === 'sampling_hz') applyAllFrames();   // seconds always come from the frames
       draftChanged();
     });
     $('control').addEventListener('change', () => {
@@ -1439,15 +1551,18 @@
     for (const key of FILES) {
       $(key + '-file').addEventListener('change', async () => {
         const file = $(key + '-file').files[0]; if (!file) return;
-        try { if (file.size > 8 * 1024 * 1024) throw new Error('Choose a CSV smaller than 8 MB.'); const content = await file.text(); S.draft[key] = { name: file.name, content }; fileNote(key); draftChanged(); }
+        try { if (file.size > 8 * 1024 * 1024) throw new Error('Choose a CSV smaller than 8 MB.'); const content = await file.text(); S.draft[key] = { name: file.name, content }; fileNote(key); if (key === 'timestamps') S.reapplyFrames = true; draftChanged(); }
         catch (error) { draftError(error); }
       });
-      $(key + '-clear').addEventListener('click', () => { S.draft[key] = null; $(key + '-file').value = ''; fileNote(key); draftChanged(); });
+      $(key + '-clear').addEventListener('click', () => { S.draft[key] = null; $(key + '-file').value = ''; fileNote(key); if (key === 'timestamps') S.reapplyFrames = true; draftChanged(); });
     }
     $('protocol-import').addEventListener('change', async () => {
       const file = $('protocol-import').files[0]; if (!file) return;
       try { let parsed; try { parsed = JSON.parse(await file.text()); } catch (bad) { throw new Error(file.name + ' is not a valid JSON file (' + bad.message + '). Choose a protocol exported from SimpleCa²⁺ or this page.'); }
-        const result = await api('protocol', { protocol: parsed }); const draft = collectDraft(); draft.protocol = result.protocol; S.protocolDrafts = {}; S.note = null; S.unlinked.clear(); fillDraft(draft); $('confirmed').checked = false; draftChanged(); }
+        const timingOf = (protocol) => JSON.stringify([(protocol.windows || []).map((w) => [w.Role].concat(TIME_KEYS.map((k) => (w[k] == null || w[k] === '' ? null : Number(w[k]))))), protocol.field_overrides || null]);
+        const result = await api('protocol', { protocol: parsed }); const draft = collectDraft(), before = timingOf(draft.protocol); draft.protocol = result.protocol; S.protocolDrafts = {}; S.note = null; S.unlinked.clear(); fillDraft(draft);
+        const changed = timingOf(collectDraft().protocol) !== before; if (changed) $('confirmed').checked = false; draftChanged();
+        S.imported = { revision: S.revision, text: 'Imported “' + (result.protocol.name || file.name) + '”. ' + (changed ? 'Its timing replaced yours: check it, then tick the box.' : 'The timing is unchanged.') }; showState(); }
       catch (error) { draftError(error); }
       finally { $('protocol-import').value = ''; }
     });
@@ -1457,7 +1572,7 @@
     });
     $('analyze').addEventListener('click', async () => {
       if (validateDraft(collectDraft()).errors.length) { $('validation').scrollIntoView({ block: 'nearest' }); return; }
-      if (!$('confirmed').checked) { S.note = 'Confirm the frame rate or timestamps, baseline and stimulus timing using the checkbox above.'; showState(); $('confirmed').focus(); return; }
+      if (!$('confirmed').checked) { S.note = 'Tick “Timing checked” first.'; showState(); $('confirmed').focus(); return; }
       if (!S.state.engineReady) { S.note = 'Choose “Set up analysis engine” once, then run the analysis.'; showState(); $('setup').focus(); return; }
       S.saving = true; S.note = null; showState();
       try { await syncDraft(); await send('analyze', { draft: collectDraft(), confirmed: true }); }

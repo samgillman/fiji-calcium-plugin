@@ -194,8 +194,8 @@ details[open] > summary { margin-bottom: 8px; }
 .caption > span { overflow: visible; }
 @media (max-height: 850px) and (min-width: 801px) {
   .layout { flex: none; min-height: 0; align-items: flex-start; }
-  aside { position: sticky; top: 10px; max-height: calc(100vh - 20px); }
-  .settings-scroll { flex-basis: 300px; min-height: 180px; }
+  aside { position: sticky; top: 10px; max-height: calc(100vh - 78px); }
+  .settings-scroll { flex: 0 1 auto; min-height: 180px; }
   main { min-height: 720px; }
   .panel { min-height: 350px; }
   .scroller { min-height: 300px; max-height: 65vh; }
@@ -304,11 +304,6 @@ body.has-results .workspace-heading { display: none; }
 .toolbar.dark select.quiet:hover, .toolbar.dark select.quiet:focus { border-color: #33404d; color: #E6EBF0; }
 
 /* stimulus timing: linked fields, messages beside the field, the frames each window uses, and the windows under the slider */
-.window-editor .row.linked input { display: none; }
-.window-editor .row .link-text { display: none; color: var(--gray-600); font-size: 12px; text-align: right; }
-.window-editor .row.linked .link-text { display: inline; }
-.window-editor .row.linked:has([aria-invalid]) .link-text { color: var(--bad); }
-.link-toggle { display: block; margin: -3px 0 6px auto; font-size: 11px; }
 .field-error { color: var(--bad); font-size: 12px; margin: -2px 0 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; text-align: right; }
 .validation .repair { margin-left: 4px; }
 .frames-preview { margin: 6px 0; font-size: 12px; color: var(--gray-600); font-variant-numeric: tabular-nums; }
@@ -319,3 +314,64 @@ body.has-results .workspace-heading { display: none; }
 #time-windows i { position: absolute; top: 0; height: 100%; border-radius: 2px; }
 #time-windows .baseline { background: #9AA5B1; } #time-windows .scoring { background: #E08A1E; }
 #time-windows .stimulus { width: 2px; height: 9px; top: -3px; margin-left: -1px; background: #1F2933; }
+
+/* ---- 2026.11.20.15: the settings column. One Timing card, every control the same size on one right edge, from/to pairs on
+   one row, a short Run box. */
+#side { font-size: 13px; }
+#side .card { padding: 10px 12px; }
+#side .card h2 { font-size: 14px; margin: 0 0 4px; }
+#side .row { display: grid; grid-template-columns: minmax(0, 1fr) 176px; align-items: center; gap: 8px; margin: 4px 0; min-height: 28px; font-size: 13px; }
+#side .row > span:first-child { white-space: normal; color: var(--gray-900); }
+#side input:not([type]), #side input[inputmode], #side select { height: 28px; font-size: 13px; padding: 3px 7px; box-sizing: border-box; }
+#side .row > input, #side .row > select, #side .row .wide { width: 100%; max-width: none; min-width: 0; }
+#side .pair { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 5px; align-items: center; }
+#side .pair > input, #side .cell input { width: 100%; min-width: 0; }
+#side .cell { display: flex; gap: 3px; min-width: 0; align-items: center; }
+/* a row that follows the stimulus: its frames on a dashed chip; a click swaps in two boxes and "auto" puts the chip back */
+.derived[data-linked="1"] .pair { display: none !important; }
+.derived:not([data-linked="1"]) > .link-toggle { display: none; }
+#side .derived .pair { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; gap: 4px; width: 100%; }
+.link-toggle { flex: 1 1 auto; min-width: 0; height: 28px; padding: 0 7px; font-size: 13px; text-align: left; color: var(--gray-900); border: 1px dashed #C5CED8; border-radius: var(--radius-sm); background: var(--gray-50); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.link-toggle:hover:not(:disabled) { border-color: var(--blue); background: var(--blue-light); }
+.relink { height: 28px; padding: 0 5px; font-size: 11px; color: var(--gray-600); border: 1px solid #C5CED8; border-radius: var(--radius-sm); background: #fff; cursor: pointer; }
+.derived:has([aria-invalid]) .link-toggle { border-color: var(--bad); color: var(--bad); }
+.fiji-frames { margin: 2px 0 4px; }
+#side .with-button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px; align-items: center; }
+#side .with-button input { width: 100%; min-width: 0; }
+.from-frame { display: inline-block; margin: 0; height: 28px; padding: 0 8px; font-size: 12px; white-space: nowrap; }
+.suggestion { margin: -2px 0 4px; text-align: right; }
+.frames-preview { margin: 4px 0 2px; }
+.window-editor { margin-top: 8px; padding-top: 6px; }
+.window-editor h3 { font-size: 13px; margin: 0 0 2px; color: var(--gray-600); font-weight: 600; }
+.window-editor .rule-summary { margin: 0; padding: 0; background: none; font-size: 12px; font-weight: 400; color: var(--gray-900); }
+#side summary { min-height: 28px; display: flex; align-items: center; gap: 6px; font-size: 13px; }
+#side summary::before { content: '▸'; color: var(--gray-600); font-size: 11px; } #side details[open] > summary::before { content: '▾'; }
+#side summary::-webkit-details-marker { display: none; } #side summary { list-style: none; }
+#side details[open] > summary { margin-bottom: 4px; }
+#side .check { align-items: center; min-height: 28px; } #side .check input { margin-top: 0; }
+#side #rate-note { margin: -2px 0 4px; text-align: right; }
+.settings-scroll { gap: 8px; }
+aside { gap: 8px; }
+/* the Run box: tick, button, one status line */
+.run-box { gap: 6px; padding: 8px 10px; }
+.run-box .confirm { font-size: 13px; }
+.run-box .status { min-height: 0; max-height: 3em; overflow: hidden; font-size: 12px; }
+.run-box .status:empty, #open-feedback:empty { display: none; }
+.run-box .validation { max-height: 110px; }
+.run-box .actions { align-items: center; }
+#log:disabled { display: none; }
+#discard { font-size: 12px; padding: 5px 8px; }
+/* Save and Download under the movie sit on a dark bar: dark buttons, light words (they looked switched off in pale grey on white) */
+.caption.dark button { background: #1c252e; color: #E6EBF0; border-color: #33404d; }
+.caption.dark button.ghost { background: transparent; border-color: transparent; color: #9fd3ff; }
+.caption.dark button:hover:not(:disabled) { background: #26323d; border-color: #5BC0FF; }
+.caption.dark button:disabled { color: #5d6b78; }
+.save-options .inline { display: inline-flex; align-items: center; gap: 6px; color: var(--gray-900); } .save-options input[type=number] { width: 72px; font: inherit; padding: 4px 7px; border: 1px solid #C5CED8; border-radius: var(--radius-sm); }
+/* what the colours of the view mean: filled swatches beside the outline swatches */
+.view-key { display: inline-flex; flex-wrap: wrap; gap: 4px 12px; } .view-key:empty { display: none; }
+.caption .chip i.fill { width: 11px; height: 11px; border-radius: 2px; border: 1px solid rgba(255,255,255,.35); }
+#side details.card > h3, #side details.card h3 { font-size: 12px; margin: 10px 0 2px; color: var(--gray-600); font-weight: 600; text-transform: none; }
+#side details.card h3:first-of-type { margin-top: 2px; }
+.tiles #open-folder { align-self: center; margin-left: auto; }
+.y-axis { display: inline-flex; align-items: center; gap: 5px; color: var(--gray-600); } .y-axis i { font-style: normal; }
+.y-axis input { width: 58px; height: 28px; box-sizing: border-box; font-size: 13px; padding: 3px 6px; }

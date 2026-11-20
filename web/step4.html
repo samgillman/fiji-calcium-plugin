@@ -12,8 +12,6 @@
   <div class="brand">SimpleCa²⁺ <span>in Fiji · Step 4</span></div>
   <div class="recording" id="recording" title=""></div>
   <div class="grow"></div>
-  <button class="ghost" id="open-folder" type="button" disabled hidden>Results folder</button>
-  <button class="ghost" id="toggle-help" type="button" title="Show or hide the explanations under the settings and plots">Show explanations</button>
   <button class="ghost" id="toggle-settings" type="button">Hide settings</button>
   <button class="ghost" id="close-page" type="button">Close analysis</button>
   <span class="pill" id="engine">Checking the analysis engine…</span>
@@ -23,55 +21,51 @@
 
 <div class="layout">
   <aside id="side" aria-label="Analysis settings">
-    <div class="settings-title"><h1>Set up the analysis</h1><p class="fine help">Review the movie first. Then check the timing and choose a response rule.</p></div>
     <div class="settings-scroll">
-    <section class="card">
-      <h2>1. Check the recording time</h2>
-      <label class="row"><span>Frames per second</span><input id="sampling_hz" inputmode="decimal" aria-describedby="time-help"></label>
-      <p class="fine help" id="time-help">Seconds are estimates until you confirm the frame rate or supply recorded timestamps.</p>
-      <div class="row"><span>F₀ frames (set the ΔF/F₀ zero)</span><span class="pair"><input id="baseline_start" inputmode="numeric" aria-label="Baseline first frame"><i>to</i><input id="baseline_end" inputmode="numeric" aria-label="Baseline last frame"></span></div>
-      <p class="fine help">F₀ frames set the zero for ΔF/F₀. The noise baseline of each stimulus, below, sets how large a rise must be.</p>
-      <details><summary>Use recorded timestamps</summary><p class="fine">A CSV with a Time_s column in seconds, one row per frame. It takes priority over the frame rate.</p>
-        <label class="file-label">Timestamp CSV <input id="timestamps-file" type="file" accept=".csv,text/csv"></label>
-        <div class="file-note"><span id="timestamps-name">No file selected</span><button id="timestamps-clear" class="ghost small" type="button" hidden>Remove</button></div>
-      </details>
-    </section>
     <section class="card" id="protocol-settings">
-      <h2>2. Set the stimulus and rule</h2>
-      <label class="row"><span>Rule type</span><select id="protocol-mode"><option value="2">Elapsed time / custom</option><option value="1">Legacy consecutive samples</option></select></label>
-      <p class="fine help" id="rule-help">Starter settings are provisional. Check them against your controls before using responder percentages.</p>
-      <p class="fine help">Each rule type keeps its own draft settings when you switch.</p>
+      <h2>Timing</h2>
+      <label class="row"><span>Frames per second</span><input id="sampling_hz" inputmode="decimal" aria-describedby="time-help"></label>
+      <p class="fine" id="rate-note" hidden></p>
+      <p class="fine help" id="time-help">Seconds are estimates until you confirm the frame rate or supply recorded timestamps.</p>
       <div id="windows-editor"></div>
       <label class="check"><input type="checkbox" id="control"> Include a positive control</label>
-      <p class="fine" id="control-help" hidden>Enter the control's actual baseline, addition time and scoring window within this recording.</p>
-      <details id="protocol-details"><summary>Protocol name, files and overrides</summary>
-        <label class="stack">Protocol name<input id="protocol-name" class="wide"></label>
-        <label class="stack">Validation status<select id="protocol-validation"><option value="provisional">Provisional</option><option value="user_defined">User defined</option><option value="validated_by_user">Validated by user</option></select></label>
-        <div class="actions"><label class="file-button">Import protocol JSON<input type="file" id="protocol-import" accept=".json,application/json"></label><button id="protocol-export" type="button">Export protocol</button></div>
-        <label class="stack">Field timing overrides (JSON)<textarea id="field-overrides" rows="3" spellcheck="false" aria-describedby="overrides-help"></textarea></label>
-        <p class="fine help" id="overrides-help">Optional. Imported overrides are preserved. Use an array of field timing overrides from a SimpleCa protocol, or leave blank.</p>
-      </details>
+      <p class="fine" id="control-help" hidden>Enter when the control was added and when to score it.</p>
     </section>
-    <details class="card" id="optional-settings"><summary>Experiment details and diagnostics</summary>
+    <details class="card" id="optional-settings"><summary>Labels for the output</summary>
       <label class="stack">Condition<input id="condition" class="wide" placeholder="Optional"></label>
       <label class="stack">Biological unit<input id="biological_unit" class="wide" placeholder="Optional: animal, culture, etc."></label>
-      <p class="fine">Cell counts do not establish the number of independent biological replicates.</p>
+      <p class="fine help">Cell counts do not establish the number of independent biological replicates.</p>
+    </details>
+    <details class="card" id="protocol-details"><summary>Advanced</summary>
+      <h3>Recorded timestamps</h3>
+      <p class="fine help">A CSV with a Time_s column in seconds, one row per frame. It replaces the frame rate.</p>
+      <label class="file-label">Timestamp CSV <input id="timestamps-file" type="file" accept=".csv,text/csv"></label>
+      <div class="file-note"><span id="timestamps-name">No file selected</span><button id="timestamps-clear" class="ghost small" type="button" hidden>Remove</button></div>
+      <h3>Rule type and protocol file</h3>
+      <label class="row"><span>Rule type</span><select id="protocol-mode"><option value="2">Elapsed time / custom</option><option value="1">Legacy consecutive samples</option></select></label>
+      <p class="fine help" id="rule-help">Starting values. Check against your controls.</p>
+      <label class="stack">Protocol name<input id="protocol-name" class="wide"></label>
+      <label class="stack">Validation status<select id="protocol-validation"><option value="provisional">Provisional</option><option value="user_defined">User defined</option><option value="validated_by_user">Validated by user</option></select></label>
+      <div class="actions"><label class="file-button">Import protocol JSON<input type="file" id="protocol-import" accept=".json,application/json"></label><button id="protocol-export" type="button">Export protocol</button></div>
+      <label class="stack">Field timing overrides (JSON)<textarea id="field-overrides" rows="3" spellcheck="false" aria-describedby="overrides-help"></textarea></label>
+      <p class="fine help" id="overrides-help">Optional: an array of field timing overrides from a SimpleCa protocol.</p>
+      <h3>Diagnostic files</h3>
       <label class="file-label">Sensitivity grid CSV<input id="sensitivity-file" type="file" accept=".csv,text/csv"></label>
       <div class="file-note"><span id="sensitivity-name">No file selected</span><button id="sensitivity-clear" class="ghost small" type="button" hidden>Remove</button></div>
       <label class="file-label">Negative-control windows CSV<input id="negative_control-file" type="file" accept=".csv,text/csv"></label>
       <div class="file-note"><span id="negative_control-name">No file selected</span><button id="negative_control-clear" class="ghost small" type="button" hidden>Remove</button></div>
-      <p class="fine help">Diagnostics are saved separately and do not change the primary calls. Available for version 2 protocols.</p>
+      <p class="fine help">Diagnostics are saved separately and do not change the calls. Version 2 protocols only.</p>
+      <h3>This page</h3>
+      <div class="actions"><button class="small" id="toggle-help" type="button" title="Show or hide the explanations under the settings and plots">Show explanations</button><button id="log" class="small" type="button" disabled>View log</button></div>
     </details>
     </div>
     <section class="run-box">
-      <h2>3. Run the analysis</h2>
-      <label class="check confirm"><input type="checkbox" id="confirmed"> I checked the frame rate or timestamps, baseline and stimulus timing</label>
+      <label class="check confirm"><input type="checkbox" id="confirmed"> <span id="confirm-text">Timing checked</span></label>
       <div id="validation" class="validation" role="status" hidden></div>
-      <div class="actions"><button class="primary" id="analyze" type="button" disabled>Run analysis</button><button id="cancel" type="button" disabled>Cancel</button></div>
-      <button id="discard" type="button" hidden>Discard pending changes</button>
+      <div class="actions"><button class="primary" id="analyze" type="button" disabled>Run analysis</button><button id="cancel" type="button" disabled>Cancel</button><button id="discard" type="button" hidden>Discard changes</button></div>
       <div class="progress" id="progress" hidden><div id="bar"></div></div>
       <p class="status" id="status" role="status"></p>
-      <div class="actions"><button id="setup" type="button" disabled>Set up analysis engine</button><button id="log" type="button" disabled>View log</button></div>
+      <div class="actions"><button id="setup" type="button" disabled>Set up analysis engine</button></div>
       <p class="fine" id="open-feedback" role="status"></p>
     </section>
     <p class="fine" id="version"></p>
@@ -86,8 +80,9 @@
       <button class="tile" id="tile-registered" type="button" data-group="0" title="Show all cells"><b>–</b><span>cells registered</span></button>
       <button class="tile" id="tile-excluded" type="button" data-group="3" title="Show only excluded cells"><b>–</b><span>excluded</span></button>
       <button class="tile" id="tile-unscorable" type="button" data-group="4" title="Show only unscorable cells"><b>–</b><span>unscorable</span></button>
+      <button class="small" id="open-folder" type="button" disabled hidden>Results folder</button>
     </div>
-    <details id="quality-review" class="quality-review" hidden><summary id="quality-summary"></summary><ul id="quality-list"></ul><button id="quality-filter" type="button">Show cells needing review</button><p class="fine">Review flags do not change saved response calls or exclude cells automatically.</p></details>
+    <details id="quality-review" class="quality-review" hidden><summary id="quality-summary"></summary><ul id="quality-list"></ul><button id="quality-filter" type="button">Show cells needing review</button><p class="fine help">Flags do not change the calls or exclude cells.</p></details>
 
     <nav class="tabs" role="tablist">
       <button class="tab on" data-tab="review" type="button" role="tab">Cells and traces</button>
@@ -108,7 +103,7 @@
         <label class="speed-label">Speed<select id="speed" aria-label="Playback speed"><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10" selected>10×</option><option value="20">20×</option><option value="50">50×</option></select></label>
         <span id="time-label" aria-live="off">Frame 1</span>
       </div>
-      <p class="fine" id="playback-note">Loading the recording…</p>
+      <p class="fine help" id="playback-note">Loading the recording…</p>
       <div class="toolbar">
         <label id="window-select-label" hidden>Response window <select id="response-window"></select></label>
         <label id="group-label" hidden>Show <select id="group"><option>All cells</option></select></label>
@@ -121,21 +116,21 @@
       <div class="split">
         <div class="card flush" id="picture-card">
           <div class="toolbar dark">
-            <label class="view-label">View <select id="view" aria-label="Recording display"><option value="raw">Recording, as recorded</option><option value="flat">Recording, background removed</option><option value="magenta">Response in magenta</option><option value="change">Change from baseline</option><option value="picture">Static colour overview</option></select></label>
+            <label class="view-label">View <select id="view" aria-label="Recording display"><option value="raw">Recording</option><option value="flat">Background removed</option><option value="magenta">Response in magenta</option><option value="change">Change from baseline</option><option value="picture">Colour overview</option><option value="background" title="The pixels taken as each cell's background: the darkest quarter of a ring 6 to 40 pixels outside its outline, without other cells or very bright objects">Background areas</option></select></label>
             <label class="check"><input type="checkbox" id="outlines" checked> All outlines</label>
-            <select id="outline-width" class="quiet" aria-label="Thickness of the cell outlines" title="Thickness of the cell outlines, on screen and in saved pictures"><option value="0.6">thin lines</option><option value="1" selected>normal lines</option><option value="1.8">thick lines</option><option value="2.8">very thick lines</option></select>
             <button id="zoom-cell" type="button" disabled>Zoom to cell</button>
             <button id="zoom-all" type="button">Whole picture</button>
           </div>
           <div class="stage"><canvas id="picture"></canvas><div class="movie-message" id="movie-message" role="status">Loading the recording…</div></div>
-          <div class="caption dark"><span id="call-legend" hidden><span class="chip"><i style="background:#3ddbb5"></i>responded</span><span class="chip"><i style="background:#ffa24a"></i>did not respond</span><span class="chip"><i class="dash"></i>excluded or unscorable</span></span><span class="grow"></span><span id="picture-note"></span><span class="save-note" id="picture-saved" role="status"></span><button class="small" id="save-picture-folder" type="button" disabled title="Saves the whole picture in this view, with the outlines shown and a key to the colours, into the plots folder">Save picture</button><button class="ghost small" id="save-picture" type="button" disabled title="Downloads the same picture through the browser">Download</button><button class="small" id="save-frames" type="button" disabled title="Saves every Nth frame of the view on screen as its own picture, each labelled with its frame and time and with the outlines shown, into a folder inside plots">Save frames…</button></div>
+          <div class="caption dark"><span id="call-legend" hidden><span class="chip"><i style="background:#3ddbb5"></i>responded</span><span class="chip"><i style="background:#ffa24a"></i>did not respond</span><span class="chip"><i class="dash"></i>excluded or unscorable</span></span><span id="view-key" class="view-key"></span><span class="grow"></span><span id="picture-note"></span><span class="save-note" id="picture-saved" role="status"></span><button class="ghost small save-options-toggle" type="button" title="File format, size, resolution and outline thickness of saved pictures">Options</button><button class="small" id="save-picture-folder" type="button" disabled title="Saves the whole picture in this view, with the outlines shown and a key to the colours, into the plots folder">Save picture</button><button class="ghost small" id="save-picture" type="button" disabled title="Downloads the same picture through the browser">Download</button><button class="small" id="save-frames" type="button" disabled title="Saves every Nth frame of the view on screen as its own picture, each labelled with its frame and time and with the outlines shown, into a folder inside plots">Save frames…</button></div>
         </div>
         <div class="resizer" id="resize-split" role="separator" aria-orientation="vertical" title="Drag to give the movie or the plot more room. Double-click to reset."></div>
         <div class="card flush" id="plot-card" hidden>
           <div class="plot-head">
             <div class="seg" role="group" aria-label="What the plot shows"><button type="button" class="on" data-plot="mean" aria-pressed="true" title="The average trace (± SEM) of the cells chosen under Show, and nothing else">Average</button><button type="button" data-plot="cell" aria-pressed="false" title="The selected cell's trace with its thresholds, over the average">One cell + average</button><button type="button" data-plot="calls" aria-pressed="false" title="The average of the cells that responded against the average of those that did not">Responders vs non-responders</button></div>
-            <label>Signal <select id="signal" aria-label="Which signal the plot shows" title="ΔF/F₀ is what the response calls use. The gray values show the measurement itself, with or without the background taken off."><option value="dff">ΔF/F₀</option><option value="corrected">Gray levels above background</option><option value="raw">Raw gray values, not corrected</option><option value="rawdff">ΔF/F₀ of raw values (no background removed)</option></select></label>
             <label class="check" id="every-label" hidden title="Draws every cell's own trace behind the average"><input type="checkbox" id="every"> All traces</label>
+            <label>Signal <select id="signal" aria-label="Which signal the plot shows" title="ΔF/F₀ is what the response calls use. The gray values show the measurement itself, with or without the background taken off."><option value="dff">ΔF/F₀</option><option value="corrected">Gray levels, background removed</option><option value="raw">Raw gray levels</option><option value="rawdff">ΔF/F₀ of raw</option></select></label>
+            <span class="y-axis" title="Limits of the vertical axis. Leave a box empty for the automatic limit."><span>Y axis</span><input id="y-min" inputmode="decimal" placeholder="auto" aria-label="Lower limit of the Y axis"><i>to</i><input id="y-max" inputmode="decimal" placeholder="auto" aria-label="Upper limit of the Y axis"><button class="ghost small" id="y-auto" type="button" title="Back to the automatic limits">auto</button></span>
           </div>
           <div class="legend" id="legend"></div>
           <div class="stage light"><canvas id="plot"></canvas><div class="empty" id="plot-empty">Run the analysis to see every cell's trace.</div></div>
@@ -154,8 +149,8 @@
           <option value="amp">Peak amplitude</option>
           <option value="orig">Original order</option></select></label>
         <label>Colours <select id="palette" title="Blue–white–red keeps values below zero. The other palettes start at zero, so anything below zero takes the darkest colour.">
-          <option value="signed">Blue–white–red (shows values below zero)</option>
-          <option value="plasma" selected>plasma (as in SimpleCa)</option><option value="viridis">viridis</option><option value="magma">magma</option>
+          <option value="signed">Blue–white–red</option>
+          <option value="plasma" selected>plasma</option><option value="viridis">viridis</option><option value="magma">magma</option>
           <option value="inferno">inferno</option><option value="cividis">cividis</option></select></label>
         <label>Range <select id="range" title="“99 % of values” stops one extreme cell from washing out all the others; values beyond the range take the end colour.">
           <option value="robust">99 % of values</option><option value="full">Largest value</option></select></label>
@@ -169,17 +164,17 @@
     </section>
 
     <section class="panel" id="panel-metrics" hidden><div class="toolbar"><label>Table <select id="metrics-table"></select></label><div class="grow"></div><span class="save-note" id="metrics-saved" role="status"></span><button class="small" id="metrics-save" type="button" disabled title="Saves the table shown as a CSV into the plots folder beside your tables">Save table</button><button class="ghost small" id="metrics-download" type="button" disabled title="Downloads the table shown as a CSV through the browser">Download CSV</button></div><p class="fine" id="metric-help"></p><div class="scroller"><table id="table-metrics"></table></div></section>
-    <section class="panel" id="panel-calls" hidden><div class="toolbar"><label class="check"><input id="all-call-columns" type="checkbox"> Show all saved columns</label><span class="fine">Cell, response and quality fields are shown first. Saved CSVs retain every column.</span></div><div class="scroller"><table id="table-calls"></table></div></section>
+    <section class="panel" id="panel-calls" hidden><div class="toolbar"><label class="check"><input id="all-call-columns" type="checkbox"> Show all saved columns</label><span class="fine help">Saved CSVs keep every column.</span></div><div class="scroller"><table id="table-calls"></table></div></section>
     <section class="panel" id="panel-data" hidden>
       <div class="toolbar">
-        <label>Signal <select id="data-signal" aria-label="Which values the table holds"><option value="dff">ΔF/F₀</option><option value="corrected">Gray levels above background</option><option value="raw">Raw gray values, not corrected</option><option value="rawdff">ΔF/F₀ of raw values (no background removed)</option></select></label>
+        <label>Signal <select id="data-signal" aria-label="Which values the table holds"><option value="dff">ΔF/F₀</option><option value="corrected">Gray levels, background removed</option><option value="raw">Raw gray levels</option><option value="rawdff">ΔF/F₀ of raw</option></select></label>
         <button id="data-back" type="button" title="Earlier frames" aria-label="Earlier frames">‹</button><span id="data-range" class="fine"></span><button id="data-forward" type="button" title="Later frames" aria-label="Later frames">›</button>
         <div class="grow"></div>
         <span class="save-note" id="data-saved" role="status"></span>
         <button class="small" id="data-save" type="button" disabled title="Saves the whole table (every frame, every cell) as a CSV into the plots folder beside your tables">Save table</button>
         <button class="ghost small" id="data-download" type="button" disabled title="Downloads the whole table as a CSV through the browser">Download CSV</button>
       </div>
-      <p class="fine help">One row per frame, one column per cell: the values every plot on this page is drawn from. The saved file has every frame and names the cells by their full ID.</p>
+      <p class="fine help">One row per frame, one column per cell. The saved file has every frame and the full cell IDs.</p>
       <div class="scroller"><table id="table-data"></table></div>
     </section>
     <section class="panel" id="panel-counts" hidden><div class="scroller"><table id="table-counts"></table></div><p class="fine pad">Counts describe the cells you chose; cell N is not animal N.</p></section>
@@ -190,8 +185,14 @@
   <label>Size <select id="save-size"><option value="screen">As on screen</option><option value="6x4">6 × 4 in</option><option value="7x5">7 × 5 in</option><option value="8x6" selected>8 × 6 in</option><option value="10x7.5">10 × 7.5 in</option><option value="12x8">12 × 8 in</option></select></label>
   <label>Resolution <select id="save-dpi"><option value="150">150 dpi</option><option value="300" selected>300 dpi</option><option value="600">600 dpi</option></select></label>
   <label id="save-compression-label">TIFF compression <select id="save-compression"><option value="lzw" selected>LZW</option><option value="zip">ZIP</option><option value="none">None</option></select></label>
+  <label>Cell outlines <select id="outline-width" title="Thickness of the cell outlines, on screen and in saved pictures"><option value="0.6">thin</option><option value="1" selected>normal</option><option value="1.8">thick</option><option value="2.8">very thick</option></select></label>
   <p class="fine" id="save-pixels"></p>
-  <p class="fine">Used by Save and Download for the plot and the heatmap. LZW and ZIP lose nothing. A heatmap keeps its on-screen shape at the chosen width.</p>
+  <p class="fine">For every saved picture. Heatmaps, pictures and frames keep their shape at the chosen width.</p>
+</div>
+<div class="save-options" id="frames-options" hidden role="dialog" aria-label="Save frames">
+  <label>Every <span class="inline"><input id="frames-every" type="number" min="1" step="1" inputmode="numeric" aria-label="Save every how many frames"> frames</span></label>
+  <p class="fine" id="frames-count"></p>
+  <div class="actions"><button class="primary small" id="frames-go" type="button">Save frames</button><button class="small" id="frames-cancel" type="button">Cancel</button></div>
 </div>
 <div class="tip" id="tip" hidden></div>
 <script src="app.js"></script>

@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026.11.20.15
+
+Step 4 page, stimulus timing:
+
+- **One input, in frames: "Stimulus added after frame".** F₀ frames, the baseline and the response window follow it and are shown beside it as dashed chips ("1–20", "same as F₀", "21–300 (end)"). A click on a chip gives that row two frame boxes of its own; **auto** puts it back. **Use frame N** sets the stimulus to the movie frame on screen.
+- Windows are defined by frame. The seconds sent to the analysis are taken from the recording's own frame times (the stimulus is the time of the first frame after it; a baseline runs up to, not including, the frame after its last frame; the response window runs to its last frame, both ends included), never from a typed round number. The same entry gives the same frames whatever the frame interval, and "to the end" always means the last frame. The protocol file format is unchanged.
+- New starting rule: F₀ is the last 20 frames before the stimulus (all of them when there are fewer), and the baseline is the same frames as F₀. Before, the starting baseline was every frame from the start of the recording.
+- The frames used to choose cells in Fiji are shown as their own line ("Cells chosen in Fiji on frames 1–113") and no longer decide the stimulus once an analysis has been run: the next recording starts from the stimulus frame of your last analysis ("Same as your last recording"). When the last session's settings for this recording are filled in, the page says so and offers **Use Fiji's values**.
+- When the frames used to choose cells run past the stimulus, the page says so: "Cells were chosen on frames 1–74. Frames 21–74 are after the stimulus, so these cells were not chosen blind to it."
+- A row set separately that is wrong gets one message beside it, naming the frames, with a one-click repair ("baseline frames 10–12 come after the stimulus. Use 1–9"). A setting that guarantees no call for any cell (a baseline of fewer frames than the rule needs, a response window past the last frame) now stops the run instead of warning that cells "may" be unscorable. A control that was just ticked asks for its one number in one message.
+- The tick box reads back what it confirms ("Timing checked: 1 frame/s, stimulus after frame 20"). When the typed frame rate differs from the recording's own, the page shows the file's rate with **Use it**.
+- A protocol import says what it did, and unticks the box only when the timing changed. A run in which no cell got a call says so in the headline and the status line, without "0 of 0 evaluable cells" or "including 0 responders".
+
+Step 4 page, layout and wording:
+
+- The settings column is one **Timing** card that fits without the 300-pixel scrolling box: every control the same size on one right edge; the rule is one line that opens its settings; stimulus name, rule type, protocol file, recorded timestamps, diagnostic files, **Show explanations** and **View log** are under **Advanced**; condition and biological unit are under **Labels for the output**. The Run box is the tick, the button and one status line.
+- Shorter words throughout: "response window" (no "strip along the top"), "baseline", "Background removed", "Raw gray levels", "Done." The legend, menus, notes and messages lost their parentheses and second sentences. One name per thing: baseline and response window, in the settings, the legend and the messages.
+- The buttons under the movie (Save picture, Download, Save frames…) are dark with light text; they looked switched off. **Save frames…** opens a small panel on the page instead of the browser's pop-up boxes. Pictures and frames follow **Options** (width in inches × dpi, up to four times the recorded pixels), and the picture has its own Options button; outline thickness moved there.
+- **Y axis** boxes beside the plot buttons set the plot's vertical limits (empty = automatic), on screen and in saved plots.
+- One **Signal** setting for the plot and the Processed data table. "All traces" sits with the plot buttons. The Results folder button is beside the results; "Analysis engine ready" shows only when the engine is not ready.
+- **Background areas** in the View menu: the pixels taken as each cell's background, in blue, on the all-frames picture.
+- Each view has colour swatches under the picture (green and magenta for "Response in magenta", and so on) instead of a sentence.
+- **"Response in magenta" and "Change from baseline" no longer show noise as a response.** A change is drawn at full strength only from twice what a resting frame shows by itself, so a recording in which nothing responds stays dark. A brightening beside an equal darkening (a bright object that shifted) is taken out. Both views count from each frame's own middle value. Display only.
+
+Choosing cells:
+
+- **Outlines too thin to be a cell are no longer accepted by themselves.** Cellpose sometimes draws a strip along the rim of a cell it has already outlined (seen as cells 78 and 79 on one cell). An outline under 4 pixels wide on average, or with roundness under 0.2, is left out when it lies along another outline, and otherwise kept as "unsure" (never accepted without a click). The log gives both counts.
+- **Cell IDs are the same in every session.** A new outline's ID is worked out from the outline itself (its place and pixels), so tables from two sessions on the same outlines can be matched by cell. Before, every Fiji session gave the same cells new random IDs.
+
+Also in this build: the linked-timing work of the cloud session is merged (its seconds boxes are replaced by the frame editor above; its counting of baseline samples and its windows under the frame slider are kept). The plugin window stays an ordinary window.
+
 ## 2026.11.20.14
 
 - **Save options for pictures** on the Step 4 page (Options, beside Save plot and Save heatmap): format **PNG or TIFF**, size (6 × 4, 7 × 5, 8 × 6, 10 × 7.5 or 12 × 8 inches, or as on screen), resolution **150, 300 or 600 dpi**, and TIFF compression **LZW, ZIP or none**. The resolution is written into the file, so it opens at the chosen size. A saved plot now carries its title and legend and leaves out the time cursor. Download gives the same file as Save. The choices are remembered. PDF and SVG are not offered yet.
@@ -100,7 +131,6 @@ Plugin:
 - Step 4: when two time fields disagree, both are marked and one message sits beside the field to change, stating both values and offering the repair, for example "Set to 20 s". A problem is described once: the plugin's general message is not added to the page's specific one.
 - Step 4: a typed time that reads the same as a frame's time is stored as that frame's exact time, so a retyped value no longer differs from an untouched one by a hidden fraction of a second.
 - Step 4: the warning that the F₀ frames reach the stimulus offers **Use frames 1–N**. The starting stimulus time is labelled as a suggestion until it is changed. "Resting baseline frames" is now **F₀ frames (set the ΔF/F₀ zero)** and "Response baseline" is **Noise baseline**; the fields are in the order they occur in time.
-- The plugin window now stays above the picture being worked on only. Any other Fiji window that is clicked, such as Brightness/Contrast or the ROI Manager, comes in front of it.
 
 
 ## 2026.11.20.6

@@ -10,7 +10,8 @@ def steps = new Expando(n: 300, blindFirst: 1, blindLast: 113, found: true, b0: 
 def handed = Settings.framesFromFiji(steps)
 assert handed.first == 94 && handed.last == 113 && handed.note.contains('frames you confirmed in Fiji (1–113)') : 'a long range: the last 20 frames before the stimulus'
 steps.blindLast = 21; handed = Settings.framesFromFiji(steps)
-assert handed.first == 1 && handed.last == 21 && handed.note.contains('after frame 21') : 'a short range is used whole, and the stimulus follows its last frame'
+assert handed.first == 2 && handed.last == 21 && handed.note.contains('after frame 21') && handed.chosen == [first: 1, last: 21] : 'the last 20 frames; the stimulus follows the last frame; the frames used to choose cells are kept apart'
+steps.blindLast = 15; handed = Settings.framesFromFiji(steps); assert handed.first == 1 && handed.last == 15 : 'fewer than 20 frames: all of them'
 steps.blindFirst = 0; steps.blindLast = 0; handed = Settings.framesFromFiji(steps)
 assert handed.first == 94 && handed.last == 113 && handed.note.contains('near frame 122') : 'no frames confirmed: the frames before the rise'
 steps.found = false; handed = Settings.framesFromFiji(steps)
@@ -38,6 +39,10 @@ Settings.remember(data, edited)
 def again = Settings.remembered(data)
 assert again != null && (again.protocol.windows[0].End_s as double) == 250d && again.values.condition == 'ATP' && again.timestamps == null
 assert Settings.remembered(data + [baselineEnd: 113]) == null : 'other frames in Fiji: start again from them'
+// the stimulus frame of that analysis is offered for the next recording, and does not unfile the settings remembered for this one
+int usual = Settings.lastStimulusFrame(); assert usual >= 1 : 'the last analysis sets the starting stimulus frame'
+assert Settings.remembered(data + [baselineStart: Math.max(1, usual - 19), baselineEnd: usual, fijiBaselineStart: data.baselineStart, fijiBaselineEnd: data.baselineEnd]) != null : 'filed under the frames from Fiji'
+ij.Prefs.set('calcium.step4.stimulus_after_frame', 0d)
 assert Settings.remembered(data + [recording: 'other']) == null && Settings.remembered(data + [frames: 299]) == null
 new File(work, 'step4_last_settings.json').text = '{broken'
 assert Settings.remembered(data) == null : 'an unreadable file is ignored'
