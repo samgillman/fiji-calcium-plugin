@@ -79,7 +79,7 @@ try {
     // Stale HTTP edits cannot overwrite a newer draft revision.
     assert json('api/draft',[draft:about.draft,revision:0])[0]==200 && json('api/session')[1].draft.values.sampling_hz==''
     pending=Settings.copy(about.draft)
-    def primary=Protocol.window('Stimulus','Capsaicin',0.5d,3d,14.5d),control=Protocol.window('Control','Ionomycin',0.5d,3d,14.5d)
+    def primary=Protocol.window('Stimulus','Capsaicin',0.5d,3d,8d),control=Protocol.window('Control','Ionomycin',8d,10d,14.5d)   // separate windows, as the engine requires
     control.Floor_local_fraction=0.35d;control.SD_multiplier=5d;control.Duration_mode='samples';control.Consecutive_samples=4
     pending.protocol=Protocol.payload([primary,control],2,'Browser protocol','user_defined')
     def imported=json('api/protocol',[protocol:pending.protocol]);assert imported[0]==200 && imported[1].protocol.windows[1].Consecutive_samples==4

@@ -8,6 +8,11 @@
 - The saved `picture_colour.tif` is always the all-frames colour picture, whatever view is on screen, with a magenta channel only when a response was found, as before.
 - **‹ Change recording** in the Recording card goes back to the first screen. If the ROI Manager holds outlines, it asks whether to clear or keep them, because the next recording starts with whatever outlines it holds. **‹ Back to cells** and **‹ Back to measuring** move back between steps.
 - The plugin window stays above Fiji's own windows only while Fiji is in use, and drops back when another program, such as a browser, is in front.
+- Step 4: a stimulus window and a positive-control window that overlap, or a baseline that falls inside the other window's response interval, are now flagged while editing, saying what to change. The analysis engine has always refused these, but the run used to fail with only "exit code 1".
+- Step 4: when the analysis engine stops, the page and the window show its own error message instead of only the exit code.
+- Step 4: a run in which no cell could be scored for the primary stimulus is reported as a warning naming the commonest reason, not as a green "Complete". The saved results are unchanged.
+- Step 4 exports are drawn at least 1600 pixels wide, whatever the window size, and their names include the recording, the cell for trace plots, and the time, for example `Recording_traces_Cell001_20261120-153012.png`. The metadata records the results folder and the time range shown.
+- Step 4: a protocol file that is not valid JSON, or whose name was edited in only one place, gets a plain explanation instead of a parser message. After a cancel, the progress stage is cleared. The positive-control tick box now sits above the control's own fields.
 
 ## 2026.11.20.5
 

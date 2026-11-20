@@ -30,7 +30,7 @@
 
   /** Sets a canvas to the size it is shown at (sharp on high-density screens) and returns a context in CSS pixels. */
   function fit(canvas) {
-    const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;
+    const dpr = (S && S.exportScale) || window.devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;   // exports draw at a fixed minimum resolution
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
     const ctx = canvas.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     return { ctx, w, h, dpr };
@@ -90,7 +90,8 @@
     label.appendChild(box); return label;
   }
   function renderWindows() {
-    const container = $('windows-editor'); container.innerHTML = '';
+    // The positive-control tick box is moved between the two windows; keep references, because a detached element cannot be found by id.
+    const container = $('windows-editor'), keep = [S.controlLabel || (S.controlLabel = $('control').closest('label')), S.controlHelp || (S.controlHelp = $('control-help'))]; keep.forEach((e) => e.remove()); container.innerHTML = '';
     const legacy = Number($('protocol-mode').value) === 1;
     S.draft.protocol.windows.forEach((row, index) => {
       const w = expandWindow(row, legacy), section = document.createElement('div'); section.className = 'window-editor'; section.dataset.index = index;
@@ -108,7 +109,9 @@
       add(details, 'Min_baseline_samples', 'Minimum baseline samples'); add(details, 'Max_gap_s', 'Maximum gap (s; blank = auto)');
       add(details, 'Expected_interval_s', 'Expected interval (s; blank = auto)'); add(details, 'Noise_floor_local_fraction', 'Noise floor (%)', { scale: 100 });
       section.appendChild(details); container.appendChild(section);
+      if (index === 0) keep.forEach((e) => container.appendChild(e));
     });
+    if (!S.draft.protocol.windows.length) keep.forEach((e) => container.appendChild(e));
     $('control').checked = S.draft.protocol.windows.length > 1;
     $('control-help').hidden = !$('control').checked;
     updateProtocolControls();
@@ -322,7 +325,7 @@
     if (state.busy) { status.className = 'status'; status.textContent = (state.percent > 0 ? state.percent + '% · ' : '') + state.stage + ' · ' + state.elapsed + ' s elapsed'; }
     else if (S.note) { status.className = 'status bad'; status.textContent = S.note; }
     else if (!S.results && !state.error && state.tone !== 'bad') { status.className = 'status'; status.textContent = state.engineReady ? 'Check the settings above, confirm the timing, then run. Movie playback works now.' : 'Movie playback is ready. Before the first analysis, choose “Set up analysis engine” below (requires internet).'; }
-    else { status.className = 'status ' + (state.tone === 'good' ? 'good' : state.tone === 'bad' ? 'bad' : ''); status.textContent = state.message; }
+    else { status.className = 'status ' + (state.tone === 'good' ? 'good' : state.tone === 'bad' ? 'bad' : state.tone === 'warn' ? 'warn' : ''); status.textContent = state.message; }
     $('open-folder').disabled = !state.folder; $('open-folder').hidden = !state.folder;
     const pending = hasPending(), notice = $('applied-note'); notice.hidden = !S.results; notice.classList.toggle('pending', pending);
     notice.textContent = pending ? 'Settings changed. The results, movie timing and exports still use the last completed analysis. Choose “Apply changes & reanalyze” to update them.' : 'Showing the completed analysis. Response calls and counts come from the saved results.';
@@ -783,16 +786,28 @@
     const on = document.querySelector('tbody tr.on'); if (on && name !== 'review' && name !== 'heatmap') on.scrollIntoView({ block: 'nearest' });
   }
   function download(blob, name) { const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 2000); }
+  /** A file name that says what it is: the recording, what was saved, the cell when it matters, and when. */
+  function exportName(kind, extension) {
+    const clean = (text) => String(text || '').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80);
+    const now = new Date(), two = (n) => String(n).padStart(2, '0');
+    const stamp = now.getFullYear() + two(now.getMonth() + 1) + two(now.getDate()) + '-' + two(now.getHours()) + two(now.getMinutes()) + two(now.getSeconds());
+    return [clean(S.info.recording), kind, kind === 'traces' && S.cell ? clean(S.cell) : '', stamp].filter(Boolean).join('_') + '.' + extension;
+  }
   function exportMetadata() {
     return { schema: 'simpleca.view-export', schema_version: 1, recording: S.info.recording, plugin_version: S.info.pluginVersion,
       appliedFingerprint: S.results.appliedFingerprint || S.state.appliedFingerprint, appliedProtocol: S.results.appliedProtocol || S.results.protocol,
       manifest: S.results.manifest, settingsPending: hasPending(), displayed_window: S.window, cell: S.cell, group: GROUPS[S.group],
-      frame: S.frame, time_s: frameTimes()[S.frame - 1], view: S.view, time_range: [Plot.x0, Plot.x1], palette: S.palette, range: S.range, order: S.order };
+      frame: S.frame, time_s: frameTimes()[S.frame - 1], view: S.view, results_folder: S.results.folder || (S.state && S.state.folder) || null,
+      time_range: Plot.geom ? [Plot.geom.x0, Plot.geom.x1] : [Plot.x0, Plot.x1], time_zoomed: Plot.x0 !== null, palette: S.palette, range: S.range, order: S.order };
   }
-  function save(canvas, name) {
+  function save(canvas, kind, redraw) {
     // Capture provenance now, not after the asynchronous PNG encoder has finished.
-    const metadata = JSON.stringify(exportMetadata(), null, 2);
-    canvas.toBlob((blob) => { download(blob, name); download(new Blob([metadata], { type: 'application/json' }), name.replace(/\.png$/, '.metadata.json')); }, 'image/png');
+    const metadata = JSON.stringify(exportMetadata(), null, 2), name = exportName(kind, 'png');
+    // Draw once more at least 1600 pixels wide (and at least twice the screen's density), save that, then draw for the screen again.
+    S.exportScale = Math.min(6, Math.max(2, Math.ceil(1600 / Math.max(1, canvas.clientWidth)))); Plot.dirty = true; redraw();
+    const restore = () => { S.exportScale = null; Plot.dirty = true; redraw(); };
+    try { canvas.toBlob((blob) => { download(blob, name); download(new Blob([metadata], { type: 'application/json' }), name.replace(/\.png$/, '.metadata.json')); }, 'image/png'); }
+    finally { restore(); }
   }
   function wire() {
     for (const tab of document.querySelectorAll('.tab')) tab.addEventListener('click', () => showTab(tab.dataset.tab));
@@ -846,12 +861,13 @@
     }
     $('protocol-import').addEventListener('change', async () => {
       const file = $('protocol-import').files[0]; if (!file) return;
-      try { const result = await api('protocol', { protocol: await file.text() }); const draft = collectDraft(); draft.protocol = result.protocol; S.protocolDrafts = {}; fillDraft(draft); $('confirmed').checked = false; draftChanged(); }
+      try { let parsed; try { parsed = JSON.parse(await file.text()); } catch (bad) { throw new Error(file.name + ' is not a valid JSON file (' + bad.message + '). Choose a protocol exported from SimpleCa²⁺ or this page.'); }
+        const result = await api('protocol', { protocol: parsed }); const draft = collectDraft(); draft.protocol = result.protocol; S.protocolDrafts = {}; fillDraft(draft); $('confirmed').checked = false; draftChanged(); }
       catch (error) { draftError(error); }
       finally { $('protocol-import').value = ''; }
     });
     $('protocol-export').addEventListener('click', async () => {
-      try { const result = await api('protocol', { protocol: collectDraft().protocol }); download(new Blob([JSON.stringify(result.protocol, null, 2)], { type: 'application/json' }), 'response-protocol.json'); }
+      try { const result = await api('protocol', { protocol: collectDraft().protocol }); download(new Blob([JSON.stringify(result.protocol, null, 2)], { type: 'application/json' }), exportName('response-protocol', 'json')); }
       catch (error) { draftError(error); }
     });
     $('analyze').addEventListener('click', async () => {
@@ -893,7 +909,7 @@
     $('palette').addEventListener('change', () => { S.palette = $('palette').value; drawHeatmap(); });
     $('range').addEventListener('change', () => { S.range = $('range').value; drawHeatmap(); });
     $('tall').addEventListener('change', () => { S.tall = $('tall').checked; drawHeatmap(); });
-    $('save-plot').addEventListener('click', () => save($('plot'), 'traces.png')); $('save-heatmap').addEventListener('click', () => save($('heatmap'), 'heatmap.png'));
+    $('save-plot').addEventListener('click', () => save($('plot'), 'traces', drawPlot)); $('save-heatmap').addEventListener('click', () => save($('heatmap'), 'heatmap', drawHeatmap));
 
     const picture = $('picture');
     picture.addEventListener('wheel', (event) => { event.preventDefault(); const box = picture.getBoundingClientRect(), mx = event.clientX - box.left, my = event.clientY - box.top, before = place(picture.clientWidth, picture.clientHeight);
