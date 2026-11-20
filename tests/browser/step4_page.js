@@ -129,8 +129,25 @@ const assert = require('assert/strict');
     await slider(3); assert.ok(await gray() < 60, 'scrubbing back changes the actual image to the resting frame');
     assert.match(await text('#time-label'), /1\.00 s.*Frame 3 \/ 30/);
 
-    // Play uses the movie clock immediately; a manual seek stops the timer.
-    await page.selectOption('#speed', '5'); await page.click('#play');
+    // Playback: 10× by default, on a clock in recording time, from a buffer that makes scrubbing back free.
+    assert.equal(await page.inputValue('#speed'), '10');
+    let frameRequests = 0; const countFrames = (request) => { if (request.url().includes('/api/frame?')) frameRequests++; }; page.on('request', countFrames);
+    await slider(1); const started = Date.now(); await page.click('#play');
+    await page.waitForFunction(() => window.calciumStep4.S.timer === null, null, { timeout: 15000 });
+    const took = (Date.now() - started) / 1000;
+    assert.equal(await page.inputValue('#time'), '30', 'playback stops at the last frame');
+    assert.ok(took > 1.1 && took < 4, '14.5 s of recording at 10× plays in about 1.45 s, not ' + took + ' s');
+    await waitFrame(30); frameRequests = 0;
+    for (const f of [24, 17, 9, 2]) await slider(f);
+    assert.equal(frameRequests, 0, 'scrubbing back over frames already seen makes no requests');
+    page.off('request', countFrames);
+    await page.selectOption('#speed', '50'); await page.click('#play');
+    await page.waitForFunction(() => /playing every 4th frame/.test(document.getElementById('picture-note').textContent));
+    await page.click('#play');
+    assert.ok(!(await page.evaluate(() => window.calciumStep4.S.timer)));
+    // A manual seek stops the timer.
+    await slider(3);
+    await page.selectOption('#speed', '0.5'); await page.click('#play');
     await page.waitForFunction(() => window.calciumStep4.S.frame >= 5);
     await slider(12);
     assert.equal(await page.evaluate(() => window.calciumStep4.S.timer), null);
@@ -146,7 +163,8 @@ const assert = require('assert/strict');
 
     // A slow old response cannot replace the frame now requested by the slider.
     await slider(3);
-    const delayedFrame = '**/api/frame?f=8&mode=raw';
+    await page.evaluate(() => window.calciumStep4.resetFrames());   // frames already seen are buffered; these checks need fresh requests
+    const delayedFrame = '**/api/frame?f=8&mode=raw&*';
     await page.route(delayedFrame, async (route) => {
       const response = await route.fetch();
       await new Promise((resolve) => setTimeout(resolve, 200)); await route.fulfill({ response });
@@ -156,7 +174,7 @@ const assert = require('assert/strict');
       window.browserMovieObserver = new MutationObserver(() => window.browserMovieNotes.push(document.getElementById('picture-note').textContent));
       window.browserMovieObserver.observe(document.getElementById('picture-note'), { childList: true, subtree: true });
     });
-    const slowRequest = page.waitForRequest((request) => request.url().includes('/api/frame?f=8&mode=raw'));
+    const slowRequest = page.waitForRequest((request) => request.url().includes('/api/frame?f=8&mode=raw&'));
     await page.locator('#time').evaluate((element) => { element.value = 8; element.dispatchEvent(new Event('input')); });
     await slowRequest; await slider(20); await page.unroute(delayedFrame);
     assert.ok(await page.evaluate(() => {
@@ -165,7 +183,8 @@ const assert = require('assert/strict');
     assert.ok(await gray() < 60);
 
     // A failed frame fetch is visible and the next manual seek recovers.
-    const failedFrame = '**/api/frame?f=9&mode=raw'; injectedFrameFailure = true;
+    await page.evaluate(() => window.calciumStep4.resetFrames());
+    const failedFrame = '**/api/frame?f=9&mode=raw&*'; injectedFrameFailure = true;
     await page.route(failedFrame, (route) => route.fulfill({ status: 503, body: 'Synthetic unavailable frame' }));
     await page.locator('#time').evaluate((element) => { element.value = 9; element.dispatchEvent(new Event('input')); });
     await page.waitForFunction(() => /could not load/.test(document.getElementById('movie-message').textContent));
@@ -188,7 +207,7 @@ const assert = require('assert/strict');
     assert.ok(!(await page.isChecked('#confirmed')), 'imported protocols need timing confirmation');
     const protocolDownload = page.waitForEvent('download'); await page.click('#protocol-export');
     const downloaded = await protocolDownload;
-    assert.equal(downloaded.suggestedFilename(), 'response-protocol.json');
+    assert.match(downloaded.suggestedFilename(), /^Fixture_recording_response-protocol_\d{8}-\d{6}\.json$/, 'exported protocol names say which recording and when');
     const portablePath = path.join(out, 'roundtrip-protocol.json'); await downloaded.saveAs(portablePath);
     const portable = JSON.parse(fs.readFileSync(portablePath, 'utf8'));
     assert.equal(portable.windows[0].Floor_local_fraction, precise.windows[0].Floor_local_fraction, 'display formatting must not round an untouched protocol');
@@ -232,10 +251,15 @@ const assert = require('assert/strict');
     assert.equal((await text('#tile-registered')).replace(/\D/g, ''), '6');
     assert.equal(await page.inputValue('#view'), 'raw', 'analysis preserves the selected movie view');
     await page.selectOption('#cell', 'Cell001'); assert.match(await text('#verdict'), /Cell001: Responded/);
-    assert.deepEqual(await page.locator('#group option').allTextContents(), ['All cells (6)', 'Responded (2)', 'Did not respond (1)', 'Excluded (2)', 'Unscorable (1)', 'Needs quality review (6)']);
-    assert.match(await text('#quality-summary'), /6 cells flagged/);
+    // The duration notice is set on every cell by the engine but belongs to the recording: it is shown once and flags no cell.
+    assert.deepEqual(await page.locator('#group option').allTextContents(), ['All cells (6)', 'Responded (2)', 'Did not respond (1)', 'Excluded (2)', 'Unscorable (1)', 'Needs quality review (1)']);
+    assert.match(await text('#quality-summary'), /1 cell flagged, including 1 responder$/);
     await page.selectOption('#cell', 'Cell005'); assert.match(await text('#cell-quality'), /Low F₀/);
-    await page.locator('#quality-review summary').click(); assert.match(await text('#quality-list'), /shorter than one frame interval/);
+    await page.locator('#quality-review summary').click(); assert.match(await text('#quality-list'), /Applies to the whole recording: Minimum response duration is shorter than one frame interval/);
+    await page.locator('#quality-list .flag-filter').first().click();
+    assert.equal(await page.inputValue('#group'), '5'); assert.deepEqual(await page.locator('#cell option').evaluateAll((o) => o.map((x) => x.value)), ['Cell005']);
+    await page.locator('#quality-list .flag-filter').first().click(); assert.equal(await page.evaluate(() => window.calciumStep4.S.qualityFlag), null);
+    await page.selectOption('#group', '0');
     await page.locator('#quality-review summary').click();
     await page.selectOption('#cell', 'Cell001');
     await screenshots('after');
@@ -251,15 +275,16 @@ const assert = require('assert/strict');
     await page.setViewportSize({width:1440,height:900});
 
 
-    // Control calls and thresholds change independently; headline counts stay primary.
+    // Control calls, thresholds and headline counts follow the selected response window.
     await page.selectOption('#response-window', 'Control::Ionomycin');
     assert.match(await text('#verdict'), /Cell001: Did not respond/);
     assert.ok(await page.evaluate(() => Math.abs(window.calciumStep4.referenceLevels().find((r) => r.name === 'required rise').value - 1.1) < 1e-12), 'local .4 threshold on baseline .5 belongs at global 1.1');
-    assert.match(await text('#tile-responding'), /Capsaicin: 2 of 3 evaluable/);
+    assert.match(await text('#tile-responding'), /Ionomycin \(control\): 1 of 3 evaluable/);
     await page.selectOption('#group', '1');
     assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell002']);
     await page.click('#tile-responding');
     assert.equal(await page.inputValue('#response-window'), 'Stimulus::Capsaicin');
+    assert.match(await text('#tile-responding'), /Capsaicin: 2 of 3 evaluable/);
     assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell001', 'Cell005']);
     await page.click('#tile-excluded');
     assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell003', 'Cell004']);
@@ -356,8 +381,14 @@ const assert = require('assert/strict');
     });
     await page.click('#save-plot'); await downloadedPlots;
     for (const download of downloads) await download.saveAs(path.join(out, download.suggestedFilename()));
-    assert.ok(fs.statSync(path.join(out, 'traces.png')).size > 0);
-    const metadata = JSON.parse(fs.readFileSync(path.join(out, 'traces.metadata.json'), 'utf8'));
+    const names = downloads.map((d) => d.suggestedFilename()), image = names.find((n) => n.endsWith('.png'));
+    assert.match(image, /^Fixture_recording_traces_Cell\w+_\d{8}-\d{6}\.png$/, 'plot names carry the recording, the cell and the time');
+    assert.ok(names.includes(image.replace(/\.png$/, '.metadata.json')));
+    const png = fs.readFileSync(path.join(out, image));
+    assert.ok(png.readUInt32BE(16) >= 1600, 'exports are at least 1600 pixels wide, whatever the window size');
+    assert.equal(await page.evaluate(() => window.calciumStep4.S.exportScale), null, 'the screen is redrawn at its own size afterwards');
+    const metadata = JSON.parse(fs.readFileSync(path.join(out, image.replace(/\.png$/, '.metadata.json')), 'utf8'));
+    assert.ok(metadata.results_folder && metadata.time_range.every((t) => typeof t === 'number'), 'metadata names the results folder and the shown time range');
     assert.equal(metadata.appliedFingerprint, applied.fingerprint);
     assert.equal(metadata.settingsPending, true); assert.equal(metadata.time_s, 12.5);
     assert.equal(metadata.manifest.protocol_hash, 'synthetic-browser-fixture');
@@ -371,6 +402,15 @@ const assert = require('assert/strict');
     }
     await page.locator('#windows-editor details summary').first().click();
     await page.fill('#window-0-Floor_local_fraction','-1');assert.ok(await page.isDisabled('#analyze'));await page.click('#discard');
+    // The stimulus onset can be taken from the frame on screen; Discard clears it and any old note.
+    await page.evaluate(() => window.calciumStep4.setFrame(9));
+    const onScreen = await page.evaluate(() => window.calciumStep4.frameTimes()[window.calciumStep4.S.frame - 1]);
+    await page.locator('#windows-editor .from-frame').first().click();
+    assert.equal(Number(await page.inputValue('#window-0-Stimulus_onset_s')), onScreen);
+    await page.waitForFunction(() => window.calciumStep4.S.state.settingsPending);
+    await page.evaluate(() => { window.calciumStep4.S.note = 'an old message'; });
+    await page.click('#discard'); await page.waitForFunction(() => !window.calciumStep4.S.state.settingsPending);
+    assert.equal(await page.evaluate(() => window.calciumStep4.S.note), null);
     assert.match(await page.title(), /6 cells · SimpleCa/);
     assert.deepEqual(problems, []);
     console.log('PASS: movie preview and pointer scrubbing, Play/manual seek, static view, stale/error frames, portable protocols/precision, primary/control results, irregular-time heatmap, pending settings, exports and responsive layouts');

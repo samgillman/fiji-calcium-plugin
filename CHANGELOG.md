@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026.11.20.6
+
+- Step 2 has a **Picture** switch: **All frames**, **Baseline…** and **Response (magenta)**. Magenta can now be turned on after the recording is open; the response is looked for at that moment, exactly as the first screen's option does, and the picture changes in place so outlines and clicks keep working. The first screen's option still works and still starts unticked.
+- Fix **Review baseline frames**, which could not show its picture (ImageJ refused to put a flat picture into the colour composite). The baseline view now offers the detected baseline frames when there is a response.
+- The selection basis recorded with each measurement follows the picture in use: all frames, baseline frames, or response-assisted. When "look for a response" was ticked but no response was found, it is now recorded as all frames rather than response-assisted.
+- The saved `picture_colour.tif` is always the all-frames colour picture, whatever view is on screen, with a magenta channel only when a response was found, as before.
+- **‹ Change recording** in the Recording card goes back to the first screen. If the ROI Manager holds outlines, it asks whether to clear or keep them, because the next recording starts with whatever outlines it holds. **‹ Back to cells** and **‹ Back to measuring** move back between steps.
+- The plugin window stays above Fiji's own windows only while Fiji is in use, and drops back when another program, such as a browser, is in front.
+- Step 4: a stimulus window and a positive-control window that overlap, or a baseline that falls inside the other window's response interval, are now flagged while editing, saying what to change. The analysis engine has always refused these, but the run used to fail with only "exit code 1".
+- Step 4: when the analysis engine stops, the page and the window show its own error message instead of only the exit code.
+- Step 4: a run in which no cell could be scored for the primary stimulus is reported as a warning naming the commonest reason, not as a green "Complete". The saved results are unchanged.
+- Step 4 exports are drawn at least 1600 pixels wide, whatever the window size, and their names include the recording, the cell for trace plots, and the time, for example `Recording_traces_Cell001_20261120-153012.png`. The metadata records the results folder and the time range shown.
+- Step 4: a protocol file that is not valid JSON, or whose name was edited in only one place, gets a plain explanation instead of a parser message. After a cancel, the progress stage is cleared. The positive-control tick box now sits above the control's own fields.
+- Step 4 quality review: the "minimum response duration is shorter than one frame interval" flag, which the engine puts on every cell, is shown once as a notice for the recording and no longer puts every cell into **Needs quality review**. Each flag in the summary is a filter that lists only its cells. Added plain wording for the baseline-noise flag. The saved tables are unchanged.
+- Step 4: the headline tiles follow the response window selected, so the positive control shows its own counts.
+- Step 4: cells with long stable IDs are shown as "Cell N" (their measured order) on the picture, plot, heatmap and lists, with the full ID in tooltips. Tables and exports keep the IDs.
+- Step 4: **Use frame on screen** under "Stimulus added at" sets the onset from the movie frame shown.
+- Step 4: a warning while editing when a response baseline cannot hold the minimum number of baseline samples, which would leave every cell unscorable. Discard and protocol import clear old messages. Field names in number errors use their on-screen labels.
+- Step 4 movie playback is faster and steadier. Speeds now run from 0.5× to 50×, with **10×** as the default. Frames are shown on a clock in recording time, so they arrive at even intervals. Above 30 frames per second on screen, every Nth frame is shown and the frame note says so. A long gap between recorded frames waits at most about one second.
+- Step 4 frames are loaded up to 4 at a time, about 3 s of playback ahead, and kept for the session (within 90 MB), so scrubbing back over frames already seen makes no new requests. If loading falls behind, the picture holds and the note says "buffering". Frames are fetched at the size they are drawn (full size when zoomed in) and may be cached by the browser. Each frame is keyed to the baseline and display range, so a changed baseline never shows an old image. While playing, the trace cursor glides with the clock. The displayed images and measurements are unchanged.
+
 ## 2026.11.20.5
 
 - Validate Step 4 settings while editing, mark invalid fields and disable analysis until errors are corrected. Preserve separate elapsed-time and legacy drafts when switching rules; add Discard pending changes to restore the completed analysis or initial settings.

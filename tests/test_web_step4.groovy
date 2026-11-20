@@ -55,7 +55,7 @@ try {
     // Raw recording frames are usable before any analysis, without altering the source recording.
     def gray={byte[] bytes,int x,int y->image(bytes).getRGB(x,y)&255}
     def raw=call('api/frame?f=15&mode=raw');assert raw.status==200 && gray(raw.bytes,40,60)>gray(raw.bytes,100,60)
-    assert call('api/frame?f=3').status==200
+    assert call('api/frame?f=3').status==400 && call('api/frame?mode=raw').status==400 : 'a frame request names both the frame and the view'
     ['0','-5','31','abc','1.5',''].each{f->assert call('api/frame?f='+f+'&mode=raw').status==400}
     assert call('api/frame?f=3&mode=unknown').status==400
     assert about.draft.protocol.windows[0].Start_s>about.frameTimes[(about.draft.values.baseline_end as int)-1] : 'Suggested onset must follow the inclusive F0 baseline'
@@ -79,7 +79,7 @@ try {
     // Stale HTTP edits cannot overwrite a newer draft revision.
     assert json('api/draft',[draft:about.draft,revision:0])[0]==200 && json('api/session')[1].draft.values.sampling_hz==''
     pending=Settings.copy(about.draft)
-    def primary=Protocol.window('Stimulus','Capsaicin',0.5d,3d,14.5d),control=Protocol.window('Control','Ionomycin',0.5d,3d,14.5d)
+    def primary=Protocol.window('Stimulus','Capsaicin',0.5d,3d,8d),control=Protocol.window('Control','Ionomycin',8d,10d,14.5d)   // separate windows, as the engine requires
     control.Floor_local_fraction=0.35d;control.SD_multiplier=5d;control.Duration_mode='samples';control.Consecutive_samples=4
     pending.protocol=Protocol.payload([primary,control],2,'Browser protocol','user_defined')
     def imported=json('api/protocol',[protocol:pending.protocol]);assert imported[0]==200 && imported[1].protocol.windows[1].Consecutive_samples==4
