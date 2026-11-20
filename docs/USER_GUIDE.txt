@@ -57,13 +57,14 @@ from the raw file to a table of gray values per cell:
   2. It makes the cells visible: cells are green and very bright objects (precipitate, debris)
      are yellow. Step 1 asks how cells are chosen:
        - Before the response only (blind), the default and the choice for % responding. The plugin
-         offers the frames and you confirm them: they end 15 frames before the rise it finds, or at
+         offers the frames and you confirm them: they end 20 frames before the rise it finds, or at
          frame 60 when it finds no response, and they leave out frames at the start in which the
          field moved. They need not end where the stimulus was added (a drug can reach the chamber
-         long before any cell responds); Step 4 asks for that separately. The picture, the suggested
+         long before most cells respond); Step 4 asks for that separately. The picture, the suggested
          outlines and their grades then come from those frames only; the response is never shown,
-         traces are hidden while choosing, and no suggestion is graded "responds". Whether a cell
-         is chosen cannot depend on its response.
+         traces are hidden while choosing, and no suggestion is graded "responds". The frames end
+         before the main response. A few cells can respond briefly inside them (1 to 4 cells per
+         recording on the recordings checked); end the frames earlier to leave those out.
        - All frames: the average of all frames, which includes the frames after the stimulus.
        - All frames with the response in magenta: dim cells are then found only if they respond,
          which raises % responding. Use it for the size or timing of responses, not for % responding.

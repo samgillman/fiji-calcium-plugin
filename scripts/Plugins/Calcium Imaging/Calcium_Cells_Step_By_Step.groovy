@@ -253,10 +253,13 @@ class CalciumSteps {
      *  pictures outline 70 % of one recording's audited cells on frames 1-20 and 79 % on frames 1-50, and the cells gained
      *  respond as often as the ones found before. The window the plugin offers, for the user to confirm or change:
      *   first frame: 1, or the frame after a movement of the field at the start (CalciumMotion.MOVED pixels or more);
-     *   last frame, response found: BLIND_MARGIN frames before the rise, so cells that rise early are not in the picture;
+     *   last frame, response found: BLIND_MARGIN frames before the rise. The rise the plugin finds is the field's; the first cells
+     *     start 10-12 frames before it (P3 Run2, C2 Run1, P2 Run1, measured 20 Nov 2026), so 15 left 3-6 frames and 20 leaves 8-11.
+     *     A rise too early for that keeps 20 frames when at least 9 frames then remain before the rise, and says so;
      *   last frame, no response found (or a "rise" that is the field moving): BLIND_CEILING, or the last frame of a shorter recording.
-     *  Only the time of the rise is used, never which cells rose. */
-    static final int BLIND_MARGIN = 15, BLIND_CEILING = 60
+     *  Only the time of the rise is used, never which cells rose. A few cells can still respond briefly inside the window
+     *  (1 to 4 audited cells per recording at frames 22-60 on the 18 Nov recordings): it ends before the main response. */
+    static final int BLIND_MARGIN = 20, BLIND_CEILING = 60
     /** Why the offered window is what it is, in a sentence for the dialog. */
     String blindWindowWhy = ""
     /** True when the "rise" the plugin found lies in or right after frames in which the field moved: then it is the movement. */
@@ -276,15 +279,16 @@ class CalciumSteps {
         }
         boolean rise = found && !riseIsMovement()
         int last
-        if (rise && onset - BLIND_MARGIN >= first + 9) {
-            last = onset - BLIND_MARGIN
-            blindWindowWhy = "The cells start to rise near frame " + onset + ". The frames offered end " + BLIND_MARGIN + " frames before that, so cells that rise early are not in them."
+        int full = onset - BLIND_MARGIN, least = Math.max(first, Math.min(b1, onset - 1))
+        if (rise && full >= Math.min(least, first + 19)) {
+            last = full
+            blindWindowWhy = "The cells start to rise near frame " + onset + ". The frames offered end " + BLIND_MARGIN + " frames before that: the first cells rise about 10 frames earlier."
         } else if (rise) {
-            last = Math.max(first, Math.min(b1, onset - 1))
+            last = Math.min(least, first + 19)
             blindWindowWhy = "The cells start to rise near frame " + onset + ", which leaves few frames before the response. Check these frames."
         } else {
             last = Math.max(Math.min(n, BLIND_CEILING), Math.min(n, first + 19))
-            blindWindowWhy = (found ? "The only rise found is near frame " + onset + ", where the field moved, so no response was found." : "No response was found.") + " The frames offered go up to frame " + last + ": nothing responds in them, and more frames give a clearer picture."
+            blindWindowWhy = (found ? "The only rise found is near frame " + onset + ", where the field moved, so no response was found." : "No response was found.") + " The frames offered go up to frame " + last + ": more frames give a clearer picture."
         }
         // The field may still be settling after the movement: frames at the start of the window that sit away from the rest of it are left out too.
         if (motionShifts != null) for (int round = 0; round < 3; round++) {
@@ -3887,7 +3891,7 @@ class CalciumStartDialog {
             gd.addMessage(why.replace(". ", ".\n"))
             gd.addNumericField("First frame", first, 0)
             gd.addNumericField("Last frame before the response", last, 0)
-            gd.addMessage("Cells are found and chosen on these frames only. They need not end where the stimulus was added:\nStep 4 asks for that separately. Measurements use every frame.")
+            gd.addMessage("Cells are found and chosen on these frames only; measurements use every frame.\nA few cells may respond briefly inside them: end the frames earlier to leave those out.\nStep 4 asks separately when the stimulus was added.")
             gd.showDialog(); if (gd.wasCanceled()) return null
             double a = gd.getNextNumber(), b = gd.getNextNumber()
             if (!Double.isFinite(a) || !Double.isFinite(b) || a != Math.floor(a) || b != Math.floor(b) || a < 1 || b < a || b > n) { IJ.error("Calcium imaging", "Choose whole frame numbers from 1 to " + n + ", the first no later than the last."); continue }
