@@ -36,7 +36,7 @@ try {
         while (dialog == null && System.nanoTime() < end) { Thread.sleep(50); dialog = Window.getWindows().find { it instanceof JDialog && it.visible && it.title?.startsWith('Calcium imaging') } }
         SwingUtilities.invokeLater { everything(dialog).find { it instanceof JButton && it.text == 'Next' }?.doClick() }
         GenericDialog frames = null; end = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
-        while (frames == null && System.nanoTime() < end) { Thread.sleep(25); frames = Window.getWindows().find { it instanceof GenericDialog && it.visible && it.title == 'Frames before the stimulus' } }
+        while (frames == null && System.nanoTime() < end) { Thread.sleep(25); frames = Window.getWindows().find { it instanceof GenericDialog && it.visible && it.title == 'Frames before the response' } }
         SwingUtilities.invokeAndWait { offeredFrames = frames.getNumericFields().collect { it.text as int }; frames.actionPerformed(new java.awt.event.ActionEvent(frames.getButtons()[0], java.awt.event.ActionEvent.ACTION_PERFORMED, '')) }
     }
     def binding = new Binding([CALCIUM_TEST_GUI: true])
@@ -45,16 +45,17 @@ try {
     def canvas, listeners
     onUI {
         // blind: the response was looked for only to offer the frames before it; it is in neither the window nor the picture for Cellpose
-        assert steps.looked && steps.found && offeredFrames == [1, steps.estimatedLastBeforeStimulus()] && steps.b1 < steps.onset : 'The plugin offers the frames before the rise it found'
-        assert steps.blind && steps.blindFirst == 1 && steps.blindLast == steps.b1 && hooks.selectionBasis() == 'Pre-stimulus, blind (frames 1-' + steps.b1 + ')'
+        int offered = steps.proposedBlindWindow()[1]
+        assert steps.looked && steps.found && !steps.riseIsMovement() && offeredFrames == [1, offered] && offered < steps.onset && offered <= steps.b1 : 'The plugin offers the frames before the rise it found, ending well before it'
+        assert steps.blind && steps.blindFirst == 1 && steps.blindLast == offered && hooks.selectionBasis() == 'Before the response, blind (frames 1-' + offered + ')'
         // the Next line names the one thing to do; adding responders is offered only once there are blind cells
         assert hooks.nextLine.text.contains('Next:') && hooks.nextLine.text.contains('Suggest cells automatically') && hooks.addRespondersBtn.visible && !hooks.addRespondersBtn.enabled
         assert hooks.acceptAllBtn.text == 'Accept likely (0)'
         assert picture instanceof CompositeImage && picture.getNChannels() == 3 && active(picture) == '110' : 'Room for magenta, switched off'
         assert (picture.getStack().getPixels(3) as float[]).every { it == 0f } : 'Nothing of the response is held in the window while choosing blind'
-        assert (picture.getStack().getPixels(2) as float[]) == steps.framesPicture(1, steps.b1) : 'The picture shows the frames before the stimulus'
+        assert (picture.getStack().getPixels(2) as float[]) == steps.framesPicture(1, offered) : 'The picture shows the frames before the response'
         int[] forCellpose = steps.outlinePicture().getProcessor().getPixels()
-        assert forCellpose.every { ((it >> 16) & 255) == 0 && (it & 255) == 0 } && forCellpose.any { ((it >> 8) & 255) > 0 } : 'Cellpose gets the pre-stimulus picture only, no magenta'
+        assert forCellpose.every { ((it >> 16) & 255) == 0 && (it & 255) == 0 } && forCellpose.any { ((it >> 8) & 255) > 0 } : 'Cellpose gets the picture of the frames before the response only, no magenta'
         assert steps.outlinePicture().getProcessor().getPixels() == steps.blindOutlinePicture().getProcessor().getPixels()
         // the two blind pictures for Cellpose: the same pre-stimulus picture, capped at 2 and at 8 gray levels
         assert steps.blindOutlinePicture(steps.BLIND_CAP).getProcessor().getPixels() == steps.blindOutlinePicture().getProcessor().getPixels()
@@ -67,7 +68,7 @@ try {
         // hovering over a cell shows what it is, but no trace
         hooks.rm.addRoi(new OvalRoi(16, 22, 16, 16)); hooks.refresh(true)
         assert hooks.hoverAt(24, 30).contains('Your cell 1') && hooks.trace.vals == null && !hooks.responseSeen() : 'No trace while choosing blind'
-        assert hooks.basisFor(hooks.cellRois()) == 'Pre-stimulus, blind (frames 1-' + steps.b1 + ')'
+        assert hooks.basisFor(hooks.cellRois()) == 'Before the response, blind (frames 1-' + offered + ')'
         assert hooks.nextLine.text.contains('Add cells that respond') && hooks.nextLine.text.contains('Continue to measure') && hooks.addRespondersBtn.enabled : 'With blind cells chosen, the next step is offered: ' + hooks.nextLine.text
         // the legend switches kinds off and on: a click hides or shows one kind, a double-click shows only that kind
         int drawnAll = picture.getOverlay().size()
@@ -114,17 +115,18 @@ try {
     while (prompt == null && System.nanoTime() < end) { Thread.sleep(25); prompt = Window.getWindows().find { it instanceof GenericDialog && it.visible } }
     assert prompt != null
     def range = null; onUI { range = prompt.getNumericFields().collect { it.text as int } }
-    assert range == [1, steps.b1] : 'The frames before the stimulus are offered'
+    int last = steps.proposedBlindWindow()[1]
+    assert range == [1, last] : 'The frames before the response are offered'
     onUI { prompt.getNumericFields()[0].text = '2'; prompt.actionPerformed(new java.awt.event.ActionEvent(prompt.getButtons()[0], java.awt.event.ActionEvent.ACTION_PERFORMED, '')) }
     waitFor('the blind picture') { steps.blind && hooks.viewBaselineBtn.enabled }
     onUI {
-        assert hooks.selectionBasis() == 'Pre-stimulus, blind (frames 2-' + steps.b1 + ')' && active(picture) == '110' && hooks.viewBaselineBtn.getUI().chosen
-        float[] green = picture.getStack().getPixels(2), blindFrames = steps.framesPicture(2, steps.b1)
+        assert hooks.selectionBasis() == 'Before the response, blind (frames 2-' + last + ')' && active(picture) == '110' && hooks.viewBaselineBtn.getUI().chosen
+        float[] green = picture.getStack().getPixels(2), blindFrames = steps.framesPicture(2, last)
         assert green == blindFrames : 'The picture shows the chosen frames'
         assert (picture.getStack().getPixels(3) as float[]).every { it == 0f } && hooks.trace.vals == null
-        assert hooks.basisFor(hooks.cellRois()) == 'Pre-stimulus, blind (frames 2-' + steps.b1 + ')' : 'The outline chosen before the response was shown is still blind'
+        assert hooks.basisFor(hooks.cellRois()) == 'Before the response, blind (frames 2-' + last + ')' : 'The outline chosen before the response was shown is still blind'
         hooks.rm.addRoi(new OvalRoi(52, 52, 16, 16))
-        assert hooks.basisFor(hooks.cellRois()).startsWith('Pre-stimulus picture (frames 2-' + steps.b1 + '), not blind') : 'An outline added after the response was shown is not'
+        assert hooks.basisFor(hooks.cellRois()).startsWith('Picture of frames 2-' + last + ' (before the response), not blind') : 'An outline added after the response was shown is not'
         assert picture.getCanvas().is(canvas)
         // moving between steps: forward and back
         def (s1, s2, s3, s4) = hooks.cards

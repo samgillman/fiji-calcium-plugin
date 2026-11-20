@@ -52,9 +52,9 @@ assert answerStep1(disk, { parts ->
     assert !button(parts, 'Choose file…').isShowing()
     parts.find { it instanceof JTextField }.text = 'chosen folder'
     def radio = { String start -> parts.find { it instanceof JRadioButton && it.text.startsWith(start) } }
-    assert radio('Before the stimulus only').selected && !radio('All frames, with the response').selected && !radio('All frames').selected : 'Blind selection is the default; response-assisted selection starts off'
+    assert radio('Before the response only').selected && !radio('All frames, with the response').selected && !radio('All frames').selected : 'Blind selection is the default; response-assisted selection starts off'
     radio('All frames, with the response').doClick()
-    assert !radio('Before the stimulus only').selected : 'One way of choosing cells at a time'
+    assert !radio('Before the response only').selected : 'One way of choosing cells at a time'
     assert parts.findAll { it instanceof JButton }*.text.containsAll(['Browse…', 'Cancel', 'Next'])
     button(parts, 'Next').doClick()
 }) == [recording: movie, look: true, blind: false, folder: 'chosen folder', file: null]

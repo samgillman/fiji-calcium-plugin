@@ -96,7 +96,7 @@ const assert = require('assert/strict');
     assert.equal(await page.inputValue('#stim-frame-0'), '6');
     assert.equal(await editor0.locator('.derived[data-linked="1"]').count(), 0, 'a loaded protocol with windows of its own opens with those rows set separately');
     assert.deepEqual([await page.inputValue('#base-from-0'), await page.inputValue('#base-to-0'), await page.inputValue('#resp-from-0'), await page.inputValue('#resp-to-0')], ['2', '6', '7', '15']);
-    assert.match(await text('#suggestion-0'), /From the frames used in Fiji\. Set it to when the stimulus was added/);
+    assert.match(await text('#suggestion-0'), /A placeholder from the frames used in Fiji\. Set it to when the stimulus was added/);
     for (const cell of ['#f0-cell', '#base-cell-0', '#resp-cell-0']) await page.locator(cell + ' .relink').click();
     assert.equal(await editor0.locator('.derived[data-linked="1"]').count(), 3);
     let edited = await window0();

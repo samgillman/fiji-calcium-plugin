@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.17.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.18.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -56,16 +56,19 @@ from the raw file to a table of gray values per cell:
   1. You choose the recording and a folder for the results.
   2. It makes the cells visible: cells are green and very bright objects (precipitate, debris)
      are yellow. Step 1 asks how cells are chosen:
-       - Before the stimulus only (blind), the default and the choice for % responding. You confirm
-         the last frame before the stimulus (the plugin offers the frames that end well before the
-         rise it finds). The picture, the suggested outlines and their grades then come from those
-         frames only; the response is never shown, traces are hidden while choosing, and no
-         suggestion is graded "responds". Whether a cell is chosen cannot depend on its response.
+       - Before the response only (blind), the default and the choice for % responding. The plugin
+         offers the frames and you confirm them: they end 15 frames before the rise it finds, or at
+         frame 60 when it finds no response, and they leave out frames at the start in which the
+         field moved. They need not end where the stimulus was added (a drug can reach the chamber
+         long before any cell responds); Step 4 asks for that separately. The picture, the suggested
+         outlines and their grades then come from those frames only; the response is never shown,
+         traces are hidden while choosing, and no suggestion is graded "responds". Whether a cell
+         is chosen cannot depend on its response.
        - All frames: the average of all frames, which includes the frames after the stimulus.
        - All frames with the response in magenta: dim cells are then found only if they respond,
          which raises % responding. Use it for the size or timing of responses, not for % responding.
-     In Step 2, Picture switches between All frames, Before stimulus (blind)… and Response (magenta).
-     The way cells were chosen is recorded with every measurement. "Pre-stimulus, blind" is recorded
+     In Step 2, Picture switches between All frames, Before response (blind)… and Response (magenta).
+     The way cells were chosen is recorded with every measurement. "Before the response, blind" is recorded
      only if nothing of the response (magenta, a trace, Step 4) was shown before the outlines were
      final; outlines changed after that are recorded as not blind.
      "‹ Change recording" goes back to the first screen; "‹ Back" buttons move between steps.
@@ -189,7 +192,7 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        the colour picture simply has no magenta.
   Colour picture       green = all-frames picture (0 to 8); red = the same picture shown 10 to 30, so
                        only very bright objects get red and turn yellow; magenta = response picture.
-  Blind picture        The same steps as the all-frames picture on the frames before the stimulus only
+  Blind picture        The same steps as the all-frames picture on the frames before the response only
                        (Z Project Sum Slices of those frames, Divide, Subtract Background 150, Gaussian
                        Blur 1.5). Cellpose runs twice on it, never on the response: once shown from
                        0 to 2 gray levels and once from 0 to 8, brighter pixels capped. The 0-2 picture

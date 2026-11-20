@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026.11.20.18
+
+- **Blind selection uses the frames before the response, and the plugin offers them.** Until now it asked for "the last frame before the stimulus" and offered frame 20 when it found no response. Twenty frames are too few to see faint cells: on one recording the two blind pictures outlined 70 % of the audited cells on frames 1–20 and 79 % on frames 1–50, and the cells gained responded as often as the ones found before. The window offered now:
+  - with a response found: up to 15 frames before the rise (it was 9), so cells that rise early are not in the picture;
+  - with no response found: up to frame 60;
+  - without the frames at the start in which the field moved or was still settling. A "rise" that is only the field moving counts as no response.
+  You confirm or change the frames as before. They need not end where the stimulus was added; Step 4 asks for that separately.
+- Wording follows: **Before the response only (blind)** on the first screen, **Before response (blind)…** in Step 2, "Frames before the response" in the dialog. The saved record reads `Before the response, blind (frames a-b)` (it was `Pre-stimulus, blind (frames a-b)`).
+- Step 4 page: the frames the cells were chosen on are shown as "Cells chosen in Fiji on frames a–b, before the response." The page no longer warns that they run past the stimulus, and the starting stimulus frame taken from them is called a placeholder.
+- Offered on the 18 Nov recordings: P3 Run2 1–107, C2 Run1 1–68, P2 Run1 1–64, C3 Run2 1–60, P2 Run2 capsaicin 1–60, C1 Run3 KCl 13–60 (frames 1–12 moved; the rise near frame 6 is that movement).
+
 ## 2026.11.20.17
 
 - **Movement is measured against the frames the cells are chosen on.** Build .16 compared every frame with where the field sits for most of the recording, so on a recording that drifts slowly it called the first hundred frames "moved", although those are the frames the outlines were drawn on. While cells are chosen blind, the message now reads, for example, "The field sits about 4 px from where the cells are chosen (frames 1–20) from frame 139 on."
