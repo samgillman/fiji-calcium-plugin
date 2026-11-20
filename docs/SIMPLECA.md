@@ -18,7 +18,9 @@ The first setup needs internet access and disk space for R and downloaded packag
 - **Heatmap:** signed ΔF/F₀, with blue negative, white zero, red positive and gray unavailable. Click a row to inspect that cell's trace.
 - **Metrics + quality:** every registered cell, including excluded and unscorable records with reasons. A valid initial F0 does not guarantee an evaluable stimulus window; consult the cell response calls too.
 - **Cell response calls / Responder counts:** SimpleCa's stimulus/KCl classifications. Percent responding is Responded / Evaluable, with Registered, Excluded and Unscorable shown separately. The population is the cells you selected; selecting only cells that brighten can bias that population.
-- **Cell review image:** click an outline, choose a cell in the trace list, or select its table row. This image is a snapshot, separate from the Step 2 editing controls.
+- **Cell picture (under the trace):** click an outline, choose a cell in the list or with the previous/next buttons, or select its table row. After an analysis, thick white outlines responded, gray ones did not, and dashed ones were excluded or unscorable. Scroll to zoom, drag to move, double-click to see the whole picture. It is a snapshot, separate from the Step 2 editing controls.
+- **Headline tiles:** percent responding with its evaluable denominator, and the registered, excluded and unscorable counts, read from the saved Responder counts table.
+- **Settings boxes:** suggested values are shown rounded; hover over a box to see the exact value. A box you have not edited sends that exact value to the analysis.
 
 Each successful run saves a new `SimpleCa-date-time-id` folder next to the measurement outputs. It contains the exact unlifted input CSV, normalized traces, mean/SEM, metrics, quality records, responder calls/counts, settings, manifest and analysis log. **Save plots** exports the current trace and full heatmap as PNG. Previous runs are not overwritten. Partial runs have no `COMPLETE` marker and are not loaded as results.
 
