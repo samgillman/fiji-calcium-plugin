@@ -360,8 +360,10 @@ const assert = require('assert/strict');
     await page.evaluate(() => document.getElementById('lost').classList.add('on'));
     await settledPaint();
     assert.ok(await page.evaluate(() => document.documentElement.scrollHeight > innerHeight));
-    await page.locator('#picture-note').scrollIntoViewIfNeeded();
-    assert.ok(await page.locator('#picture-note').evaluate((e) => {const a=e.getBoundingClientRect(),b=e.closest('.card').getBoundingClientRect();return a.bottom<=b.bottom&&a.bottom<=innerHeight;}));
+    // Bring the caption to the middle of the window, wherever the rows above it put it: "if needed" left it where it was when it
+    // sat exactly on the lower edge (seen on Linux once the headline gained a line), and the check below then failed by a fraction.
+    await page.locator('#picture-note').evaluate((e) => e.scrollIntoView({ block: 'center' })); await settledPaint();
+    assert.ok(await page.locator('#picture-note').evaluate((e) => {const a=e.getBoundingClientRect(),b=e.closest('.card').getBoundingClientRect();return a.top>=0&&a.bottom<=b.bottom&&a.bottom<=innerHeight;}), 'the caption can be scrolled fully into view and stays inside its card');
     await page.screenshot({path:path.join(out,'page-short-window.png')});
     await page.evaluate(() => document.getElementById('lost').classList.remove('on'));
     await page.setViewportSize({width:1440,height:900});
