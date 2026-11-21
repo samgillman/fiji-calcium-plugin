@@ -247,8 +247,12 @@ System.clearProperty('calcium.steps.pretend_no_gpu'); System.setProperty('calciu
 try {
     def third = new File(blindDir, 'picture_3_shown_0_to_4_gray_levels')
     def m3 = new File(third, 'cellpose'); m3.mkdirs(); new File(m3, '__init__.py').text = ''
-    // the stand-in Cellpose says which device it used, as the real one does
-    (picDirs + [third]).each { d -> new File(new File(d, 'cellpose'), '__main__.py').text = new File(module, '__main__.py').text.replace('using CPU', 'using GPU') }
+    // The stand-in Cellpose says which device it used, as the real one does: the graphics chip while a file named says-gpu lies
+    // beside it. (A marker file, not a second version of the module: Python keeps a compiled copy and takes a rewrite of the same
+    // length within the same second for the old file.)
+    String deviceAware = new File(module, '__main__.py').text.replace("print('>>>> using CPU', flush=True)", "print('>>>> using GPU' if pathlib.Path('says-gpu').exists() else '>>>> using CPU', flush=True)")
+    assert deviceAware.contains('says-gpu')
+    (picDirs + [third]).each { d -> new File(new File(d, 'cellpose'), '__main__.py').text = deviceAware; new File(d, 'says-gpu').text = '' }
     // picture 3: one on cell 2 again (shares most of it), one on its own
     writeFixture(new File(third, 'fixture.zip'), [new Roi(21, 11, 15, 15), new Roi(80, 20, 15, 15)])
     binding.setVariable('steps', blindStub); binding.setVariable('forceFresh', true); said.clear(); events.clear()
@@ -263,7 +267,7 @@ try {
     assert proposals.size() == 6 && proposals.count { it.picture == '0 to 4' } == 1 && proposals.count { it.picture == '0 to 8' } == 2
     assert said.any { it.startsWith('Automatic outlines are blind: Cellpose got three pictures of frames 1-113 only') }
     // a graphics chip that does not work (Cellpose reports the CPU on the first pictures) does not get a third slow run
-    picDirs.each { d -> new File(new File(d, 'cellpose'), '__main__.py').text = new File(module, '__main__.py').text }
+    (picDirs + [third]).each { d -> assert new File(d, 'says-gpu').delete() }
     def fallbackTask = Task.newInstance(progress: { p,s,d -> })
     def fallbackMessage = suggest(fallbackTask)
     assert fallbackMessage ==~ /5 suggestions from two pictures; Cellpose took \d+ s and \d+ s \(CPU\)/ && fallbackTask.succeeded : fallbackMessage
