@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.22.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.23.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -255,7 +255,7 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        magenta (GFP plus the rise above what the background did, averaged over
                        9 x 9 pixels and 5 frames), Change from baseline (that rise alone), Colour
                        overview and Background areas. Outline thickness is beside "All outlines".
-                       Scroll over the picture scrolls the page; Ctrl or Cmd + scroll zooms it.
+                       Scroll over the picture or the plot scrolls the page; Ctrl or Cmd + scroll zooms it.
                        Save frames... (Export) writes every Nth frame and one picture with all of them.
                        The arrow on the edge of the settings panel folds the panel away.
                        Each panel has one Export menu in its corner (the picture, the plot, the heatmap
