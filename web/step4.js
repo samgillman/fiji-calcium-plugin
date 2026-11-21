@@ -13,7 +13,8 @@
     (group === 3 && call === 'Excluded') || (group === 4 && call === 'Unscorable') || (group === 5 && qualityFor(name).length > 0 && (!S.qualityFlag || qualityFor(name).includes(S.qualityFlag)));
   const S = { unlinked: new Set(), validationShown: null, imported: null, info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'raw', viewChosen: false,
     every: false, plotMode: 'mean', signal: 'dff', outlines: true, outlineWidth: 1, order: 'call', palette: 'plasma', range: 'robust', tall: false, timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false };
-  const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, y: {}, hover: null, at: null, readout: null, geom: null, scrubbing: false, drawn: [], series: [] };
+  const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, y: {}, hover: null, at: null, readout: null, line: false, movedAt: -1e9, rest: null, geom: null, scrubbing: false, drawn: [], series: [] };
+  const LINGER = 1500;   // ms the plot keeps showing where the picture is after the frame last moved
   const Pic = { base: null, shown: null, zoom: 1, panX: 0, panY: 0, drag: null, moved: false, shownFrame: null, error: null };
   // Movie frames: compressed images are kept for the session (about 40 MB for 300 full-size frames, much less at display size),
   // decoded ones only near the playhead. Keys carry the server's frame version, which changes with the baseline behind
@@ -878,7 +879,8 @@
   function setFrame(wanted, manual) {
     if (!S.info) return;
     if (manual) play(false);
-    S.frame = Math.max(1, Math.min(Math.max(1, S.info.frames), Math.round(wanted))); $('time').value = S.frame;
+    const before = S.frame; S.frame = Math.max(1, Math.min(Math.max(1, S.info.frames), Math.round(wanted))); $('time').value = S.frame;
+    if (S.frame !== before) { Plot.movedAt = performance.now(); clearTimeout(Plot.rest); Plot.rest = setTimeout(() => { if (S.results) drawPlot(); }, LINGER + 40); }   // then the plot is redrawn without the line
     updateTransport(); drawPlot(); requestFrame();
   }
   function seek(t) { setFrame(nearestFrame(t), true); }
@@ -1288,10 +1290,11 @@
       const y = shownTraces()[Plot.hover], gapLimit = samplingSupport().gap; ctx.strokeStyle = CALL[kind(callOf(Plot.hover))]; ctx.lineWidth = 2.2; ctx.lineJoin = 'round'; ctx.beginPath(); let pen = false;
       for (let i = 0; i < time.length; i++) { if (finite(y[i])) { if (pen && time[i] - time[i - 1] <= gapLimit) ctx.lineTo(X(time[i]), Y(y[i])); else ctx.moveTo(X(time[i]), Y(y[i])); pen = true; } else pen = false; } ctx.stroke();
     }
-    // The line marks the frame the picture shows. Its numbers are written only while that frame is being moved from here (a drag
-    // in the plot, or playing). Otherwise the numbers follow the pointer over the plot and go when it leaves: nothing sits on
-    // the traces while nobody is reading it.
-    const own = S.plotMode === 'cell' && S.cell ? shownTraces()[S.cell] : null, moving = Plot.scrubbing || !!S.timer; Plot.readout = null;
+    // Nothing sits on the traces while nobody is reading it. While the frame moves (a drag in the plot, the slider or the step
+    // buttons under the picture, the arrow keys, Play) and for a moment after, a solid line shows where the picture is, with
+    // that frame's numbers. Otherwise a dashed line and the numbers follow the pointer over the plot and go when it leaves.
+    const own = S.plotMode === 'cell' && S.cell ? shownTraces()[S.cell] : null, moving = Plot.scrubbing || !!S.timer, awake = moving || performance.now() - Plot.movedAt < LINGER;
+    Plot.readout = null; Plot.line = false;
     const plotted = (i) => (S.plotMode !== 'cell' ? Plot.series.map((series) => series.mean[i]) : []).concat(own ? [own[i]] : []);
     const numbers = (at, i) => { let text = at.toFixed(1) + ' s'; if (S.plotMode !== 'cell') for (const series of Plot.series) if (finite(series.mean[i])) text += ' · ' + series.short + ' ' + series.mean[i].toFixed(3);
       if (own && finite(own[i])) text += ' · ' + shortName(S.cell) + ' ' + own[i].toFixed(3); return text; };
@@ -1302,10 +1305,10 @@
       ctx.fillStyle = '#1F2933'; ctx.beginPath(); ctx.roundRect(bx, by, tw, 18, 6); ctx.fill(); ctx.fillStyle = '#fff'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.fillText(text, bx + 5, by + 9); Plot.readout = text;
     };
     const t = Plot.playhead != null ? Plot.playhead : S.frame <= time.length ? time[S.frame - 1] : NaN;   // glides with the playhead while playing
-    if (isFinite(t) && t >= g.x0 && t <= g.x1) {
-      const x = Math.round(X(t)) + 0.5; ctx.strokeStyle = 'rgba(31,41,51,0.8)'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(x, g.T); ctx.lineTo(x, g.T + g.H); ctx.stroke();
+    if (awake && isFinite(t) && t >= g.x0 && t <= g.x1) {
+      const x = Math.round(X(t)) + 0.5; ctx.strokeStyle = 'rgba(31,41,51,0.8)'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(x, g.T); ctx.lineTo(x, g.T + g.H); ctx.stroke(); Plot.line = true;
       if (own && finite(own[S.frame - 1])) { const y = Math.max(g.T, Math.min(g.T + g.H, Y(own[S.frame - 1]))); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, 5, 0, 7); ctx.fill(); ctx.fillStyle = '#1F2933'; ctx.beginPath(); ctx.arc(x, y, 3.2, 0, 7); ctx.fill(); }
-      if (moving) label(numbers(t, S.frame - 1), x, S.frame - 1);
+      if (moving || Plot.at == null) label(numbers(t, S.frame - 1), x, S.frame - 1);   // with the pointer on the plot, its own numbers are enough
     }
     const at = moving ? null : Plot.at;   // the sample under the pointer
     if (at != null && finite(time[at]) && time[at] >= g.x0 && time[at] <= g.x1) {
