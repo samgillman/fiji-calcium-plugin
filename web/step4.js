@@ -3,7 +3,7 @@
 'use strict';
 (function () {
   const $ = (id) => document.getElementById(id);
-  const CALL = { responded: '#177465', not: '#925223', other: '#8A94A0' };
+  const CALL = { responded: '#177465', not: '#C8660E', other: '#8A94A0' };
   const ON_PICTURE = { responded: '#3ddbb5', not: '#ffa24a', other: '#aeb8c2' };
   const GROUPS = ['All cells', 'Responded', 'Did not respond', 'Excluded', 'Unscorable', 'Needs quality review'];
   /** The colour overview and the background areas are still pictures; every other view is a frame of the recording. */
@@ -699,17 +699,18 @@
     const names = S.info.names;
     S.listed = S.results ? names.filter((n) => inGroup(callOf(n), S.group, n)) : names.slice();
     const select = $('cell'); select.innerHTML = '';
+    const none = document.createElement('option'); none.value = ''; none.textContent = 'None'; select.appendChild(none);
     for (const name of S.listed) { const o = document.createElement('option'); o.value = name; o.textContent = shortName(name); o.title = name; select.appendChild(o); }
-    $('previous').disabled = $('next').disabled = S.listed.length < 2;
-    pick(S.listed.includes(S.cell) ? S.cell : (S.listed[0] || null));
+    $('previous').disabled = $('next').disabled = S.listed.length < 1;
+    pick(S.listed.includes(S.cell) ? S.cell : null);   // the selection never changes by itself: a cell that is not listed is no longer selected
   }
   function showGroup(group) { if (S.group !== group) { S.group = group; $('group').value = group; listCells(); } }
   /** Selects a cell everywhere: the list, the picture, the plot, the heatmap and the tables. */
   function pick(name) {
     if (name && S.results && !S.listed.includes(name)) { S.group = 0; $('group').value = 0; S.cell = name; listCells(); return; }
-    S.cell = name; if (name) $('cell').value = name;
+    S.cell = name || null; $('cell').value = name || '';
     const verdict = $('verdict'), row = name && S.results ? calls()[name] : null;
-    if (!name) verdict.textContent = S.results ? 'No cells in this group.' : '';
+    if (!name) verdict.textContent = !S.results ? '' : S.listed.length ? 'No cell selected.' : 'No cells in this group.';
     else if (!row) verdict.innerHTML = S.results ? '<b>' + escape(shortName(name)) + '</b> · no response call was saved for this cell' : '';
     else {
       const parts = ['<span class="dot" style="background:' + CALL[kind(row.Status)] + '"></span><b>' + escape(shortName(name)) + ': ' + escape(row.Status || '') + '</b>', escape((row.Reason || '').toLowerCase())];
@@ -732,8 +733,13 @@
     for (const button of document.querySelectorAll('[data-plot]')) { const on = button.dataset.plot === mode; button.classList.toggle('on', on); button.setAttribute('aria-pressed', on ? 'true' : 'false'); }
     Plot.dirty = true; drawPlot(); legend();
   }
-  function chooseCell(name) { pick(name); }
-  function stepCell(by) { if (!S.listed.length) return; const i = S.listed.indexOf(S.cell); chooseCell(S.listed[((i + by) % S.listed.length + S.listed.length) % S.listed.length]); }
+  /** A cell chosen by the person (list, arrows, a click on the picture, a trace, a table row or the heatmap), or none. The plot
+   *  follows: with a cell it shows that cell over the average, with none the average alone. "Responders vs non-responders" stays. */
+  function chooseCell(name) {
+    pick(name || null);
+    if (S.results && S.cell && S.plotMode === 'mean') setPlotMode('cell'); else if (S.results && !S.cell && S.plotMode === 'cell') setPlotMode('mean');
+  }
+  function stepCell(by) { if (!S.listed.length) return; const i = S.listed.indexOf(S.cell), next = i < 0 ? (by > 0 ? 0 : S.listed.length - 1) : ((i + by) % S.listed.length + S.listed.length) % S.listed.length; chooseCell(S.listed[next]); }
 
   // ---------------------------------------------------------------- one acquisition-frame cursor for the recording and saved traces
   function frameTimes() {
@@ -875,7 +881,7 @@
     const rest = S.results ? S.results.baselineFrames : (S.state && S.state.rest), frames = rest ? ' (frames ' + rest[0] + '–' + rest[1] + ')' : '';
     return S.view === 'background' ? [['#2896ff', 'pixels taken as the cells’ background']] : S.view === 'picture' ? [['#00e000', 'cells'], ['#ffe600', 'very bright (precipitate)'], ['#ff40ff', 'response']]
       : S.view === 'magenta' ? [['#00e000', 'cells, background removed'], ['#ff40ff', 'rise above baseline' + frames]]
-      : S.view === 'change' ? [['#ffffff', 'brighter than baseline' + frames]] : S.view === 'flat' ? [['#ffffff', 'background removed']] : [];
+      : S.view === 'change' ? [['#ffffff', 'rise above baseline' + frames]] : S.view === 'flat' ? [['#ffffff', 'background removed']] : S.view === 'green' ? [['#00e000', 'cells, background removed']] : [];
   }
   function viewKey() {
     const box = $('view-key'), shown = viewColours().map((c) => c.join('|')).join(';'); if (!box || box.dataset.shown === shown) return;
@@ -1381,8 +1387,8 @@
   }
   /** The whole picture in the view on screen (a movie frame is fetched at full size), with the outlines shown on the page and a
    *  key to the colours underneath. One ordinary colour picture. */
-  const VIEW_NAMES = { picture: 'colour overview', raw: 'as recorded', flat: 'background removed', magenta: 'response in magenta', change: 'change from baseline' };
-  async function viewPicture(frame, labelled) {
+  const VIEW_NAMES = { picture: 'colour overview', raw: 'as recorded', flat: 'background removed', green: 'GFP', magenta: 'response in magenta', change: 'change from baseline' };
+  async function viewCanvas(frame, labelled) {
     const f = frame || S.frame; let image = S.view === 'background' ? Pic.background : Pic.base;
     if (!still()) { const reply = await fetch('api/frame?f=' + f + '&mode=' + S.view + '&v=' + encodeURIComponent(Buf.version || ''), { cache: 'no-store' }); if (!reply.ok) throw new Error('Frame ' + f + ' could not be read.'); image = await createImageBitmap(await reply.blob()); }
     if (!image) throw new Error('The picture is not loaded yet.');
@@ -1406,9 +1412,18 @@
       ctx.font = '600 ' + Math.round(size * 1.1) + 'px ' + font; const tw = ctx.measureText(text).width;
       ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(10 * unit, 10 * unit, tw + 20 * unit, size * 1.9); ctx.fillStyle = '#fff'; ctx.fillText(text, 20 * unit, 10 * unit + size * 0.98);
     } else { ctx.fillStyle = '#AEB8C2'; ctx.font = Math.round(size * 0.8) + 'px ' + font; ctx.fillText(S.info.recording, 14 * unit, ih + keyHeight - gap * 0.55); }
-    return canvas.toDataURL('image/png');
+    return canvas;
   }
-  const viewKind = () => 'picture_' + ({ picture: 'colour_overview', background: 'background_areas', raw: 'as_recorded', flat: 'background_removed', magenta: 'response_in_magenta', change: 'change_from_baseline' }[S.view] || S.view) + (still() ? '' : '_frame' + S.frame);
+  async function viewPicture(frame, labelled) { return (await viewCanvas(frame, labelled)).toDataURL('image/png'); }
+  /** Where n frames of w x h go in one picture: a grid about as wide as it is tall, each tile at most its own size and the
+   *  whole at most COMBINED_MAX pixels wide. Returns { cols, rows, tw, th, gap, width, height }. */
+  const COMBINED_MAX = 6000;
+  function combinedLayout(n, w, h) {
+    const cols = Math.max(1, Math.ceil(Math.sqrt(n * h / w) * w / h)), rows = Math.ceil(n / cols), gap = Math.max(2, Math.round(w / 200));
+    const tw = Math.max(1, Math.min(w, Math.floor((COMBINED_MAX - (cols + 1) * gap) / cols))), th = Math.max(1, Math.round(tw * h / w));
+    return { cols, rows, tw, th, gap, width: cols * tw + (cols + 1) * gap, height: rows * th + (rows + 1) * gap };
+  }
+  const viewKind = () => 'picture_' + ({ picture: 'colour_overview', background: 'background_areas', raw: 'as_recorded', flat: 'background_removed', green: 'gfp', magenta: 'response_in_magenta', change: 'change_from_baseline' }[S.view] || S.view) + (still() ? '' : '_frame' + S.frame);
   const badSave = (error) => /fetch/i.test(error.message) ? 'Fiji is not connected. Keep Fiji open, or reopen the analysis from Fiji.' : error.message;
   /** Download through the browser: the same file Save writes (format, size, resolution), plus how it was made. */
   async function save(picture, kind, noteId) {
@@ -1488,11 +1503,11 @@
     }
     // the path as the click travelled: an entry that redraws itself when clicked is no longer inside the menu by now
     document.addEventListener('click', (event) => { const path = event.composedPath(); for (const menu of menus) if (menu.open && !path.includes(menu)) menu.open = false; });
-    document.addEventListener('keydown', (event) => { if (event.key === 'Escape') for (const menu of menus) if (menu.open) { menu.open = false; menu.querySelector('summary').focus(); } });
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape') for (const menu of menus) if (menu.open) { menu.open = false; menu.querySelector('summary').focus(); event.preventDefault(); } });   // (an Escape that closed a menu does nothing else)
     // every Nth frame of the view on screen, each its own labelled picture, in a folder of their own
     const framesPanel = $('frames-options'), framesEvery = () => Math.round(Number($('frames-every').value));
     const framesCount = () => { const every = framesEvery(), ok = every >= 1 && every <= S.info.frames; $('frames-go').disabled = !ok;
-      $('frames-count').textContent = ok ? plural(Math.ceil(S.info.frames / every), 'picture') + ', ' + (Save.format === 'tiff' ? 'TIFF ' + Save.compression.toUpperCase() : 'PNG') + ', ' + Save.dpi + ' dpi.' : 'A whole number from 1 to ' + S.info.frames + '.'; };
+      $('frames-count').textContent = ok ? plural(Math.ceil(S.info.frames / every), 'picture') + (Math.ceil(S.info.frames / every) > 1 ? ' and one with all of them' : '') + ', ' + (Save.format === 'tiff' ? 'TIFF ' + Save.compression.toUpperCase() : 'PNG') + ', ' + Save.dpi + ' dpi.' : 'A whole number from 1 to ' + S.info.frames + '.'; };
     $('frames-every').addEventListener('input', framesCount); $('frames-cancel').addEventListener('click', () => { framesPanel.hidden = true; });
     $('frames-every').addEventListener('keydown', (event) => { if (event.key === 'Enter' && !$('frames-go').disabled) $('frames-go').click(); if (event.key === 'Escape') framesPanel.hidden = true; });
     $('save-frames').addEventListener('click', (event) => {
@@ -1513,13 +1528,18 @@
       const stamp = exportName('x', 'png').match(/(\d{8}-\d{6})\.png$/)[1], folder = 'frames_' + viewKind().replace(/^picture_/, '').replace(/_frame\d+$/, '') + '_every_' + every + '_' + stamp, width = String(S.info.frames).length;
       $('save-frames').disabled = true;
       try {
-        let reply = null;
+        let reply = null, combined = null, layout = null;
         for (let i = 0; i < frames.length; i++) {
           note.textContent = 'Saving frame ' + frames[i] + ' (' + (i + 1) + ' of ' + frames.length + ')…';
-          reply = await api('export', Object.assign({ folder, name: 'frame_' + String(frames[i]).padStart(width, '0'), png: await viewPicture(frames[i], true) }, pictureOptions()));
+          const canvas = await viewCanvas(frames[i], true);
+          reply = await api('export', Object.assign({ folder, name: 'frame_' + String(frames[i]).padStart(width, '0'), png: canvas.toDataURL('image/png') }, pictureOptions()));
+          // the same labelled frame, as one tile of the combined picture
+          if (!combined) { layout = combinedLayout(frames.length, canvas.width, canvas.height); combined = document.createElement('canvas'); combined.width = layout.width; combined.height = layout.height; const c = combined.getContext('2d'); c.fillStyle = '#000'; c.fillRect(0, 0, layout.width, layout.height); c.imageSmoothingQuality = 'high'; }
+          combined.getContext('2d').drawImage(canvas, layout.gap + (i % layout.cols) * (layout.tw + layout.gap), layout.gap + Math.floor(i / layout.cols) * (layout.th + layout.gap), layout.tw, layout.th);
         }
-        await api('export', { folder, name: 'about_these_frames', metadata: Object.assign(viewMetadata(), { frames, every, outlines_shown: S.outlines, outline_colours: S.results ? { responded: ON_PICTURE.responded, did_not_respond: ON_PICTURE.not, excluded_or_unscorable: ON_PICTURE.other } : { your_cells: '#ffffff' }, picture: pictureOptions() }) });
-        note.textContent = 'Saved ' + frames.length + ' frames in plots/' + reply.folderName + ' ';
+        if (combined && frames.length > 1) { note.textContent = 'Saving the combined picture…'; await api('export', Object.assign({ folder, name: 'all_frames_combined', png: combined.toDataURL('image/png') }, pictureOptions())); }
+        await api('export', { folder, name: 'about_these_frames', metadata: Object.assign(viewMetadata(), { frames, every, combined_picture: combined && frames.length > 1 ? { file: 'all_frames_combined', columns: layout.cols, rows: layout.rows, tile_pixels: [layout.tw, layout.th] } : null, outlines_shown: S.outlines, outline_colours: S.results ? { responded: ON_PICTURE.responded, did_not_respond: ON_PICTURE.not, excluded_or_unscorable: ON_PICTURE.other } : { your_cells: '#ffffff' }, picture: pictureOptions() }) });
+        note.textContent = 'Saved ' + plural(frames.length, 'frame') + (frames.length > 1 ? ' and one combined picture' : '') + ' in plots/' + reply.folderName + ' ';
         const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open plots folder'; open.addEventListener('click', () => api('open', { what: 'plots' }).catch(() => { })); note.appendChild(open);
       } catch (error) { note.className = 'save-note bad'; note.textContent = 'Stopped: ' + badSave(error); }
       finally { $('save-frames').disabled = false; }
@@ -1564,7 +1584,7 @@
       } catch (error) { note.className = 'save-note bad'; note.textContent = 'Not saved: ' + error.message; }
     });
     for (const tab of document.querySelectorAll('.tab')) tab.addEventListener('click', () => showTab(tab.dataset.tab));
-    $('toggle-settings').addEventListener('click', () => { const hidden = document.body.classList.toggle('no-side'); $('toggle-settings').textContent = hidden ? 'Show settings' : 'Hide settings'; redraw(); });
+    $('toggle-settings').addEventListener('click', () => { const hidden = document.body.classList.toggle('no-side'), button = $('toggle-settings'); button.textContent = hidden ? '›' : '‹'; button.setAttribute('aria-label', hidden ? 'Show settings' : 'Hide settings'); button.title = hidden ? 'Show the settings' : 'Hide the settings'; redraw(); });
     $('side').addEventListener('input', (event) => {
       const box = event.target;
       if (!S.draft || box.type === 'file' || ['confirmed', 'control', 'protocol-mode'].includes(box.id)) return;
@@ -1648,7 +1668,7 @@
     $('response-window').addEventListener('change', () => { S.window = $('response-window').value; updateWindow(); });
     $('metrics-table').addEventListener('change', showMetricTable);
     $('group').addEventListener('change', () => { S.group = Number($('group').value); listCells(); });
-    $('cell').addEventListener('change', () => chooseCell($('cell').value));
+    $('cell').addEventListener('change', () => chooseCell($('cell').value || null));
     $('previous').addEventListener('click', () => stepCell(-1)); $('next').addEventListener('click', () => stepCell(1));
     $('every').addEventListener('change', () => { S.every = $('every').checked; Plot.dirty = true; drawPlot(); legend(); });
     $('view').addEventListener('change', () => { play(false); S.view = $('view').value; S.viewChosen = true; updateTransport(); requestFrame(); });
@@ -1664,7 +1684,7 @@
     $('save-plot').addEventListener('click', () => save(plotPicture, plotKind(), 'plot-saved')); $('save-heatmap').addEventListener('click', () => save(heatmapPicture, 'heatmap', 'heatmap-saved'));
 
     const picture = $('picture');
-    picture.addEventListener('wheel', (event) => { event.preventDefault(); const box = picture.getBoundingClientRect(), mx = event.clientX - box.left, my = event.clientY - box.top, before = place(picture.clientWidth, picture.clientHeight);
+    picture.addEventListener('wheel', (event) => { if (!(event.ctrlKey || event.metaKey)) return; event.preventDefault(); const box = picture.getBoundingClientRect(), mx = event.clientX - box.left, my = event.clientY - box.top, before = place(picture.clientWidth, picture.clientHeight);
       const ix = (mx - before.x) / before.z, iy = (my - before.y) / before.z; Pic.zoom = Math.max(1, Math.min(16, Pic.zoom * Math.pow(1.0015, -event.deltaY)));
       if (Pic.zoom === 1) Pic.panX = Pic.panY = 0; else { const after = place(picture.clientWidth, picture.clientHeight); Pic.panX += mx - (after.x + ix * after.z); Pic.panY += my - (after.y + iy * after.z); } drawPicture(); }, { passive: false });
     picture.addEventListener('mousedown', (event) => { Pic.drag = { x: event.clientX, y: event.clientY }; Pic.moved = false; });
@@ -1701,7 +1721,8 @@
     heatmap.addEventListener('mouseleave', () => tip(''));
 
     document.addEventListener('keydown', (event) => { const tag = (event.target.tagName || '').toLowerCase(); if (tag === 'input' || tag === 'select' || tag === 'textarea' || $('panel-review').hidden) return;
-      if (event.key === 'ArrowLeft') { stepCell(-1); event.preventDefault(); } else if (event.key === 'ArrowRight') { stepCell(1); event.preventDefault(); } else if (event.key === ' ' && S.info && S.info.hasMovie && S.view !== 'picture' && tag !== 'button') { play(!S.timer); event.preventDefault(); } });
+      if (event.key === 'Escape' && S.cell && !event.defaultPrevented) { chooseCell(null); event.preventDefault(); }
+      else if (event.key === 'ArrowLeft') { stepCell(-1); event.preventDefault(); } else if (event.key === 'ArrowRight') { stepCell(1); event.preventDefault(); } else if (event.key === ' ' && S.info && S.info.hasMovie && S.view !== 'picture' && tag !== 'button') { play(!S.timer); event.preventDefault(); } });
     window.addEventListener('resize', redraw);
     if (window.ResizeObserver) { new ResizeObserver(redraw).observe($('panel-review')); new ResizeObserver(() => drawHeatmap()).observe($('heatmap-box')); }
   }

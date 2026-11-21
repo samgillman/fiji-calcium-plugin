@@ -425,3 +425,13 @@ p + .field-warning, p + .field-error { justify-content: flex-start; text-align: 
 #plot-card .caption > .save-note { flex: 0 1 auto; min-width: 0; }
 /* In a short window the pictures have a fixed height and the page scrolls. The picture still fills its card when the plot card beside it is taller. */
 @media (max-height: 850px) and (min-width: 801px) { #picture-card .stage { height: auto; min-height: 260px; flex: 1 1 auto; } }
+
+/* ---- 2026.11.20.21 ------------------------------------------------------------------------------------------------ */
+/* The settings panel folds away from its own edge. */
+main { position: relative; }
+#toggle-settings { position: absolute; left: -17px; top: 6px; z-index: 6; width: 15px; height: 40px; min-height: 0; padding: 0; border: 1px solid #C5CED8; border-radius: 6px; background: #fff; color: var(--gray-600); font-size: 15px; line-height: 1; cursor: pointer; box-shadow: var(--shadow-1); }
+#toggle-settings:hover { border-color: var(--blue); color: var(--blue); }
+body.no-side #toggle-settings { left: 0; border-radius: 0 6px 6px 0; }
+@media (max-width: 800px) { #toggle-settings { left: 0; top: -4px; } }
+/* Outline thickness sits with "All outlines". */
+.toolbar.dark #outline-width { max-width: 104px; }

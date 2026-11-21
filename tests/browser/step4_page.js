@@ -76,7 +76,8 @@ const assert = require('assert/strict');
     assert.equal(await page.inputValue('#view'), 'raw');
     assert.ok(await page.isEnabled('#play') && await page.isEnabled('#time'), 'movie controls work before an analysis');
     assert.ok(await page.isHidden('#result-tiles') && await page.isHidden('#plot-card'), 'preview has no empty result dashboard');
-    assert.equal(await page.locator('#cell option').count(), 6, 'cells can be selected before analysis');
+    assert.deepEqual(await page.locator('#cell option').evaluateAll((o) => o.map((x) => x.textContent)), ['None', 'Cell001', 'Cell002', 'Cell003', 'Cell004', 'Cell005', 'Cell006'], 'cells can be selected before analysis, and none is a choice');
+    assert.equal(await page.inputValue('#cell'), '', 'the page opens with no cell selected'); assert.ok(await page.isDisabled('#zoom-cell'));
     assert.ok(await page.locator('#windows-editor details').evaluateAll((details) => details.every((d) => !d.open)), 'advanced response rules start collapsed');
     assert.ok(await page.evaluate(() => {
       const transport = document.getElementById('transport').getBoundingClientRect();
@@ -334,7 +335,7 @@ const assert = require('assert/strict');
     assert.equal(await text('#quality-lead'), '1 cell flagged, including 1 responder.');
     assert.ok(await page.evaluate(() => { const tabs = document.querySelector('.tabs').getBoundingClientRect(), row = document.getElementById('result-tiles').getBoundingClientRect(); return tabs.top - row.bottom < 40; }), 'the open list lies over the page');
     await page.locator('#quality-list .flag-filter').first().click();
-    assert.equal(await page.inputValue('#group'), '5'); assert.deepEqual(await page.locator('#cell option').evaluateAll((o) => o.map((x) => x.value)), ['Cell005']);
+    assert.equal(await page.inputValue('#group'), '5'); assert.deepEqual(await page.locator('#cell option').evaluateAll((o) => o.map((x) => x.value).filter(Boolean)), ['Cell005']);
     await page.locator('#quality-list .flag-filter').first().click(); assert.equal(await page.evaluate(() => window.calciumStep4.S.qualityFlag), null);
     await page.selectOption('#group', '0');
     await page.locator('#quality-review summary').click();
@@ -358,14 +359,14 @@ const assert = require('assert/strict');
     assert.ok(await page.evaluate(() => Math.abs(window.calciumStep4.referenceLevels().find((r) => r.name === 'required rise').value - 1.1) < 1e-12), 'local .4 threshold on baseline .5 belongs at global 1.1');
     assert.match(await text('#tile-responding'), /Ionomycin \(control\): 1 of 3 evaluable/);
     await page.selectOption('#group', '1');
-    assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell002']);
+    assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value).filter(Boolean)), ['Cell002']);
     await page.selectOption('#response-window', 'Stimulus::Capsaicin');
     assert.match(await text('#tile-responding'), /Capsaicin: 2 of 3 evaluable/);
-    assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell001', 'Cell005']);
+    assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value).filter(Boolean)), ['Cell001', 'Cell005']);
     await page.selectOption('#group', '3');
-    assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell003', 'Cell004']);
+    assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value).filter(Boolean)), ['Cell003', 'Cell004']);
     await page.selectOption('#group', '4');
-    assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell006']);
+    assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value).filter(Boolean)), ['Cell006']);
     await page.selectOption('#group', '0'); await page.selectOption('#cell', 'Cell002');
 
     // Dragging begins on another cell's trace; pointer capture keeps it scrubbing.
@@ -384,6 +385,52 @@ const assert = require('assert/strict');
     await waitFrame(22);
     assert.equal(await page.evaluate(() => window.calciumStep4.Plot.scrubbing), false);
     assert.match(await text('#time-label'), /15\.50 s.*Frame 22 \/ 30/);
+
+    // No cell selected is a state of its own (the page opens that way), and the plot follows the selection.
+    const app = (what) => page.evaluate((key) => { const a = window.calciumStep4; return key === 'cell' ? a.S.cell : key === 'plot' ? a.S.plotMode : a.Pic.zoom; }, what);
+    await page.selectOption('#cell', '');
+    assert.equal(await app('cell'), null); assert.equal(await text('#verdict'), 'No cell selected.'); assert.ok(await page.isDisabled('#zoom-cell'));
+    assert.equal(await app('plot'), 'mean', 'with no cell the plot shows the average');
+    await page.selectOption('#cell', 'Cell002');
+    assert.equal(await app('plot'), 'cell', 'choosing a cell shows that cell over the average');
+    await page.evaluate(() => document.activeElement && document.activeElement.blur()); await page.keyboard.press('Escape');
+    assert.equal(await app('cell'), null, 'Escape leaves no cell selected'); assert.equal(await app('plot'), 'mean');
+    await page.keyboard.press('ArrowRight'); assert.equal(await app('cell'), 'Cell001', 'the arrows start from the first cell');
+    await page.click('[data-plot=calls]'); await page.selectOption('#cell', 'Cell002'); assert.equal(await app('plot'), 'calls', 'a plot type chosen by hand stays');
+    await page.click('[data-plot=cell]'); await page.selectOption('#cell', 'Cell001');
+    // GFP: the recording in green, the green of "Response in magenta" without the magenta.
+    await page.selectOption('#view', 'green'); await waitFrame(22);
+    assert.match(await text('#view-key'), /cells, background removed/);
+    const greenFrame = await page.evaluate(async () => {
+      const bitmap = await createImageBitmap(await (await fetch('api/frame?f=15&mode=green')).blob()), canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height;
+      const ctx = canvas.getContext('2d'); ctx.drawImage(bitmap, 0, 0); const d = ctx.getImageData(0, 0, bitmap.width, bitmap.height).data, sum = [0, 0, 0];
+      for (let i = 0; i < d.length; i += 4) { sum[0] += d[i]; sum[1] += d[i + 1]; sum[2] += d[i + 2]; } return sum; });
+    assert.ok(greenFrame[1] > 0 && greenFrame[0] < 0.15 * greenFrame[1] && greenFrame[2] < 0.15 * greenFrame[1], 'a GFP frame is green only: ' + greenFrame);
+    for (const mode of ['magenta', 'change']) assert.equal(await page.evaluate(async (m) => (await fetch('api/frame?f=15&mode=' + m)).status, mode), 200);
+    await page.selectOption('#view', 'raw'); await waitFrame(22);
+    // Outline thickness sits with "All outlines", not with the file options.
+    assert.ok(await page.evaluate(() => document.querySelector('#picture-card .toolbar').contains(document.getElementById('outline-width')) && !document.getElementById('save-options').contains(document.getElementById('outline-width'))));
+    // Scrolling over the picture scrolls the page; Ctrl (or Cmd, or a pinch) + scroll zooms.
+    const pictureBox = await page.locator('#picture').boundingBox(), zoomBefore = await app('zoom');
+    await page.mouse.move(pictureBox.x + pictureBox.width / 2, pictureBox.y + pictureBox.height / 2); await page.mouse.wheel(0, -300); await settledPaint();
+    assert.equal(await app('zoom'), zoomBefore, 'scrolling over the picture does not zoom it');
+    await page.keyboard.down('Control'); await page.mouse.wheel(0, -300); await page.keyboard.up('Control'); await settledPaint();
+    assert.ok(await app('zoom') > zoomBefore, 'Ctrl + scroll zooms'); await page.click('#zoom-all'); await page.evaluate(() => window.scrollTo(0, 0));
+    // The settings panel folds away from its own edge.
+    assert.ok(await page.evaluate(() => document.querySelector('main').contains(document.getElementById('toggle-settings')) && !document.querySelector('header').contains(document.getElementById('toggle-settings'))));
+    await page.click('#toggle-settings'); assert.ok(await page.isHidden('#side')); assert.equal(await page.getAttribute('#toggle-settings', 'aria-label'), 'Show settings');
+    await page.click('#toggle-settings'); assert.ok(await page.isVisible('#side')); assert.equal(await page.getAttribute('#toggle-settings', 'aria-label'), 'Hide settings');
+    // Save frames also writes one picture with all the saved frames, built from the same labelled frames.
+    await page.locator('#export-picture > summary').click(); await page.click('#save-frames'); await page.fill('#frames-every', '10');
+    assert.match(await text('#frames-count'), /^3 pictures and one with all of them/);
+    await page.click('#frames-go');
+    await page.waitForFunction(() => /^Saved 3 frames and one combined picture in plots\//.test(document.getElementById('picture-saved').textContent), null, { polling: 100, timeout: 20000 });
+    const framesFolder = (await text('#picture-saved')).match(/plots\/(frames_\S+)/)[1];
+    const findFolder = (dir) => { for (const entry of fs.readdirSync(dir, { withFileTypes: true })) { if (!entry.isDirectory()) continue; const full = path.join(dir, entry.name); if (entry.name === framesFolder) return full; const below = findFolder(full); if (below) return below; } return null; };
+    const framesOnDisk = findFolder(out); assert.ok(framesOnDisk, 'the frames folder is on disk: ' + framesFolder);
+    assert.deepEqual(fs.readdirSync(framesOnDisk).filter((name) => /\.png$/.test(name)).sort(), ['all_frames_combined.png', 'frame_01.png', 'frame_11.png', 'frame_21.png']);
+    const layoutSaved = JSON.parse(fs.readFileSync(path.join(framesOnDisk, 'about_these_frames.metadata.json'), 'utf8')).combined_picture;
+    assert.ok(layoutSaved && layoutSaved.columns * layoutSaved.rows >= 3 && layoutSaved.file === 'all_frames_combined', 'how the combined picture is laid out is recorded');
 
     // Actual time determines heatmap widths/clicks, and the acquisition gap stays blank.
     await page.click('.tab[data-tab=heatmap]'); await page.selectOption('#order', 'orig'); await settledPaint();
