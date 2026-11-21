@@ -216,7 +216,7 @@
       };
       const holder = document.createElement('span'); holder.className = 'with-button'; line('Stimulus added after frame', 'The last frame before the stimulus was added. The rows below follow it.').appendChild(holder);
       const stimBox = frames('stim-frame-' + index, 'Stimulus added after frame'); holder.appendChild(stimBox);
-      const fromFrame = document.createElement('button'); fromFrame.type = 'button'; fromFrame.className = 'small from-frame'; fromFrame.textContent = 'Use frame';
+      const fromFrame = document.createElement('button'); fromFrame.type = 'button'; fromFrame.className = 'from-frame'; fromFrame.textContent = 'Use frame';
       fromFrame.addEventListener('click', () => { stimBox.value = S.frame; applyFrames(index); draftChanged(); });
       holder.appendChild(fromFrame);
       const suggestion = document.createElement('p'); suggestion.className = 'fine suggestion'; suggestion.id = 'suggestion-' + index; suggestion.hidden = true; section.appendChild(suggestion);
@@ -271,7 +271,7 @@
       const words = !untouched ? '' : from === 'last-session' ? 'From your last session on this recording.' : from === 'last-recording' ? 'Same as your last recording.' : from === 'fiji' ? 'A placeholder from the frames used in Fiji. Set it to when the stimulus was added.' : 'A suggestion, not a measured time.';
       if (note.dataset.shown !== words) {
         note.dataset.shown = words; note.hidden = !words; note.replaceChildren(words);
-        if (words && from === 'last-session' && S.info.fijiDraft) { const use = document.createElement('button'); use.type = 'button'; use.className = 'ghost small repair'; use.textContent = 'Use Fiji’s values';
+        if (words && from === 'last-session' && S.info.fijiDraft) { const use = document.createElement('button'); use.type = 'button'; use.className = 'ghost repair'; use.textContent = 'Use Fiji’s values';
           use.addEventListener('click', () => { S.unlinked.clear(); S.initialDraft = clone(S.info.fijiDraft); S.info.stimulusFrom = 'fiji'; fillDraft(S.info.fijiDraft); $('confirmed').checked = false; draftChanged(); }); note.append(' ', use); }
       }
       if (i === '0') shadeTimeline(used);
@@ -418,7 +418,7 @@
     const shown = JSON.stringify(notes.map((e) => [e.beside, e.message, e.level, e.inline, e.repair && e.repair.text]));
     if (shown !== S.validationShown) {
       S.validationShown = shown;
-      const action = (repair) => { const button = document.createElement('button'); button.type = 'button'; button.className = 'ghost small repair'; button.textContent = repair.text; button.addEventListener('click', repair.run); return button; };
+      const action = (repair) => { const button = document.createElement('button'); button.type = 'button'; button.className = 'ghost repair'; button.textContent = repair.text; button.addEventListener('click', repair.run); return button; };
       for (const old of document.querySelectorAll('#side .field-error, #side .field-warning')) old.remove();
       const said = new Set();
       for (const entry of notes) {
@@ -433,7 +433,7 @@
       const box = $('validation'), loose = notes.filter((e) => !e.inline), above = { error: notes.filter((e) => e.inline && e.level === 'error').length, warning: notes.filter((e) => e.inline && e.level === 'warning').length };
       box.hidden = !notes.length; box.replaceChildren();
       if (above.error || above.warning) {   // the messages themselves are beside their fields; this takes you to the first
-        const jump = document.createElement('button'); jump.type = 'button'; jump.id = 'validation-jump'; jump.className = 'ghost small jump' + (above.error ? '' : ' warning');
+        const jump = document.createElement('button'); jump.type = 'button'; jump.id = 'validation-jump'; jump.className = 'ghost jump' + (above.error ? '' : ' warning');
         jump.textContent = above.error ? (above.error === 1 ? 'Fix 1 problem above' : 'Fix ' + above.error + ' problems above') : plural(above.warning, 'warning') + ' above';
         jump.addEventListener('click', () => { const first = document.querySelector(above.error ? '#side .field-error' : '#side .field-warning'); if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' }); });
         box.appendChild(jump);
@@ -631,7 +631,7 @@
       // the recording's own frame rate, when a different one is typed
       const own = Number(S.info.recordedHz), note = $('rate-note'), differs = !d.timestamps && isFinite(own) && own > 0 && isFinite(hz) && hz > 0 && Math.abs(hz - own) > 1e-9 * own, text = differs ? 'The file says ' + fmt(+own.toPrecision(6)) + ' (' + fmt(+(1 / own).toPrecision(6)) + ' s per frame). ' : '';
       if (note.dataset.shown !== text) { note.dataset.shown = text; note.hidden = !differs; note.replaceChildren(text);
-        if (differs) { const use = document.createElement('button'); use.type = 'button'; use.className = 'ghost small repair'; use.textContent = 'Use it'; use.addEventListener('click', () => { exactInput($('sampling_hz'), S.info.recordedHz); applyAllFrames(); draftChanged(); }); note.appendChild(use); } } }
+        if (differs) { const use = document.createElement('button'); use.type = 'button'; use.className = 'ghost repair'; use.textContent = 'Use it'; use.addEventListener('click', () => { exactInput($('sampling_hz'), S.info.recordedHz); applyAllFrames(); draftChanged(); }); note.appendChild(use); } } }
     $('open-folder').disabled = !state.folder; $('open-folder').hidden = !state.folder; $('open-folder').title = state.folder ? 'Open ' + String(state.folder).split(/[\\/]/).pop() : '';
     const pending = hasPending(), notice = $('applied-note'); notice.hidden = !S.results || !pending; notice.classList.toggle('pending', pending);
     notice.textContent = pending ? 'Settings changed. Everything shown is still the last completed analysis.' : '';
@@ -1467,7 +1467,7 @@
   function wire() {
     const helpOn = stored('step4.help') === '1'; document.body.classList.toggle('show-help', helpOn); $('toggle-help').textContent = helpOn ? 'Hide explanations' : 'Show explanations';
     $('toggle-help').addEventListener('click', () => { const on = document.body.classList.toggle('show-help'); store('step4.help', on ? '1' : '0'); $('toggle-help').textContent = on ? 'Hide explanations' : 'Show explanations'; redraw(); });
-    dragEdge($('resize-side'), (e) => Math.round(Math.max(260, Math.min(window.innerWidth * 0.6, e.clientX - $('side').getBoundingClientRect().left - 8))) + 'px',
+    dragEdge($('resize-side'), (e) => Math.round(Math.max(260, Math.min(window.innerWidth * 0.6, e.clientX - $('side').getBoundingClientRect().left - 10))) + 'px',
       (value) => { if (value) document.documentElement.style.setProperty('--side-w', value); else document.documentElement.style.removeProperty('--side-w'); }, 'step4.side');
     dragEdge($('resize-height'), (e) => Math.round(Math.max(240, Math.min(1600, e.clientY - document.querySelector('.split').getBoundingClientRect().top - 6))) + 'px',
       (value) => { const split = document.querySelector('.split'); split.classList.toggle('sized', !!value); if (value) split.style.setProperty('--split-h', value); else split.style.removeProperty('--split-h'); }, 'step4.height');

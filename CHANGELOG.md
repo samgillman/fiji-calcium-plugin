@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026.11.20.22
+
+The Step 4 page only. No measurement, response call or saved table changes.
+
+- **One shape and one size for the page's controls.** Every button, list and field is the same height (28 pixels) with the same text size, and every box (cards, tiles, menus, buttons, fields) has the same corner. Before, the controls came in eleven heights from 24 to 34 pixels, and the corners in four sizes plus pills and a round dot. What that changes on screen:
+  - the "cells flagged" list opens from a button like Export (it was a pill);
+  - the outline-thickness list looks like the other lists (it had no border);
+  - the headline box has the same edge as the other tiles (it had a thick blue edge that curved);
+  - the dot beside a cell's call is a square, like the swatches in the legend;
+  - Play, the frame arrows, the cell arrows, "Open results folder" and the export buttons no longer differ in height.
+- **The results row is level.** The sentence with the percentage has a row of its own. Under it the counts, "cells flagged" and "Open results folder" sit on one line at the same height. "Cells flagged" used to sit 10 pixels lower than its neighbours, on a leftover second row beside a taller tile, because a spacing rule meant for the settings also reached it; the Export buttons were 5 pixels low for the same reason.
+- **The settings arrow has a strip of its own.** With the settings hidden, the arrow sat on the left border of the results box, against the percentage. It is now in the strip between the settings and the work area, above the drag grip. With the settings hidden that strip stays, in the page margin, so the arrow is never on the results. It also stays in view when the page is scrolled.
+
 ## 2026.11.20.21
 
 The movie views, the picture's controls and the export of frames. No measurement, response call or saved table changes.

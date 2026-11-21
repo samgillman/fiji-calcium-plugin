@@ -39,7 +39,7 @@
       <h3>Recorded timestamps</h3>
       <p class="fine help">A CSV with a Time_s column in seconds, one row per frame. It replaces the frame rate.</p>
       <label class="file-label">Timestamp CSV <input id="timestamps-file" type="file" accept=".csv,text/csv"></label>
-      <div class="file-note"><span id="timestamps-name">No file selected</span><button id="timestamps-clear" class="ghost small" type="button" hidden>Remove</button></div>
+      <div class="file-note"><span id="timestamps-name">No file selected</span><button id="timestamps-clear" class="ghost" type="button" hidden>Remove</button></div>
       <h3>Rule type and protocol file</h3>
       <label class="row"><span>Rule type</span><select id="protocol-mode"><option value="2">Elapsed time / custom</option><option value="1">Legacy consecutive samples</option></select></label>
       <p class="fine help" id="rule-help">Starting values. Check against your controls.</p>
@@ -50,12 +50,12 @@
       <p class="fine help" id="overrides-help">Optional: an array of field timing overrides from a SimpleCa protocol.</p>
       <h3>Diagnostic files</h3>
       <label class="file-label">Sensitivity grid CSV<input id="sensitivity-file" type="file" accept=".csv,text/csv"></label>
-      <div class="file-note"><span id="sensitivity-name">No file selected</span><button id="sensitivity-clear" class="ghost small" type="button" hidden>Remove</button></div>
+      <div class="file-note"><span id="sensitivity-name">No file selected</span><button id="sensitivity-clear" class="ghost" type="button" hidden>Remove</button></div>
       <label class="file-label">Negative-control windows CSV<input id="negative_control-file" type="file" accept=".csv,text/csv"></label>
-      <div class="file-note"><span id="negative_control-name">No file selected</span><button id="negative_control-clear" class="ghost small" type="button" hidden>Remove</button></div>
+      <div class="file-note"><span id="negative_control-name">No file selected</span><button id="negative_control-clear" class="ghost" type="button" hidden>Remove</button></div>
       <p class="fine help">Diagnostics are saved separately and do not change the calls. Version 2 protocols only.</p>
       <h3>This page</h3>
-      <div class="actions"><button class="small" id="toggle-help" type="button" title="Show or hide the explanations under the settings and plots">Show explanations</button><button id="log" class="small" type="button" disabled>View log</button></div>
+      <div class="actions"><button id="toggle-help" type="button" title="Show or hide the explanations under the settings and plots">Show explanations</button><button id="log" type="button" disabled>View log</button></div>
     </details>
     </div>
     <section class="run-box">
@@ -69,10 +69,12 @@
     </section>
     <p class="fine" id="version"></p>
   </aside>
-  <div class="resizer" id="resize-side" role="separator" aria-orientation="vertical" title="Drag to make the settings wider or narrower. Double-click to reset."></div>
+  <div class="side-edge" id="side-edge">
+    <button id="toggle-settings" type="button" aria-label="Hide settings" title="Hide the settings">‹</button>
+    <div class="resizer" id="resize-side" role="separator" aria-orientation="vertical" title="Drag to make the settings wider or narrower. Double-click to reset."></div>
+  </div>
 
   <main>
-    <button id="toggle-settings" type="button" aria-label="Hide settings" title="Hide the settings">‹</button>
     <div class="workspace-heading"><div><h1 id="workspace-title">Review the recording</h1><p id="workflow-help" class="help">Drag the frame slider or press Play. You can review the movie before running analysis.</p></div><span class="badge" id="review-stage">Preview · no analysis yet</span></div>
     <div class="applied-note" id="applied-note" role="status" hidden></div>
     <div class="tiles" id="result-tiles" hidden>
@@ -80,8 +82,8 @@
       <div class="tile" id="tile-registered"><b>–</b><span>cells registered</span></div>
       <div class="tile" id="tile-excluded"><b>–</b><span>excluded</span></div>
       <div class="tile" id="tile-unscorable"><b>–</b><span>unscorable</span></div>
-      <details id="quality-review" class="quality-chip" hidden><summary id="quality-summary"></summary><div class="quality-pop"><p id="quality-lead"></p><ul id="quality-list"></ul><button class="small" id="quality-filter" type="button">Show cells needing review</button><p class="fine help">Flags do not change the calls or exclude cells.</p></div></details>
-      <button class="small" id="open-folder" type="button" disabled hidden>Open results folder</button>
+      <details id="quality-review" class="quality-chip" hidden><summary id="quality-summary"></summary><div class="quality-pop"><p id="quality-lead"></p><ul id="quality-list"></ul><button id="quality-filter" type="button">Show cells needing review</button><p class="fine help">Flags do not change the calls or exclude cells.</p></div></details>
+      <button id="open-folder" type="button" disabled hidden>Open results folder</button>
     </div>
 
     <nav class="tabs" role="tablist">
@@ -107,7 +109,7 @@
           <div class="toolbar dark">
             <label class="view-label">View <select id="view" aria-label="Recording display"><option value="raw">Recording</option><option value="flat">Background removed</option><option value="green" title="The recording with the background removed, in green: the green of “Response in magenta” without the magenta">GFP</option><option value="magenta">Response in magenta</option><option value="change">Change from baseline</option><option value="picture">Colour overview</option><option value="background" title="The pixels taken as each cell's background: the darkest quarter of a ring 6 to 40 pixels outside its outline, without other cells or very bright objects">Background areas</option></select></label>
             <label class="check"><input type="checkbox" id="outlines" checked> All outlines</label>
-            <select id="outline-width" class="quiet" aria-label="Outline thickness" title="Outline thickness, on screen and in saved pictures"><option value="0.6">thin</option><option value="1" selected>normal</option><option value="1.8">thick</option><option value="2.8">very thick</option></select>
+            <select id="outline-width" aria-label="Outline thickness" title="Outline thickness, on screen and in saved pictures"><option value="0.6">thin</option><option value="1" selected>normal</option><option value="1.8">thick</option><option value="2.8">very thick</option></select>
             <button id="zoom-cell" type="button" disabled>Zoom to cell</button>
             <button id="zoom-all" type="button">Whole picture</button>
           </div>
@@ -130,7 +132,7 @@
             <div class="seg" role="group" aria-label="What the plot shows"><button type="button" class="on" data-plot="mean" aria-pressed="true" title="The average trace (± SEM) of the cells chosen under Show, and nothing else">Average</button><button type="button" data-plot="cell" aria-pressed="false" title="The selected cell's trace with its thresholds, over the average">One cell + average</button><button type="button" data-plot="calls" aria-pressed="false" title="The average of the cells that responded against the average of those that did not">Responders vs non-responders</button></div>
             <label class="check" id="every-label" hidden title="Draws every cell's own trace behind the average"><input type="checkbox" id="every"> All traces</label>
             <label>Signal <select id="signal" aria-label="Which signal the plot shows" title="ΔF/F₀ is what the response calls use. The gray values show the measurement itself, with or without the background taken off."><option value="dff">ΔF/F₀</option><option value="corrected">Gray levels, background removed</option><option value="raw">Raw gray levels</option><option value="rawdff">ΔF/F₀ of raw</option></select></label>
-            <span class="y-axis" title="Limits of the vertical axis. Leave a box empty for the automatic limit."><span>Y axis</span><input id="y-min" inputmode="decimal" placeholder="auto" aria-label="Lower limit of the Y axis"><i>to</i><input id="y-max" inputmode="decimal" placeholder="auto" aria-label="Upper limit of the Y axis"><button class="ghost small" id="y-auto" type="button" title="Back to the automatic limits">auto</button></span>
+            <span class="y-axis" title="Limits of the vertical axis. Leave a box empty for the automatic limit."><span>Y axis</span><input id="y-min" inputmode="decimal" placeholder="auto" aria-label="Lower limit of the Y axis"><i>to</i><input id="y-max" inputmode="decimal" placeholder="auto" aria-label="Upper limit of the Y axis"><button class="ghost" id="y-auto" type="button" title="Back to the automatic limits">auto</button></span>
           </div>
           <div class="legend" id="legend"></div>
           <div class="stage light"><canvas id="plot"></canvas><div class="empty" id="plot-empty">Run the analysis to see every cell's trace.</div></div>
@@ -189,7 +191,7 @@
 <div class="save-options" id="frames-options" hidden role="dialog" aria-label="Save frames">
   <label>Every <span class="inline"><input id="frames-every" type="number" min="1" step="1" inputmode="numeric" aria-label="Save every how many frames"> frames</span></label>
   <p class="fine" id="frames-count"></p>
-  <div class="actions"><button class="primary small" id="frames-go" type="button">Save frames</button><button class="small" id="frames-cancel" type="button">Cancel</button></div>
+  <div class="actions"><button class="primary" id="frames-go" type="button">Save frames</button><button id="frames-cancel" type="button">Cancel</button></div>
 </div>
 <div class="tip" id="tip" hidden></div>
 <script src="app.js"></script>

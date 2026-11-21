@@ -417,8 +417,33 @@ const assert = require('assert/strict');
     await page.keyboard.down('Control'); await page.mouse.wheel(0, -300); await page.keyboard.up('Control'); await settledPaint();
     assert.ok(await app('zoom') > zoomBefore, 'Ctrl + scroll zooms'); await page.click('#zoom-all'); await page.evaluate(() => window.scrollTo(0, 0));
     // The settings panel folds away from its own edge.
-    assert.ok(await page.evaluate(() => document.querySelector('main').contains(document.getElementById('toggle-settings')) && !document.querySelector('header').contains(document.getElementById('toggle-settings'))));
+    // One shape and one size: every button, list and field is the control height with the page's one corner, every box has that corner,
+    // and nothing is a pill or a circle. Tabs, menu entries and links written as buttons are the stated exceptions.
+    const oddShapes = () => page.evaluate(() => {
+      const root = getComputedStyle(document.documentElement), corner = root.getPropertyValue('--radius').trim(), high = parseFloat(root.getPropertyValue('--control-h')), odd = [];
+      const name = (el) => el.id || (typeof el.className === 'string' && el.className) || el.tagName;
+      for (const el of document.querySelectorAll('button, select, input:not([type=checkbox]):not([type=range]):not([type=file]):not([type=radio]), details.export > summary, .quality-chip > summary, .link-toggle, .file-button')) {
+        const box = el.getBoundingClientRect(); if (!box.width || !box.height) continue;
+        if (!el.matches('.tab, .export-menu button, .repair, .jump, .flag-filter, .save-note button') && Math.abs(box.height - high) > 0.6) odd.push('height ' + box.height + ': ' + name(el));
+        if (!el.matches('.tab, .seg button, .export-menu button') && getComputedStyle(el).borderTopLeftRadius !== corner) odd.push('corner ' + getComputedStyle(el).borderTopLeftRadius + ': ' + name(el));
+      }
+      for (const el of document.querySelectorAll('.card, .tile, .scroller, .run-box, .export-menu, .quality-pop, .badge, .pill')) { if (el.getBoundingClientRect().width && getComputedStyle(el).borderTopLeftRadius !== corner) odd.push('corner ' + getComputedStyle(el).borderTopLeftRadius + ': ' + name(el)); }
+      for (const el of document.querySelectorAll('body *')) { const r = getComputedStyle(el).borderTopLeftRadius; if (el.getBoundingClientRect().width && (r.endsWith('%') || parseFloat(r) > parseFloat(corner))) odd.push('rounder than the page corner (' + r + '): ' + name(el)); }
+      return odd;
+    });
+    // The results: the sentence on a row of its own; under it the counts, the flagged list and the results folder on one line, level with each other.
+    assert.deepEqual(await page.evaluate(() => { const top = (id) => Math.round(document.getElementById(id).getBoundingClientRect().top), bottom = (id) => Math.round(document.getElementById(id).getBoundingClientRect().bottom), row = ['tile-registered', 'tile-excluded', 'tile-unscorable', 'quality-summary', 'open-folder'].filter((id) => document.getElementById(id).getBoundingClientRect().width);
+      return { under: row.every((id) => top(id) >= bottom('tile-responding')), tops: [...new Set(row.map(top))].length, bottoms: [...new Set(row.map(bottom))].length, shown: row.length >= 4 }; }), { under: true, tops: 1, bottoms: 1, shown: true });
+    assert.deepEqual(await oddShapes(), [], 'controls and boxes share one height and one corner');
+    await page.locator('#export-plot > summary').click(); assert.deepEqual(await oddShapes(), [], 'also with a menu open'); await page.keyboard.press('Escape');
+    // Its arrow has a strip of its own beside the work area and a clear gap on both sides, so it never sits on or against the results, with the settings shown or hidden.
+    assert.ok(await page.evaluate(() => document.getElementById('side-edge').contains(document.getElementById('toggle-settings')) && !document.querySelector('main').contains(document.getElementById('toggle-settings'))));
+    const arrowClear = () => page.evaluate(() => { const arrow = document.getElementById('toggle-settings').getBoundingClientRect(), work = document.querySelector('main').getBoundingClientRect(); return arrow.width > 0 && arrow.left >= 2 && work.left - arrow.right >= 2; });
+    assert.ok(await arrowClear(), 'arrow beside the work area, settings shown'); assert.ok(await page.isVisible('#resize-side'));
+    assert.ok(await page.evaluate(() => document.getElementById('toggle-settings').getBoundingClientRect().left - document.getElementById('side').getBoundingClientRect().right >= 2), 'and clear of the settings');
     await page.click('#toggle-settings'); assert.ok(await page.isHidden('#side')); assert.equal(await page.getAttribute('#toggle-settings', 'aria-label'), 'Show settings');
+    assert.ok(await arrowClear(), 'arrow beside the work area, settings hidden'); assert.ok(await page.isHidden('#resize-side'));
+    assert.ok(await page.evaluate(() => document.querySelector('main').getBoundingClientRect().left <= 24), 'the work area keeps the page margin');
     await page.click('#toggle-settings'); assert.ok(await page.isVisible('#side')); assert.equal(await page.getAttribute('#toggle-settings', 'aria-label'), 'Hide settings');
     // Save frames also writes one picture with all the saved frames, built from the same labelled frames.
     await page.locator('#export-picture > summary').click(); await page.click('#save-frames'); await page.fill('#frames-every', '10');
