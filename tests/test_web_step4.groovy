@@ -48,7 +48,7 @@ try {
     assert code==200 && about.recording=='Fixture recording' && about.names==names && about.frames==30 && about.hasMovie && about.hasPicture
     assert about.key==Settings.identity(data) && about.rois.size()==6 && about.rois[0].size()==4
     assert about.draft.values.sampling_hz=='2.0000001' && about.draft.values.baseline_end=='5'
-    assert about.draft.protocol.schema_version==2 && about.draft.protocol.windows[0].Duration_mode=='seconds' && about.draft.protocol.windows[0].Min_duration_s==1
+    assert about.draft.protocol.schema_version==2 && about.draft.protocol.windows[0].Duration_mode=='samples' && about.draft.protocol.windows[0].Consecutive_samples==2 : 'a response holds for 2 samples in a row by default'
     assert about.timingProvisional && about.timeSource=='constant_fps' && Math.abs(about.frameTimes[1]-1/2.0000001d)<1e-14
     def state=json('api/state')[1]
     assert !state.busy && state.version==0 && !state.engineReady && state.rest==[1,5] && !state.settingsPending && call('api/results').text=='{}'

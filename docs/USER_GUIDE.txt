@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.23.
+A plugin for Fiji / ImageJ.  Version 2026.11.21.1.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -232,9 +232,12 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        (magenta)); the plugin then looks for the cells that are only visible when
                        they respond, by itself. Every cell is recorded as chosen blind, or as added (or reshaped)
                        after the response was shown (..._cells_chosen_blind_or_after_response.csv). When
-                       Step 4 finishes it gives % responding for each group and for all cells. Only the
-                       blind group is free of selection on the response: the response picture can add
-                       dim cells that respond, never dim cells that do not.
+                       Step 4 finishes it gives % responding for all cells first, then for each group. Only
+                       the blind group is free of selection on the response: the response picture can add
+                       dim cells that respond, never dim cells that do not. A further line gives the % among
+                       quiet cells (required rise 30 % or less), and a switch leaves out the cells whose
+                       corrected fluorescence went below zero. All of it is saved in
+                       ..._percent_responding_<analysis>.csv. A response must hold for 2 samples in a row.
   Grades               responds = the outline rises on its own at the stimulus (more than 0.5 gray levels,
                        1.25 times its surroundings, and 5 % of its own brightness), also when part of it
                        is very bright; likely = dim, even, clearly brighter than its surroundings;

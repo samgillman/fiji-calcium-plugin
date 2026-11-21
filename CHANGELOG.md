@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026.11.21.1
+
+**This build changes results.** Four choices on how responses are counted and shown, each made after it was measured on the P2 Run1 and P3 Run2 analyses.
+
+- **A response must hold for 2 samples in a row.** The length is counted in samples, not seconds. "For 1 s" was applied as 2 samples at exactly 1 frame per second and as 3 at the file's own 0.99995 s per frame, so two recordings of one series were held to different rules:
+  - P2 Run1 (3 samples): 83 % responding; with 2 samples about 85 % (146 of 172).
+  - P3 Run2 (2 samples): 65 %; with 3 samples about 61 % (142 of 231).
+  New analyses use 2 samples in a row. Settings remembered for a recording that still say "for 1 s" move to it once and the page says so; a length you set by hand is kept. The rule line says what is applied: "for 2 samples in a row", or for a length in seconds "for 1 s, here 3 samples in a row". **Running an earlier analysis again can change its calls.**
+- **All cells lead the headline**, on every tab and in the line Fiji shows when the analysis finishes. The cells chosen blind and those added after the response was shown are the second line. Before, the blind figure led and the Responder counts tab showed only the all-cells one.
+- **A line for quiet cells.** The % among cells that need a rise of 30 % or less to respond, with noisier cells set aside whether they responded or not: 84 % (113 of 134) on P2 Run1 and 68 % (121 of 179) on P3 Run2. Setting aside only the noisy cells that did not respond would lift the figure to 87 % and 72 %, because noisy responders stay in; that is not done.
+- **A switch for cells below zero.** A cell whose background-corrected fluorescence went below zero (ΔF/F₀ under −1 at some frame) stays counted. "Leave out N cells below zero" recalculates every percentage without them: 8 cells on P2 Run1 and 18 on P3 Run2, at most 1 point of % responding.
+- One tally, worked out in Fiji, feeds the headline, a table at the top of the Responder counts tab and a saved file, `<recording>_percent_responding_<analysis>.csv`: each row with every cell and without the cells below zero. It replaces `_responders_by_how_chosen_`, whose rows are all in it.
+
 ## 2026.11.20.23
 
 The Step 4 page only. No measurement, response call or saved per-cell table changes.

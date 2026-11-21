@@ -13,6 +13,8 @@ def source=new File('tests/fixtures/simpleca').absoluteFile,fixture=new File(roo
 source.listFiles().findAll{it.isFile()}.each{new File(fixture,it.name).bytes=it.bytes}
 List clock=(0..<30).collect{it/2d+(it>=15?5d:0d)}
 ['normalized_traces.csv','mean_trace.csv'].each{file->def rows=Csv.read(new File(fixture,file));rows.drop(1).eachWithIndex{row,i->row[0]=clock[i]};Csv.write(new File(fixture,file),rows)}
+// One cell's corrected fluorescence goes below zero at the last frame, so the page offers to leave it out of the percentages.
+def dipped=Csv.read(new File(fixture,'normalized_traces.csv'));dipped[dipped.size()-1][dipped[0].indexOf('Cell005')]='-1.5';Csv.write(new File(fixture,'normalized_traces.csv'),dipped)
 // The control follows the stimulus, as the engine requires: neither baseline may fall inside the other's response window.
 def primary=Protocol.window('Stimulus','Capsaicin',0.5d,3d,7d)
 def control=Protocol.window('Control','Ionomycin',7d,12.5d,19.5d);control.Floor_local_fraction=0.4d;control.SD_multiplier=5d

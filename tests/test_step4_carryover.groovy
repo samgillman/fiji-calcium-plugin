@@ -48,20 +48,47 @@ new File(work, 'step4_last_settings.json').text = '{broken'
 assert Settings.remembered(data) == null : 'an unreadable file is ignored'
 println 'PASS: Step 4 settings are remembered per recording and dropped when the frames from Fiji change'
 
-// % responding by how the cell was chosen
+// % responding, worked out once: all cells first, then by how the cell was chosen, then the quiet cells; each row with every
+// cell and without the cells whose corrected fluorescence went below zero
 def results = new File(work, 'SimpleCa-test'); results.mkdirs()
-new File(results, 'responder_calls.csv').text = '"Field","Cell","Role","Stimulus","Status"\n' + [
-    ['a', 'Stimulus', 'Responded'], ['b', 'Stimulus', 'Did not respond'], ['c', 'Stimulus', 'Excluded'], ['d', 'Stimulus', 'Responded'],
-    ['e', 'Stimulus', 'Responded'], ['f', 'Stimulus', 'Did not respond'], ['a', 'Control', 'Did not respond'], ['zz', 'Stimulus', 'Responded']
-].collect { '"rec","' + it[0] + '","' + it[1] + '","Stimulus","' + it[2] + '"' }.join('\n') + '\n'
+new File(results, 'responder_calls.csv').text = '"Field","Cell","Role","Stimulus","Status","Threshold_increase"\n' + [
+    ['a', 'Stimulus', 'Responded', 0.12], ['b', 'Stimulus', 'Did not respond', 0.45], ['c', 'Stimulus', 'Excluded', ''], ['d', 'Stimulus', 'Responded', 0.40],
+    ['e', 'Stimulus', 'Responded', 0.30], ['f', 'Stimulus', 'Did not respond', 0.20], ['a', 'Control', 'Did not respond', 0.12], ['zz', 'Stimulus', 'Responded', 0.10]
+].collect { '"rec","' + it[0] + '","' + it[1] + '","Stimulus","' + it[2] + '",' + it[3] }.join('\n') + '\n'
+// cell d dips below -1 at one frame; cell c does too but is excluded, so it is not among the cells left out
+new File(results, 'normalized_traces.csv').text = '"Time","a","b","c","d","e","f","zz"\n0,0,0,0,0,0,0,0\n1,0.5,0.1,-2,-1.2,0.6,0.1,0.4\n2,0.4,0,0,0.9,0.5,-0.9,0.3\n'
 def tagged = data + [chosenBlind: [a: true, b: true, c: true, d: false, e: false, f: false]]
-def sentence = Settings.byHowChosen(results, tagged)
-assert sentence.contains('Chosen blind: 1 of 2 responded (50.0 %)') && sentence.contains('Added after the response was shown: 2 of 3 responded (66.7 %)') && sentence.contains('All cells: 3 of 5 responded (60.0 %)') : sentence
-def table = new File(work, 'rec_responders_by_how_chosen_SimpleCa-test.csv').readLines()
-assert table.size() == 4 && table[1].startsWith('blind,3,2,1,50.0') && table[2].contains('after the response was shown,3,3,2,66.7') && table[3].startsWith('all cells,6,5,3,60.0') : table
-assert Settings.byHowChosen(results, data + [chosenBlind: [a: true, b: true]]).contains('All 2 cells were chosen blind: 1 of 2 responded (50.0 %)')
-assert Settings.byHowChosen(results, data) == '' : 'no tags, no sentence'
-println 'PASS: % responding apart for cells chosen blind and cells added after the response was shown'
+def found = Settings.tally(results, tagged), rowOf = { String key -> found.rows.find { it.key == key } }
+assert found.rows*.key == ['all', 'blind', 'later', 'quiet'] && found.belowZero == ['d'] && found.quietRise == 0.30d : found
+assert rowOf('all').counted == [3, 5, 6] && rowOf('all').without == [2, 4, 5] : 'responded, evaluable, registered; without cell d'
+assert rowOf('blind').counted == [1, 2, 3] && rowOf('blind').without == [1, 2, 3] && rowOf('later').counted == [2, 3, 3] && rowOf('later').without == [1, 2, 2]
+// quiet: required rise at most 30 %, whether the cell responded or not: a, e and f; b and d need more and are set aside
+assert rowOf('quiet').counted == [2, 3, 3] && rowOf('quiet').without == [2, 3, 3] && rowOf('quiet').label == 'Quiet enough to detect a 30 % rise'
+assert Settings.tally(results, tagged, [a: [0d, 0.5d], d: [0d, -1.2d], c: [-2d]]).belowZero == ['d'] : 'the same from traces already read'
+def sentence = Settings.percentResponding(results, tagged)
+assert sentence == ' All cells: 3 of 5 responded (60.0 %). Chosen blind: 1 of 2 responded (50.0 %). Added after the response was shown: 2 of 3 responded (66.7 %).' : sentence
+def table = new File(work, 'rec_percent_responding_SimpleCa-test.csv').readLines()
+assert table[0] == 'cells,registered,evaluable,responded,percent_responding,cells_below_zero,evaluable_without_them,responded_without_them,percent_without_them' : table[0]
+assert table.size() == 5 && table[1] == 'All cells,6,5,3,60.0,1,4,2,50.0' && table[2] == 'Chosen blind,3,2,1,50.0,0,2,1,50.0' && table[3] == 'Added after the response was shown,3,3,2,66.7,1,2,1,50.0' && table[4] == 'Quiet enough to detect a 30 % rise,3,3,2,66.7,0,3,2,66.7' : table
+assert Settings.percentResponding(results, data + [chosenBlind: [a: true, b: true]]).contains('All 2 cells were chosen blind: 1 of 2 responded (50.0 %)')
+assert Settings.percentResponding(results, data) == '' : 'not recorded how cells were chosen: no sentence'
+assert new File(work, 'rec_percent_responding_SimpleCa-test.csv').readLines()*.split(',')*.getAt(0) == ['cells', 'All cells', 'Quiet enough to detect a 30 % rise'] : 'the table is saved all the same'
+assert Settings.tally(new File(work, 'no-such-analysis'), tagged) == null
+println 'PASS: % responding worked out once: all cells, by how chosen, quiet cells; with and without the cells below zero'
+
+// A rule remembered from an earlier build, still on the former default "for 1 s", now counts 2 samples in a row; a length set
+// by hand is kept; settings remembered by this build are taken as they are
+def formerDefault = { Map change -> Map p = new groovy.json.JsonSlurper().parseText(groovy.json.JsonOutput.toJson(Settings.draft(data).protocol)) as Map; (p.windows as List).each { it.Duration_mode = 'seconds'; it.Min_duration_s = 1d; it.putAll(change) }; p }
+def asSaved = { Map protocol, Map extra -> new File(work, 'step4_last_settings.json').text = groovy.json.JsonOutput.toJson([recording: '' + data.recording, frames: data.frames as int, baseline_start: Settings.fijiFrame(data, 'Start'), baseline_end: Settings.fijiFrame(data, 'End'), values: Settings.draft(data).values, protocol: protocol] + extra) }
+asSaved(formerDefault([:]), [:]); Map note = [:]; def moved = Settings.remembered(data, note)
+assert moved != null && note.ruleMoved && moved.protocol.windows[0].Duration_mode == 'samples' && moved.protocol.windows[0].Consecutive_samples == 2 : moved?.protocol?.windows
+asSaved(formerDefault([Min_duration_s: 3d]), [:]); note = [:]; def kept = Settings.remembered(data, note)
+assert kept != null && !note.ruleMoved && kept.protocol.windows[0].Duration_mode == 'seconds' && (kept.protocol.windows[0].Min_duration_s as double) == 3d : 'a length set by hand is kept'
+asSaved(formerDefault([:]), [format: Settings.REMEMBERED_FORMAT]); note = [:]; def chosen = Settings.remembered(data, note)
+assert chosen != null && !note.ruleMoved && chosen.protocol.windows[0].Duration_mode == 'seconds' : 'chosen again in this build: kept'
+assert Settings.draft(data).protocol.windows[0].Duration_mode == 'samples' && Settings.draft(data).protocol.windows[0].Consecutive_samples == 2 : 'the default rule'
+println 'PASS: a remembered rule on the former default moves to 2 samples in a row once; a chosen length is kept'
+
 // the page's arrangement is kept with Fiji's preferences; only known keys and sane values are taken
 assert Settings.setPagePref('step4.side', '420px').kept == 'step4.side' && Settings.pagePrefs()['step4.side'] == '420px'
 Settings.setPagePref('step4.split', '34.1%'); Settings.setPagePref('step4.help', '1')

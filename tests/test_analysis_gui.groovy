@@ -57,8 +57,10 @@ try {
             precise.windowModel.setValueAt(80d,0,startColumn)
             assert new groovy.json.JsonSlurper().parseText(precise.settings().protocol_json).windows[0].Start_s==80d
             assert precise.windowModel.rowCount==1;precise.kcl.doClick();assert precise.windowModel.rowCount==2;precise.kcl.doClick();assert precise.windowModel.rowCount==1
-            assert precise.windowModel.isCellEditable(0,Protocol.COLUMNS.indexOf('Min_duration_s'))
-            assert !precise.windowModel.isCellEditable(0,Protocol.COLUMNS.indexOf('Consecutive_samples'))
+            // by default a response holds for 2 samples in a row, so the sample count is the field in use and the seconds are not
+            assert precise.windowModel.getValueAt(0,Protocol.COLUMNS.indexOf('Duration_mode'))=='samples' && precise.windowModel.getValueAt(0,Protocol.COLUMNS.indexOf('Consecutive_samples')) as int==2
+            assert precise.windowModel.isCellEditable(0,Protocol.COLUMNS.indexOf('Consecutive_samples'))
+            assert !precise.windowModel.isCellEditable(0,Protocol.COLUMNS.indexOf('Min_duration_s'))
             precise.preset.selectedIndex=2;precise.kcl.doClick()
             assert precise.protocol().schema_version==1 && precise.protocol().windows.size()==2
             assert precise.windowModel.getValueAt(1,Protocol.COLUMNS.indexOf('Duration_mode'))=='samples'

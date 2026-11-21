@@ -83,6 +83,7 @@
       <div class="tile" id="tile-excluded"><b>–</b><span>excluded</span></div>
       <div class="tile" id="tile-unscorable"><b>–</b><span>unscorable</span></div>
       <details id="quality-review" class="quality-chip" hidden><summary id="quality-summary"></summary><div class="quality-pop"><p id="quality-lead"></p><ul id="quality-list"></ul><button id="quality-filter" type="button">Show cells needing review</button><p class="fine help">Flags do not change the calls or exclude cells.</p></div></details>
+      <label class="check" id="below-zero-label" hidden title="ΔF/F₀ under −1 at some frame: the background-corrected fluorescence went below zero. Ticked: these cells are left out of the percentages."><input type="checkbox" id="below-zero"> <span id="below-zero-text"></span></label>
       <button id="open-folder" type="button" disabled hidden>Open results folder</button>
     </div>
 
@@ -177,7 +178,7 @@
       <p class="fine help">One row per frame, one column per cell. The saved file has every frame and the full cell IDs.</p>
       <div class="scroller"><table id="table-data"></table></div>
     </section>
-    <section class="panel" id="panel-counts" hidden><div class="scroller"><table id="table-counts"></table></div><p class="fine pad">Counts describe the cells you chose; cell N is not animal N.</p></section>
+    <section class="panel" id="panel-counts" hidden><div class="tally-box" id="tally-box" hidden><table id="table-tally"></table></div><div class="scroller"><table id="table-counts"></table></div><p class="fine pad">Counts describe the cells you chose; cell N is not animal N.</p></section>
   </main>
 </div>
 <div class="save-options" id="save-options" hidden role="dialog" aria-label="How pictures are saved">

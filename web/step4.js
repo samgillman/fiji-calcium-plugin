@@ -76,6 +76,16 @@
    *  (1.0000537066691941) reads 1.000. The stored value keeps every digit. */
   const rateText = (value) => { const n = Number(value); if (value == null || value === '' || !finite(n)) return value == null ? '' : String(value);
     return String(+n.toPrecision(4)) === String(n) ? String(n) : n >= 1000 ? String(+n.toPrecision(4)) : n.toPrecision(4); };
+  /** The samples in a row the engine needs for a length given in seconds: the first sample plus every interval that fits
+   *  (ceil(length / median interval) + 1, as the engine does). 1 s is 2 samples at exactly 1 frame per second and 3 at
+   *  0.99995 s per frame. null when the frame times are not known. */
+  function samplesFor(seconds, times) {
+    if (!finite(seconds) || seconds <= 0 || !times || times.length < 2) return null;
+    const gaps = []; for (let i = 1; i < times.length; i++) gaps.push(times[i] - times[i - 1]);
+    if (!gaps.every((g) => finite(g) && g > 0)) return null;
+    gaps.sort((a, b) => a - b); const m = gaps.length >> 1, step = gaps.length % 2 ? gaps[m] : (gaps[m - 1] + gaps[m]) / 2, ratio = seconds / step;
+    return Math.ceil(ratio - 16 * Number.EPSILON * Math.max(1, Math.abs(ratio))) + 1;
+  }
   function exactInput(box, value, scale) {
     const shown = box.id === 'sampling_hz' ? rateText(value) : scale ? fmt(Number(value) * scale) : fmt(value);
     box.value = shown; box.dataset.shown = shown; box._exact = value; box._scale = scale || 1;
@@ -279,7 +289,9 @@
           use.addEventListener('click', () => { S.unlinked.clear(); S.initialDraft = clone(S.info.fijiDraft); S.info.stimulusFrom = 'fiji'; fillDraft(S.info.fijiDraft); $('confirmed').checked = false; draftChanged(); }); note.append(' ', use); }
       }
       if (i === '0') shadeTimeline(used);
-      $('rule-summary-' + i).textContent = 'Rule: rise ≥ ' + box('Floor_local_fraction').value + '% and ≥ ' + box('SD_multiplier').value + ' × SD, for ' + (mode === 'seconds' ? box('Min_duration_s').value + ' s' : box('Consecutive_samples').value + ' samples') + (legacy ? ' (legacy)' : '');
+      // the label says what is applied: samples in a row, also when the length was typed in seconds
+      const inRow = (n) => n + (String(n) === '1' ? ' sample' : ' samples in a row'), needed = mode === 'seconds' ? samplesFor(Number(box('Min_duration_s').value), editedTimes()) : null;
+      $('rule-summary-' + i).textContent = 'Rule: rise ≥ ' + box('Floor_local_fraction').value + '% and ≥ ' + box('SD_multiplier').value + ' × SD, for ' + (mode === 'seconds' ? box('Min_duration_s').value + ' s' + (needed ? ', here ' + inRow(needed) : '') : inRow(box('Consecutive_samples').value)) + (legacy ? ' (legacy)' : '');
     }
     $('rule-help').textContent = legacy ? 'Legacy rule: the baseline ends at the response start; the control is KCl. Sample counts depend on the frame rate.' : 'Starting values. Check against your controls.';
   }
@@ -715,7 +727,8 @@
     { const o = document.createElement('option'); o.value = 'summary'; o.textContent = 'Summary: mean ± SEM of each metric'; tables.appendChild(o); }
     for (const key of Object.keys(r.tables || {})) if (!['calls', 'counts'].includes(key) && r.tables[key].header.length) { const o = document.createElement('option'); o.value = key; o.textContent = titles[key] || key.replace(/_/g, ' '); tables.appendChild(o); }
     tables.value = 'summary'; showMetricTable();
-    table('table-calls', r.tables.calls); table('table-counts', r.tables.counts);
+    S.withoutBelowZero = false;   // every cell is counted until the switch says otherwise
+    table('table-calls', r.tables.calls); table('table-counts', r.tables.counts); showTally();
     for (const id of ['save-plot', 'save-heatmap', 'save-plot-folder', 'save-heatmap-folder', 'data-save', 'data-download', 'metrics-save', 'metrics-download']) $(id).disabled = false;
     for (const id of ['plot-saved', 'heatmap-saved', 'data-saved', 'metrics-saved']) $(id).textContent = '';
     if (!$('panel-data').hidden) showData();
@@ -723,21 +736,44 @@
     if ($('signal').selectedOptions[0].disabled) { S.signal = Data.signal = 'dff'; $('signal').value = 'dff'; $('data-signal').value = 'dff'; }
     Plot.x0 = Plot.x1 = null; updateWindow(); setFrame(S.frame); showState();
   }
+  /** % responding to the primary stimulus as worked out in Fiji (results.tally), by row key: all, blind, later, quiet.
+   *  With the switch on, the cells whose corrected fluorescence went below zero are left out of every row. */
+  function tallyRows() {
+    const t = S.results && S.results.tally; if (!t || !t.rows) return null;
+    const rows = {};
+    for (const row of t.rows) { const c = S.withoutBelowZero ? row.without : row.counted; rows[row.key] = { label: row.label, responded: c[0], evaluable: c[1], share: c[1] ? Math.round(100 * c[0] / c[1]) + '%' : '–' }; }
+    return rows;
+  }
+  /** The same tally as a table on the Responder counts tab: every row with all its cells and without those below zero. */
+  function showTally() {
+    const t = S.results && S.results.tally; $('tally-box').hidden = !t; if (!t) return;
+    const percent = (c) => c[1] ? +(100 * c[0] / c[1]).toFixed(1) : '';
+    // six columns, so the table fits its tab; the saved file has every number in a column of its own
+    table('table-tally', { computed: true, header: ['Cells', '% responding', 'Responded', 'Evaluable', 'Cells below zero', 'Without them'],
+      rows: t.rows.map((row) => [row.label, percent(row.counted), row.counted[0], row.counted[1], row.counted[2] - row.without[2], row.without[1] ? percent(row.without) + ' % (' + row.without[0] + ' of ' + row.without[1] + ')' : '–']) });
+  }
   /** The headline numbers for the selected response window (the primary stimulus or its control), from the saved counts. */
   function showTiles() {
     const r = S.results; if (!r) return;
     const windows = r.windows && r.windows.length ? r.windows : [], chosen = windows.find((w) => w.key === S.window) || windows[0] || {};
     const counts = (r.countsByWindow && r.countsByWindow[S.window]) || r.counts || {}, whole = (key) => { const v = number(counts[key]); return isFinite(v) ? String(Math.round(v)) : '–'; }, percent = number(counts.Percent_responding);
     const label = escape(counts.Stimulus || chosen.stimulus || 'Stimulus') + (chosen.role === 'Control' ? ' (control)' : '');
-    const all = label + ': ' + whole('Responded') + ' of ' + whole('Evaluable') + ' evaluable cells', tags = r.chosenBlind, split = { blind: [0, 0], later: [0, 0] };
-    if (tags && chosen.role !== 'Control') for (const name of S.info.names) if (name in tags) { const status = callOf(name), part = split[tags[name] ? 'blind' : 'later']; if (status === 'Responded') { part[0]++; part[1]++; } else if (status === 'Did not respond') part[1]++; }
-    const share = (part) => part[1] ? Math.round(100 * part[0] / part[1]) + '%' : '–';
-    // cells chosen blind give the figure that does not depend on the response; it leads, with the others beside it
+    const all = label + ': ' + whole('Responded') + ' of ' + whole('Evaluable') + ' evaluable cells';
+    // The primary stimulus: all cells lead; under them the cells chosen blind and those added later, then the quiet cells.
+    // Every figure comes from the tally worked out in Fiji, with or without the cells that went below zero.
+    const tally = chosen.role !== 'Control' ? tallyRows() : null, below = tally ? r.tally.belowZero.length : 0, said = (row) => row.share + ' (' + row.responded + ' of ' + row.evaluable + ')';
+    $('below-zero-label').hidden = !below; $('below-zero').checked = !!S.withoutBelowZero;
+    $('below-zero-text').textContent = 'Leave out ' + below + (below === 1 ? ' cell' : ' cells') + ' below zero';
     const reason = unscorableReason();
     if (!called()) { $('tile-responding').innerHTML = '<b>–</b><span>' + label + ': no cell got a call' + (reason ? ' (' + escape(reason.replace(/\.$/, '').toLowerCase()) + ')' : '') + '</span>'; }
-    else $('tile-responding').innerHTML = tags && split.blind[1] && split.later[1]
-      ? '<b>' + share(split.blind) + '</b><span>of the cells chosen blind: ' + split.blind[0] + ' of ' + split.blind[1] + ' &nbsp;·&nbsp; added after the response was shown: ' + share(split.later) + ' (' + split.later[0] + ' of ' + split.later[1] + ') · all cells: ' + (isFinite(percent) ? Math.round(percent) + '%' : '–') + ' (' + whole('Responded') + ' of ' + whole('Evaluable') + ')</span>'
-      : '<b>' + (isFinite(percent) ? Math.round(percent) + '%' : '–') + '</b><span>' + all + '</span>';
+    else if (tally && tally.all) {
+      const lines = [];
+      if (tally.blind && tally.later && tally.blind.evaluable && tally.later.evaluable) lines.push(['Chosen blind: ' + said(tally.blind) + ' · added after the response was shown: ' + said(tally.later), 'Cells chosen before the response was seen, and cells added once it was shown']);
+      if (tally.quiet && tally.quiet.evaluable) lines.push([tally.quiet.label + ': ' + said(tally.quiet), 'Cells that need a rise of ' + Math.round(100 * r.tally.quietRise) + ' % or less to respond. Noisier cells are set aside whether they responded or not']);
+      $('tile-responding').innerHTML = '<b>' + tally.all.share + '</b><span>' + label + ': ' + tally.all.responded + ' of ' + tally.all.evaluable + ' evaluable cells' + (S.withoutBelowZero && below ? ' · ' + below + ' below zero left out' : '') + '</span>'
+        + lines.map(([text, title]) => '<span class="tile-line" title="' + escape(title) + '">' + escape(text) + '</span>').join('');
+    }
+    else $('tile-responding').innerHTML = '<b>' + (isFinite(percent) ? Math.round(percent) + '%' : '–') + '</b><span>' + all + '</span>';
     $('tile-registered').firstChild.textContent = whole('Registered'); $('tile-excluded').firstChild.textContent = whole('Excluded'); $('tile-unscorable').firstChild.textContent = whole('Unscorable');
     for (const [id, key] of [['tile-excluded', 'Excluded'], ['tile-unscorable', 'Unscorable']]) $(id).classList.toggle('zero', whole(key) === '0');
   }
@@ -1722,6 +1758,7 @@
     $('all-call-columns').addEventListener('change', () => table('table-calls', S.results.tables.calls));
     $('response-window').addEventListener('change', () => { S.window = $('response-window').value; updateWindow(); });
     $('metrics-table').addEventListener('change', showMetricTable);
+    $('below-zero').addEventListener('change', () => { S.withoutBelowZero = $('below-zero').checked; showTiles(); });
     $('group').addEventListener('change', () => { S.group = Number($('group').value); listCells(); });
     $('cell').addEventListener('change', () => chooseCell($('cell').value || null));
     $('previous').addEventListener('click', () => stepCell(-1)); $('next').addEventListener('click', () => stepCell(1));
@@ -1785,5 +1822,5 @@
 
   wire();
   start().catch((problem) => { $('lost').classList.add('on'); $('status').textContent = problem.message; });
-  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, rateText, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, exportMetadata, heatmapAt };   // for the browser test
+  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, rateText, samplesFor, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, exportMetadata, heatmapAt };   // for the browser test
 })();
