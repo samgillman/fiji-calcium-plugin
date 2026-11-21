@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.20.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.21.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -249,6 +249,15 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        group chosen under Show, and nothing else. The buttons above it switch to
                        "One cell + average" or "Responders vs non-responders".
                        Signal: dF/F0, gray levels above background, or raw gray values (not corrected).
+                       Cell list: None (no cell selected; the page opens that way, Esc returns to it)
+                       or a cell. With a cell selected the plot shows that cell over the average.
+                       View: Recording, Background removed, GFP (the same in green), Response in
+                       magenta (GFP plus the rise above what the background did, averaged over
+                       9 x 9 pixels and 5 frames), Change from baseline (that rise alone), Colour
+                       overview and Background areas. Outline thickness is beside "All outlines".
+                       Scroll over the picture scrolls the page; Ctrl or Cmd + scroll zooms it.
+                       Save frames... (Export) writes every Nth frame and one picture with all of them.
+                       The arrow on the edge of the settings panel folds the panel away.
                        Each panel has one Export menu in its corner (the picture, the plot, the heatmap
                        and the tables). In it, Save plot puts the picture, its numbers (CSV) and how it
                        was made into a "plots" folder beside the tables, Download hands the same file to

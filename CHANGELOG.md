@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026.11.20.21
+
+The movie views, the picture's controls and the export of frames. No measurement, response call or saved table changes.
+
+- **"Response in magenta" shows the response again, and "Change from baseline" uses the same measure.** Since 2026.11.20.15 magenta only started about 2.8 gray levels above "no change" on dim recordings, where cells rise by 1 to 3, so almost nothing was painted. Both views now show how far a pixel rose above what the background around it did, averaged over 9 × 9 pixels and 5 frames, on a scale set by the recording's own noise:
+  - P2 Run1 ATP: 97 of 177 measured cells are magenta at the peak and 1 before the stimulus;
+  - P3 Run2 ATP: 9 to 12 % of the picture during the response, about 1 % before and after;
+  - two recordings without a response (C3 Run2, P2 Run2 capsaicin): never more than 1.8 % of the picture.
+  The fading of the field and bright objects that fade do not count as a response. Display only.
+- **GFP view.** The recording with the background removed, in green: the green of "Response in magenta" without the magenta.
+- **No cell selected is a choice.** The Cell list starts with **None** and the page opens that way; Esc deselects. The plot follows the selection: with a cell it shows that cell over the average, with none the average alone ("Responders vs non-responders" stays when you chose it).
+- **Outline thickness sits beside "All outlines"** in the picture's toolbar, where the outlines are switched on and off. It is no longer inside Export → Options.
+- **Save frames also writes one picture with all the saved frames** (`all_frames_combined.png`), laid out in a grid from the same labelled frames as the single files.
+- **The settings panel folds away from its own edge** (the small arrow between the panel and the work area). The "Hide settings" button in the header is gone.
+- Scrolling over the picture scrolls the page; hold Ctrl or ⌘ (or pinch) to zoom the picture.
+- "Did not respond" is orange on the plot as on the picture (it was brown on the plot).
+- Export menus say where the file goes: "Save to plots folder" and "Download a copy". "Results folder" reads "Open results folder".
+- Fiji: the question before "Accept likely" says about 7 in 10 of those outlines were real cells (it said 8 in 10; measured 71 % with the grading of 2026.11.20.20), and the line under the buttons is short when some pictures reuse saved outlines.
+
 ## 2026.11.20.20
 
 Fewer cells are left for you to pick up by hand. Measured by running this build on the four audited ATP recordings (837 audited cells; cells chosen blind on the frames the plugin offers). No measurement or response threshold changes.

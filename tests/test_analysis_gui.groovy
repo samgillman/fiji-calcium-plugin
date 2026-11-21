@@ -129,7 +129,7 @@ try {
         def gray={int x,int y->ui.frameImage.getRGB(x,y)&255}
         ui.showFrame(15);assert ui.slider.value==15 && ui.plot.moment==ui.plot.time[14] && ui.timeLabel.text.contains('7.0 s') && ui.timeLabel.text.contains('frame 15 of 30')
         assert gray(40,60)>200 && gray(100,60)<60 : 'Frame 15 minus the resting frames: only the responding square is bright'
-        ui.showFrame(3);assert gray(40,60)<60 && ui.cellPicture.note.contains('frame 3 minus the mean of frames 1–5')
+        ui.showFrame(3);assert gray(40,60)<60 && ui.cellPicture.note.contains('frame 3: rise above the mean of frames 1–5')
         ui.plot.seek.call(7.2d);assert ui.frame==15 && gray(40,60)>200
         ui.slider.value=25;assert ui.frame==25 && gray(40,60)<60
         ui.view.selectedIndex=2;ui.showFrame(15);assert gray(40,60)>gray(100,60) && ui.cellPicture.note=='frame 15 as recorded'
