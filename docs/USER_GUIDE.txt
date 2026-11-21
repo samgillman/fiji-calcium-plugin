@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.21.2.
+A plugin for Fiji / ImageJ.  Version 2026.11.21.3.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -265,9 +265,17 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        Each panel has one Export menu in its corner (the picture, the plot, the heatmap
                        and the tables). In it, Save plot puts the picture, its numbers (CSV) and how it
                        was made into a "plots" folder beside the tables, Download hands the same file to
-                       the browser, and Options sets the format (PNG or TIFF),
-                       the size in inches, the resolution (150, 300 or 600 dpi, recorded in the file)
-                       and the TIFF compression (LZW, ZIP or none; LZW and ZIP lose nothing).
+                       the browser. For the plot and the heatmap, Edit figure opens the figure with a
+                       preview that is the saved picture itself, and beside it: width and height in
+                       inches, resolution and format; title, axis titles, font, text sizes and colour;
+                       for the plot the axis minimum, maximum and tick spacing, frame, grid lines, and
+                       the thickness and colour of each line; for the heatmap its colours and a colour
+                       scale you can type so several recordings share one. Size, font, colours and
+                       thicknesses are kept for the next recording; the title and the axis numbers are
+                       not. Reset returns the figure to how it was. For pictures and frames, Options
+                       sets the format (PNG or TIFF), the width in inches, the resolution (150, 300 or
+                       600 dpi, recorded in the file) and the TIFF compression (LZW, ZIP or none; LZW
+                       and ZIP lose nothing). Format and resolution are the figures' too.
                        Save picture saves the view on screen with the outlines shown and a colour key;
                        Save frames… saves every Nth frame of a movie view, each labelled with its
                        frame and time. Signal also offers dF/F0 of the raw values. View: the recording as recorded, with the background

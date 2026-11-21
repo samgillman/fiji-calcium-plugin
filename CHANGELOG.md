@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026.11.21.3
+
+A figure editor for the plot and the heatmap on the Step 4 page. No measurement, response call or saved table changes.
+
+- **Edit figure… in the plot's and the heatmap's Export menu** opens the figure with everything that can be set beside it. The preview is the picture that gets saved, drawn again at every change: what you see is the file.
+- **Size** in inches (1 to 20 each way), with resolution and format; the pixel size is shown. A figure too large for a browser to draw (over 80 million pixels) cannot be saved, and the editor says so.
+- **Text:** title, X and Y axis titles (the heatmap's colour bar title too), font (the page's, Arial, Times New Roman, Courier New), text and title size in points, one colour for text and axes, white or transparent background.
+- **Plot axes:** minimum, maximum and tick spacing for X and Y (empty is automatic), a box or left-and-bottom frame, grid lines on or off, axis thickness.
+- **Plot lines:** thickness and colour of the mean, the selected cell and all traces; colours for responded and did not respond; SEM band on or off. Only what the plot on screen shows is offered.
+- **Plot marks:** legend, stimulus line and its label, baseline, response window, thresholds.
+- **Heatmap:** colours, range and sort (the page's own lists, shown here too), a colour scale typed in so several recordings can share one, colour bar, window and stimulus marks, the response call strip. A heatmap figure now carries its title and a key to the call strip.
+- **Kept for the next recording:** size, font, sizes, colours, thicknesses and what is shown. The title, the Y axis title and the axis numbers belong to one recording and are not carried over. Reset returns one figure to how it was.
+- "ΔF/F₀" and "Ca²⁺" are drawn correctly in every font: a font without small lowered or raised digits no longer borrows them from another.
+- A plot or heatmap saved without opening the editor is 8 × 6 in, as before. The heatmap used to keep its shape on screen; it now has the size set in the editor.
+- The file kept beside each saved figure (`.metadata.json`) records every setting of the editor.
+- Options… stays in the picture's Export menu for pictures and frames. Format and resolution are shared with the figures.
+- Not in this build: SVG or PDF files, error bars other than the SEM band, a legend inside the plot.
+
 ## 2026.11.21.2
 
 Reviewing flagged cells on the Step 4 page. No measurement, response call or saved table changes.

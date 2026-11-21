@@ -446,3 +446,26 @@ p + .field-warning, p + .field-error { justify-content: flex-start; text-align: 
 }
 /* Outline thickness sits with "All outlines". */
 .toolbar.dark #outline-width { max-width: 104px; }
+/* The figure editor: the saved plot or heatmap on the left, exactly as it will be written, and everything that can be set on the right. */
+.figure-editor { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(31,41,51,.45); }
+.figure-editor[hidden] { display: none; }
+.figure-box { display: flex; flex-direction: column; width: min(1320px, 100%); height: min(900px, 100%); background: #fff; border-radius: var(--radius); box-shadow: 0 8px 28px rgba(31,41,51,.22); overflow: hidden; }
+.figure-head, .figure-foot { flex: none; display: flex; align-items: center; gap: 8px 10px; padding: 10px 14px; }
+.figure-head { border-bottom: 1px solid var(--gray-100); } .figure-head b { font-size: 14px; } .figure-head .fine { margin: 0; }
+.figure-foot { border-top: 1px solid var(--gray-100); flex-wrap: wrap; }
+.figure-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 336px; }
+.figure-stage { min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; background: var(--gray-50); }
+.figure-stage canvas { flex: none; box-shadow: 0 1px 5px rgba(31,41,51,.28); background: repeating-conic-gradient(#E4E9EE 0% 25%, #fff 0% 50%) 0 0 / 16px 16px; }   /* squares show through a transparent background */
+.figure-controls { min-height: 0; overflow-y: auto; padding: 2px 14px 14px; border-left: 1px solid var(--gray-100); }
+.figure-controls h3 { margin: 12px 0 2px; font-size: 12px; font-weight: 600; color: var(--gray-600); }
+.figure-controls .row { display: grid; grid-template-columns: minmax(0, 1fr) 150px; align-items: center; gap: 8px; margin: 4px 0; min-height: var(--control-h); font-size: 13px; flex-wrap: nowrap; }
+.figure-controls .row[hidden] { display: none; }
+.figure-controls .row > span:first-child { white-space: nowrap; color: var(--gray-900); }
+.figure-controls .row > select, .figure-controls .row > input[type=text], .figure-controls .unit input { width: 100%; max-width: none; min-width: 0; }
+.figure-controls .unit { display: grid; grid-template-columns: minmax(0, 1fr) 16px; align-items: center; gap: 6px; } .figure-controls .unit i { font-style: normal; color: var(--gray-600); }
+.figure-controls input[type=text] { font: inherit; font-size: 13px; height: var(--control-h); padding: 0 7px; border: 1px solid #C5CED8; border-radius: var(--radius); background: #fff; color: inherit; }
+.figure-controls input[type=color] { width: 100%; height: var(--control-h); padding: 3px; font-size: 13px; border: 1px solid #C5CED8; border-radius: var(--radius); background: #fff; cursor: pointer; }
+.figure-controls input[type=color]::-webkit-color-swatch-wrapper { padding: 0; } .figure-controls input[type=color]::-webkit-color-swatch { border: 0; border-radius: var(--radius-bar); } .figure-controls input[type=color]::-moz-color-swatch { border: 0; border-radius: var(--radius-bar); }
+.figure-controls input[type=checkbox] { justify-self: start; width: auto; margin: 0; accent-color: var(--blue); }
+.fine.bad { color: var(--bad); }
+@media (max-width: 860px) { .figure-editor { padding: 8px; } .figure-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(180px, 45%) minmax(0, 1fr); } .figure-controls { border-left: 0; border-top: 1px solid var(--gray-100); } }

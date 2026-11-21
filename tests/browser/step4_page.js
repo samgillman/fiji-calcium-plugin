@@ -530,6 +530,19 @@ const assert = require('assert/strict');
     await page.click('.tab[data-tab=heatmap]'); await page.selectOption('#palette', 'plasma'); await page.selectOption('#range', 'full');
     await page.screenshot({ path: path.join(out, 'page-heatmap-plasma.png') });
     await page.selectOption('#palette', 'signed'); await page.selectOption('#range', 'robust');
+    await page.locator('#export-heatmap > summary').click(); await page.click('#edit-heatmap');
+    await page.waitForFunction(() => document.getElementById('figure-preview').width > 300);
+    assert.equal(await page.textContent('#figure-name'), 'Heatmap figure'); assert.equal(await page.inputValue('#figure-palette'), 'signed', 'the editor shows the colours chosen on the page');
+    await page.selectOption('#figure-palette', 'plasma'); assert.equal(await page.inputValue('#palette'), 'plasma', 'colours chosen in the editor are the page\'s too');
+    const heatBefore = await page.evaluate(() => document.getElementById('figure-preview').toDataURL());
+    await page.fill('#figure-barMax', '9'); await page.fill('#figure-width', '4'); await page.fill('#figure-height', '3');
+    await page.waitForFunction((was) => document.getElementById('figure-preview').toDataURL() !== was && /^1200 × 900 pixels/.test(document.getElementById('figure-pixels').textContent), heatBefore);
+    assert.deepEqual(await page.evaluate(() => { const c = window.calciumStep4.figureCanvas('heatmap', 150); return [c.width, c.height]; }), [600, 450]);
+    assert.deepEqual(await page.evaluate(() => window.calciumStep4.figureKept('heatmap')), { width: 4, height: 3 }, 'the colour scale typed for this recording is not carried to the next');
+    await page.selectOption('#figure-save-dpi', '600'); await page.fill('#figure-width', '20'); await page.fill('#figure-height', '20');
+    await page.waitForFunction(() => /too large to save/.test(document.getElementById('figure-pixels').textContent)); assert.ok(await page.isDisabled('#figure-save') && await page.isDisabled('#figure-download'), 'a figure too large to draw cannot be saved');
+    await page.selectOption('#figure-save-dpi', '300'); await page.click('#figure-reset'); await page.selectOption('#figure-palette', 'signed'); await page.click('#figure-close');
+    assert.ok(await page.isHidden('#figure-editor') && await page.inputValue('#palette') === 'signed' && await page.inputValue('#save-dpi') === '300');
     await page.click('.tab[data-tab=calls]'); assert.equal(await page.locator('#table-calls tbody tr').count(), 12);
     const coreColumns = await page.locator('#table-calls thead th').count();
     await page.check('#all-call-columns'); assert.ok(await page.locator('#table-calls thead th').count() > coreColumns);
@@ -601,22 +614,79 @@ const assert = require('assert/strict');
     assert.ok(await page.isHidden('#save-plot'), 'the save buttons are inside the Export menu');
     await page.locator('#export-plot > summary').click(); await page.click('#save-plot'); await downloadedPlots;
     assert.ok(!(await page.locator('#export-plot').evaluate((menu) => menu.open)), 'choosing an entry closes the menu');
-    await page.locator('#export-plot > summary').click(); await page.locator('#export-plot .save-options-toggle').click();
-    assert.ok(await page.isVisible('#save-options') && !(await page.locator('#export-plot').evaluate((menu) => menu.open)), 'Options opens from the Export menu');
-    assert.ok(await page.evaluate(() => { const panel = document.getElementById('save-options').getBoundingClientRect(), button = document.querySelector('#export-plot > summary').getBoundingClientRect(); return panel.bottom <= button.top + 1 && Math.abs(panel.right - button.right) < 24; }), 'the options sit against the Export button');
+    await page.locator('#export-picture > summary').click(); await page.locator('#export-picture .save-options-toggle').click();
+    assert.ok(await page.isVisible('#save-options') && !(await page.locator('#export-picture').evaluate((menu) => menu.open)), 'Options opens from the picture\'s Export menu');
+    assert.ok(await page.evaluate(() => { const panel = document.getElementById('save-options').getBoundingClientRect(), button = document.querySelector('#export-picture > summary').getBoundingClientRect(); return (panel.bottom <= button.top + 1 || panel.top >= button.bottom - 1) && Math.abs(panel.right - button.right) < 24; }), 'the options sit against the Export button');
+    assert.equal(await page.locator('#export-plot .save-options-toggle, #export-heatmap .save-options-toggle').count(), 0, 'the plot and the heatmap have Edit figure in place of Options');
+    assert.doesNotMatch(await page.textContent('#save-pixels'), /Plot/, 'Options speaks of pictures and frames only');
     await page.keyboard.press('Escape'); await page.locator('#plot').click({ position: { x: 5, y: 5 } }); assert.ok(await page.isHidden('#save-options'));
     for (const download of downloads) await download.saveAs(path.join(out, download.suggestedFilename()));
     const names = downloads.map((d) => d.suggestedFilename()), image = names.find((n) => n.endsWith('.png'));
     assert.match(image, /^Fixture_recording_traces_Cell\w+_\d{8}-\d{6}\.png$/, 'plot names carry the recording, the cell and the time');
     assert.ok(names.includes(image.replace(/\.png$/, '.metadata.json')));
     const png = fs.readFileSync(path.join(out, image));
-    assert.ok(png.readUInt32BE(16) >= 1600, 'exports are at least 1600 pixels wide, whatever the window size');
-    assert.equal(await page.evaluate(() => window.calciumStep4.S.exportScale), null, 'the screen is redrawn at its own size afterwards');
+    assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [2400, 1800], 'a figure nobody has edited is 8 × 6 in at 300 dpi, whatever the window size');
+    assert.ok(await page.evaluate(() => { const g = window.calciumStep4.Plot.geom, c = document.getElementById('plot'); return g.L + g.W <= c.clientWidth && g.T + g.H <= c.clientHeight; }), 'saving a figure leaves the page\'s own plot as it was');
     const metadata = JSON.parse(fs.readFileSync(path.join(out, image.replace(/\.png$/, '.metadata.json')), 'utf8'));
     assert.ok(metadata.results_folder && metadata.time_range.every((t) => typeof t === 'number'), 'metadata names the results folder and the shown time range');
     assert.equal(metadata.appliedFingerprint, applied.fingerprint);
     assert.equal(metadata.settingsPending, true); assert.equal(metadata.time_s, 12.5);
     assert.equal(metadata.manifest.protocol_hash, 'synthetic-browser-fixture');
+    assert.equal(metadata.picture.size, '8x6'); assert.equal(metadata.picture.figure.kind, 'plot'); assert.equal(metadata.picture.figure.title, null, 'the file beside a figure records how it was set');
+    // The figure editor: its preview is the picture that gets saved; what is set there is kept, except what belongs to this recording.
+    const previewReady = () => page.waitForFunction(() => document.getElementById('figure-preview').width > 300 && /pixels/.test(document.getElementById('figure-pixels').textContent));
+    const previewNow = () => page.evaluate(() => document.getElementById('figure-preview').toDataURL());
+    await page.locator('#export-plot > summary').click(); await page.click('#edit-plot'); await previewReady();
+    assert.ok(await page.isVisible('#figure-editor') && !(await page.locator('#export-plot').evaluate((menu) => menu.open)), 'Edit figure opens the editor from the Export menu');
+    assert.equal(await page.textContent('#figure-name'), 'Plot figure'); assert.match(await page.textContent('#figure-pixels'), /^2400 × 1800 pixels/);
+    assert.ok(await page.evaluate(() => { const b = document.getElementById('figure-preview').getBoundingClientRect(), s = document.getElementById('figure-stage').getBoundingClientRect(); return Math.abs(b.width / b.height - 8 / 6) < 0.01 && b.left >= s.left && b.right <= s.right && b.top >= s.top && b.bottom <= s.bottom; }), 'the preview has the figure\'s shape and fits beside the boxes');
+    assert.deepEqual(await oddShapes(), [], 'the editor\'s boxes have the page\'s height and corner');
+    assert.ok(await page.evaluate(() => Array.from(document.body.children).every((part) => part.id === 'figure-editor' || part.tagName === 'SCRIPT' || part.inert)), 'the page behind the editor is out of reach');
+    assert.equal(await page.inputValue('#figure-title'), 'Fixture recording'); assert.equal(await page.inputValue('#figure-yTitle'), 'ΔF/F₀'); assert.equal(await page.getAttribute('#figure-yMax', 'placeholder'), 'auto');
+    assert.deepEqual(await page.evaluate(() => { const S = window.calciumStep4.S, has = (id) => !!document.getElementById('figure-' + id); return { mode: S.plotMode, every: S.every, cell: has('cellWidth'), levels: has('levels'), traces: has('traceWidth'), calls: has('colourResponded'), mean: has('colourMean') }; }),
+      { mode: 'mean', every: true, cell: false, levels: false, traces: true, calls: true, mean: true }, 'boxes are offered for what the plot on screen shows: the mean and all traces, no single cell');
+    assert.ok(await page.isHidden('#figure-save-compression'), 'TIFF compression shows with TIFF');
+    let shown = await previewNow();
+    for (const [id, value] of [['width', '6'], ['height', '4'], ['title', 'Fixture title'], ['yMax', '3'], ['text', '10']]) await page.fill('#figure-' + id, value);
+    await page.selectOption('#figure-font', 'arial');
+    await page.waitForFunction((was) => document.getElementById('figure-preview').toDataURL() !== was && /^1800 × 1200 pixels/.test(document.getElementById('figure-pixels').textContent), shown);
+    assert.ok(await page.evaluate(() => { const b = document.getElementById('figure-preview').getBoundingClientRect(); return Math.abs(b.width / b.height - 6 / 4) < 0.01; }), 'the preview follows the size');
+    for (const [id, state, expected] of [['colourMean', '#c0392b', 'a colour'], ['grid', false, 'a tick']]) {   // every kind of box redraws the preview
+      shown = await previewNow();
+      if (state === false) await page.uncheck('#figure-' + id); else await page.locator('#figure-' + id).evaluate((box, value) => { box.value = value; box.dispatchEvent(new Event('input', { bubbles: true })); }, state);
+      await page.waitForFunction((was) => document.getElementById('figure-preview').toDataURL() !== was, shown).catch(() => assert.fail('the preview did not change with ' + expected));
+    }
+    await page.fill('#figure-width', '0.2'); assert.equal(await page.getAttribute('#figure-width', 'aria-invalid'), 'true'); assert.equal(await page.evaluate(() => window.calciumStep4.Fig.plot.width), 6, 'a size that makes no figure is not taken');
+    await page.locator('#figure-width').blur(); assert.equal(await page.inputValue('#figure-width'), '6');
+    await page.fill('#figure-yMax', ''); assert.equal(await page.evaluate(() => window.calciumStep4.Fig.plot.yMax), null, 'an emptied axis box is automatic again'); await page.fill('#figure-yMax', '3');
+    assert.deepEqual(await page.evaluate(() => window.calciumStep4.figureKept('plot')), { width: 6, height: 4, font: 'arial', text: 10, grid: false, colourMean: '#c0392b' }, 'the title and the axis numbers stay with this recording; the rest is kept');
+    await page.waitForFunction(async () => { const kept = (await (await fetch('api/session', { cache: 'no-store' })).json()).prefs['step4.figure.plot']; return !!kept && JSON.parse(kept).font === 'arial' && JSON.parse(kept).grid === false; });   // Fiji keeps it for the next recording
+    const figureFiles = new Promise((resolve, reject) => { const got = [], timeout = setTimeout(() => { page.off('download', listener); reject(new Error('Expected the figure and how it was made')); }, 10000);
+      const listener = (download) => { got.push(download); if (got.length === 2) { clearTimeout(timeout); page.off('download', listener); resolve(got); } }; page.on('download', listener); });
+    await page.click('#figure-download'); const figureNames = [];
+    for (const download of await figureFiles) { figureNames.push(download.suggestedFilename()); await download.saveAs(path.join(out, 'figure_' + download.suggestedFilename())); }
+    const figurePng = fs.readFileSync(path.join(out, 'figure_' + figureNames.find((n) => n.endsWith('.png'))));
+    assert.deepEqual([figurePng.readUInt32BE(16), figurePng.readUInt32BE(20)], [1800, 1200], 'the saved figure has the size set in the editor');
+    const figureMade = JSON.parse(fs.readFileSync(path.join(out, 'figure_' + figureNames.find((n) => n.endsWith('.metadata.json'))), 'utf8')).picture;
+    assert.equal(figureMade.size, '6x4'); assert.equal(figureMade.dpi, 300); assert.deepEqual([figureMade.figure.title, figureMade.figure.yMax, figureMade.figure.grid, figureMade.figure.font], ['Fixture title', 3, false, 'arial']);
+    await page.screenshot({ path: path.join(out, 'page-figure-editor.png') });
+    const frameThen = await page.evaluate(() => window.calciumStep4.S.frame);
+    await page.keyboard.press('ArrowRight'); await page.keyboard.press('Escape'); assert.ok(await page.isHidden('#figure-editor'));
+    assert.ok(await page.evaluate((frame) => window.calciumStep4.S.frame === frame && !window.calciumStep4.S.cell && Array.from(document.body.children).every((part) => !part.inert), frameThen), 'keys pressed in the editor do nothing on the page; Escape closes the editor');
+    await page.locator('#export-plot > summary').click(); await page.click('#edit-plot'); await previewReady();
+    assert.equal(await page.inputValue('#figure-title'), 'Fixture title', 'the editor reopens as it was left'); await page.click('#figure-reset');
+    assert.equal(await page.inputValue('#figure-title'), 'Fixture recording'); assert.equal(await page.inputValue('#figure-width'), '8'); assert.deepEqual(await page.evaluate(() => window.calciumStep4.figureKept('plot')), {});
+    await page.waitForFunction(async () => !(await (await fetch('api/session', { cache: 'no-store' })).json()).prefs['step4.figure.plot']);
+    await page.evaluate(() => { const f = window.calciumStep4; f.figureRestore('plot', JSON.stringify({ width: 500, font: 'comic', ink: 'red', grid: 'no', title: 'kept?', text: 11 })); });   // a damaged preference changes only what is valid
+    assert.deepEqual(await page.evaluate(() => window.calciumStep4.figureKept('plot')), { text: 11 }); await page.click('#figure-reset'); await page.click('#figure-close');
+    for (const name of await cellsOffered()) {   // a cell that has a ΔF/F₀ trace
+      await openCell(name); if (await page.evaluate(() => { const S = window.calciumStep4.S; return !!S.cell && !!S.results.traces[S.cell] && S.plotMode === 'cell'; })) break;
+    }
+    await page.locator('#export-plot > summary').click(); await page.click('#edit-plot'); await previewReady();
+    assert.deepEqual(await page.evaluate(() => ['cellWidth', 'colourCell', 'levels', 'colourMean'].map((id) => !!document.getElementById('figure-' + id))), [true, true, true, true], 'with one cell on screen its line, colour and thresholds can be set');
+    shown = await previewNow(); await page.uncheck('#figure-levels'); await page.waitForFunction((was) => document.getElementById('figure-preview').toDataURL() !== was, shown);
+    await page.click('#figure-reset'); await page.click('#figure-close'); await page.locator('#plot').click({ position: { x: 5, y: 5 } }); await page.keyboard.press('Escape');
+    assert.equal(await page.evaluate(() => window.calciumStep4.S.cell), null);
     await page.screenshot({ path: path.join(out, 'page-pending.png') });
     // Restoring applied settings includes uploaded timestamp contents and the exact protocol.
     await page.click('#discard'); await page.waitForFunction(() => !window.calciumStep4.S.state.settingsPending);

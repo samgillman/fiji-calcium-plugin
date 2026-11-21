@@ -11,7 +11,7 @@
   const kind = (call) => call === 'Responded' ? 'responded' : call === 'Did not respond' ? 'not' : 'other';
   const inGroup = (call, group, name) => group === 0 || (group === 1 && call === 'Responded') || (group === 2 && call === 'Did not respond') ||
     (group === 3 && call === 'Excluded') || (group === 4 && call === 'Unscorable') || (group === 5 && qualityFor(name).length > 0 && (!S.qualityFlag || qualityFor(name).includes(S.qualityFlag)));
-  const S = { unlinked: new Set(), validationShown: null, exportScale: null, imported: null, info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'raw', viewChosen: false,
+  const S = { unlinked: new Set(), validationShown: null, imported: null, info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'raw', viewChosen: false,
     every: false, plotMode: 'mean', signal: 'dff', outlines: true, outlineWidth: 1, order: 'call', palette: 'plasma', range: 'robust', tall: false, timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false };
   const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, y: {}, hover: null, geom: null, scrubbing: false, drawn: [], series: [] };
   const Pic = { base: null, shown: null, zoom: 1, panX: 0, panY: 0, drag: null, moved: false, shownFrame: null, error: null };
@@ -40,7 +40,7 @@
 
   /** Sets a canvas to the size it is shown at (sharp on high-density screens) and returns a context in CSS pixels. */
   function fit(canvas) {
-    const dpr = (S && S.exportScale) || window.devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;   // exports draw at a fixed minimum resolution
+    const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
     const ctx = canvas.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     return { ctx, w, h, dpr };
@@ -649,6 +649,7 @@
     $('save-picture-folder').disabled = $('save-picture').disabled = !(S.info.hasPicture || S.info.hasMovie); $('save-frames').disabled = !S.info.hasMovie;
     const prefs = S.info.prefs || {}; for (const key of Object.keys(Layout.apply)) if (prefs[key]) Layout.apply[key](prefs[key]);
     for (const key of ['format', 'size', 'compression']) if (prefs['step4.' + key]) Save[key] = prefs['step4.' + key]; if (prefs['step4.dpi']) Save.dpi = Number(prefs['step4.dpi']);
+    for (const kind of ['plot', 'heatmap']) if (prefs['step4.figure.' + kind]) figureRestore(kind, prefs['step4.figure.' + kind]);
     if (prefs['step4.outline']) { S.outlineWidth = Number(prefs['step4.outline']) || 1; $('outline-width').value = prefs['step4.outline']; }
     if (prefs['step4.every']) { try { window.localStorage.setItem('step4.every', prefs['step4.every']); } catch (blocked) { } }
     if (prefs['step4.help']) { const on = prefs['step4.help'] === '1'; document.body.classList.toggle('show-help', on); $('toggle-help').textContent = on ? 'Hide explanations' : 'Show explanations'; }
@@ -743,7 +744,7 @@
     tables.value = 'summary'; showMetricTable();
     S.withoutBelowZero = false;   // every cell is counted until the switch says otherwise
     table('table-calls', r.tables.calls); table('table-counts', r.tables.counts); showTally();
-    for (const id of ['save-plot', 'save-heatmap', 'save-plot-folder', 'save-heatmap-folder', 'data-save', 'data-download', 'metrics-save', 'metrics-download']) $(id).disabled = false;
+    for (const id of ['save-plot', 'save-heatmap', 'save-plot-folder', 'save-heatmap-folder', 'edit-plot', 'edit-heatmap', 'data-save', 'data-download', 'metrics-save', 'metrics-download']) $(id).disabled = false;
     for (const id of ['plot-saved', 'heatmap-saved', 'data-saved', 'metrics-saved']) $(id).textContent = '';
     if (!$('panel-data').hidden) showData();
     for (const option of $('signal').options) option.disabled = option.value !== 'dff' && !hasTable(option.value);
@@ -1158,9 +1159,10 @@
     }
     return rows.join('\n') + '\n';
   }
-  /** What the plot's legend says, as a list: lines, bands and notes. The page shows it above the plot; a saved picture has it drawn in. */
-  function legendItems() {
-    const r = S.results; if (!r) return [];
+  /** What the plot's legend says, as a list: lines, bands and notes, for what the look draws. The page shows it above the plot; a
+   *  saved figure has it drawn in. "fixed": a colour the figure editor does not change. */
+  function legendItems(look) {
+    const r = S.results; if (!r) return []; look = look || PAGE_LOOK;
     const oneCell = S.plotMode === 'cell', items = plotSeries().map((s) => ({ kind: 'line', colour: s.colour, text: s.label }));
     if (oneCell && S.cell) items.push(shownTraces()[S.cell] ? { kind: 'line', colour: '#1F2933', text: shortName(S.cell) } : { kind: 'note', colour: '#9A5B00', text: shortName(S.cell) + ': no ΔF/F₀ trace' + (hasTable('corrected') ? ': choose gray levels under Signal' : '') });
     if (S.every) {
@@ -1169,10 +1171,10 @@
       if (drawn.length - yes - no) items.push({ kind: 'line', colour: CALL.other, text: 'no call (' + (drawn.length - yes - no) + ')' });
     }
     const spans = responseSpans(), real = (span) => span && finite(span[0]) && finite(span[1]);
-    if (real(spans.baseline)) items.push({ kind: 'band', colour: '#EDF0F4', text: 'baseline' }); if (real(spans.response)) items.push({ kind: 'band', colour: '#F5C97A', text: 'response window' });
-    if (oneCell && isDff()) {
+    if (look.baseline && real(spans.baseline)) items.push({ kind: 'band', colour: '#EDF0F4', text: 'baseline' }); if (look.window && real(spans.response)) items.push({ kind: 'band', colour: '#F5C97A', text: 'response window' });
+    if (oneCell && isDff() && look.levels) {
       if (real(spans.run)) items.push({ kind: 'band', colour: '#D5EEDD', text: 'response' });
-      for (const level of referenceLevels().slice(1)) items.push({ kind: 'line', colour: level.colour, text: level.name });
+      for (const level of referenceLevels().slice(1)) items.push({ kind: 'line', colour: level.colour, text: level.name, fixed: true });
     }
     return items;
   }
@@ -1180,63 +1182,94 @@
     $('legend').innerHTML = legendItems().map((item) => item.kind === 'note' ? '<span class="chip" style="color:' + item.colour + '">' + escape(item.text) + '</span>'
       : '<span class="chip"><i' + (item.kind === 'band' ? ' class="band"' : '') + ' style="background:' + item.colour + '"></i>' + escape(item.text) + '</span>').join('');
   }
+  /** Writes a title in a figure. A font chosen in the editor may have no small lowered or raised digits (the ₀ of ΔF/F₀, the ²⁺ of
+   *  Ca²⁺) and would borrow them from another font at the wrong size and place: they are drawn from its ordinary digits instead.
+   *  The page's own font has them, so the page writes its text as it always did. */
+  function writeText(ctx, text, x, y, look) {
+    if (!look.family || !/[₀-₉₊₋⁰¹²³⁴-⁹⁺⁻]/.test(text)) { ctx.fillText(text, x, y); return; }
+    const font = ctx.font, size = parseFloat(/([\d.]+)px/.exec(font)[1]), small = font.replace(/[\d.]+px/, (size * 0.68) + 'px'), runs = [];
+    for (const letter of text) {
+      const low = '₀₁₂₃₄₅₆₇₈₉₊₋'.indexOf(letter), high = '⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻'.indexOf(letter), level = low >= 0 ? -1 : high >= 0 ? 1 : 0, shown = level ? '0123456789+−'[Math.max(low, high)] : letter;
+      if (runs.length && runs[runs.length - 1].level === level) runs[runs.length - 1].text += shown; else runs.push({ level, text: shown });
+    }
+    let width = 0; for (const run of runs) { ctx.font = run.level ? small : font; run.width = ctx.measureText(run.text).width; width += run.width; }
+    const align = ctx.textAlign; let at = align === 'center' ? x - width / 2 : align === 'right' ? x - width : x; ctx.textAlign = 'left';
+    for (const run of runs) { ctx.font = run.level ? small : font; ctx.fillText(run.text, at, y - (run.level > 0 ? 0.33 : run.level < 0 ? -0.2 : 0) * size); at += run.width; }
+    ctx.font = font; ctx.textAlign = align;
+  }
+  /** Ticks at a spacing typed in the figure editor; the automatic ones when none is typed or it would give too many. */
+  const steppedTicks = (lo, hi, step, auto) => { if (!finite(step) || step <= 0 || (hi - lo) / step > 60) return auto;
+    const values = []; for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-9; v += step) values.push(Math.abs(v) < step * 1e-9 ? 0 : +v.toPrecision(12)); return { values, step }; };
+  /** How the page draws its own plot, in pixels: the working view. A saved figure is drawn by the same painter with the look
+   *  set in the figure editor. Lengths in the painter are written for 12-pixel text and grow with the text size. */
+  const PAGE_LOOK = { page: true, px: 12, family: null, ink: '#65717D', line: '#C5CED8', tickLine: '#DEE4EA', background: '#fff', grid: true, frame: 'box', axis: 1,
+    mean: 2.4, cell: 1.7, trace: 0.9, sem: true, showStimulus: true, stimulus: 'stimulus', baseline: true, window: true, levels: true, xTitle: null, yTitle: null, x: [null, null], y: [null, null], xStep: null, yStep: null, swap: {} };
   /** Everything except the time cursor and the hovered trace, drawn once and reused while the cursor moves. */
-  function paintTraces(ctx, w, h) {
-    const r = S.results, shown = shownTraces(), time = r.time, L = 54, T = 10, W = Math.max(10, w - L - 14), H = Math.max(10, h - T - 38);
-    const full0 = time[0], full1 = time[time.length - 1], x0 = Plot.x0 === null ? full0 : Plot.x0, x1 = Plot.x1 === null ? full1 : Plot.x1;
-    const drawn = S.every ? S.listed.filter((n) => shown[n]) : []; Plot.drawn = drawn;
-    const oneCell = S.plotMode === 'cell', series = plotSeries(); Plot.series = series;
-    const spans = responseSpans(), gapLimit = samplingSupport().gap, levels = oneCell && isDff() ? referenceLevels() : [];
-    if (!oneCell || !isDff()) spans.run = null;                                  // the qualifying run and the thresholds belong to one cell
+  function paintTraces(ctx, w, h, look) {
+    look = look || PAGE_LOOK;
+    const u = look.px === 12 ? (n) => n : (n) => n * look.px / 12, paint = (colour) => look.swap[colour] || colour;
+    const r = S.results, shown = shownTraces(), time = r.time, L = u(54), T = u(10), W = Math.max(10, w - L - u(14)), H = Math.max(10, h - T - u(38));
+    const full0 = time[0], full1 = time[time.length - 1]; let x0 = Plot.x0 === null ? full0 : Plot.x0, x1 = Plot.x1 === null ? full1 : Plot.x1;
+    if (finite(look.x[0])) x0 = look.x[0]; if (finite(look.x[1])) x1 = look.x[1]; if (!(x1 > x0)) { x0 = full0; x1 = full1; }
+    const drawn = S.every ? S.listed.filter((n) => shown[n]) : [];
+    const oneCell = S.plotMode === 'cell', series = plotSeries();
+    if (look.page) { Plot.drawn = drawn; Plot.series = series; }   // the page's cursor and hover read these; a figure leaves them alone
+    const spans = responseSpans(), gapLimit = samplingSupport().gap, levels = oneCell && isDff() && look.levels ? referenceLevels() : [];
+    if (!oneCell || !isDff() || !look.levels) spans.run = null;                                 // the qualifying run and the thresholds belong to one cell
     const values = (isDff() || S.signal === 'rawdff' ? [0] : []).concat(levels.map((l) => l.value)); for (const s of series) s.mean.forEach((v, i) => { if (finite(v)) { values.push(v); if (finite(s.sem[i])) values.push(v - s.sem[i], v + s.sem[i]); } });
     const own = oneCell && S.cell ? shown[S.cell] : null; if (own) for (const v of own) if (finite(v)) values.push(v);
     // with every cell drawn, the axis covers 99 % of all values (plus the mean and the selected cell); rarer extremes run off the edge
     if (drawn.length) { const rows = drawn.map((n) => shown[n]); values.push(share(rows, 0.005, false), share(rows, 0.995, false)); }
     let lo = Math.min.apply(null, values), hi = Math.max.apply(null, values); if (hi - lo < 0.001) hi = lo + 1; const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
-    // limits typed under "Y axis" replace the automatic ones (either end alone, too); they belong to the signal on screen
-    const typed = Plot.y[S.signal] || {}; if (finite(typed.lo)) lo = typed.lo; if (finite(typed.hi)) hi = typed.hi; if (!(hi > lo)) hi = lo + Math.max(1e-6, Math.abs(lo) * 0.1);
+    // limits typed under "Y axis" replace the automatic ones (either end alone, too); they belong to the signal on screen.
+    // Limits typed in the figure editor replace both.
+    const typed = Plot.y[S.signal] || {}; if (finite(typed.lo)) lo = typed.lo; if (finite(typed.hi)) hi = typed.hi;
+    if (finite(look.y[0])) lo = look.y[0]; if (finite(look.y[1])) hi = look.y[1]; if (!(hi > lo)) hi = lo + Math.max(1e-6, Math.abs(lo) * 0.1);
     const X = (t) => L + (t - x0) / (x1 - x0) * W, Y = (v) => T + (hi - v) / (hi - lo) * H;
-    Plot.geom = { L, T, W, H, x0, x1, lo, hi, full0, full1 };
-    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); ctx.font = '12px ' + getComputedStyle(document.body).fontFamily;
+    if (look.page) Plot.geom = { L, T, W, H, x0, x1, lo, hi, full0, full1 };
+    if (look.background) { ctx.fillStyle = look.background; ctx.fillRect(0, 0, w, h); } ctx.font = look.px + 'px ' + (look.family || getComputedStyle(document.body).fontFamily);
     ctx.save(); ctx.beginPath(); ctx.rect(L, T, W, H); ctx.clip();
-    for (const [span, colour, name] of [[spans.baseline, '#EDF0F4', 'response baseline'], [spans.response, '#FFF4E3', 'response window'], [spans.run, '#D5EEDD', 'qualifying run']]) {
-      if (!span || !finite(span[0]) || !finite(span[1])) continue;
+    for (const [span, colour, name, wanted] of [[spans.baseline, '#EDF0F4', 'response baseline', look.baseline], [spans.response, '#FFF4E3', 'response window', look.window], [spans.run, '#D5EEDD', 'qualifying run', true]]) {
+      if (!wanted || !span || !finite(span[0]) || !finite(span[1])) continue;
       const a = Math.max(L, X(span[0])), b = Math.min(L + W, X(span[1])); if (b <= a) continue;
       const strip = name === 'response window';
-      ctx.fillStyle = strip ? '#F5C97A' : colour; ctx.fillRect(a, T, b - a, strip ? 5 : H);
-      if (!strip && ctx.measureText(name).width + 8 <= b - a) { ctx.fillStyle = '#65717D'; ctx.fillText(name, a + 4, T + 14); }
+      ctx.fillStyle = strip ? '#F5C97A' : colour; ctx.fillRect(a, T, b - a, strip ? u(5) : H);
+      if (!strip && ctx.measureText(name).width + u(8) <= b - a) { ctx.fillStyle = look.ink; ctx.fillText(name, a + u(4), T + u(14)); }
     }
     const added = number(selectedCall().Stimulus_onset_s);
-    if (finite(added) && added >= x0 && added <= x1) {
-      const sx = Math.round(X(added)) + 0.5; ctx.strokeStyle = '#B45F06'; ctx.lineWidth = 1.4; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(sx, T); ctx.lineTo(sx, T + H); ctx.stroke(); ctx.setLineDash([]);
-      ctx.fillStyle = '#8A4B08'; ctx.textAlign = sx > L + W - 70 ? 'right' : 'left'; ctx.fillText('stimulus', sx + (sx > L + W - 70 ? -4 : 4), T + 20); ctx.textAlign = 'left';
+    if (look.showStimulus && finite(added) && added >= x0 && added <= x1) {
+      const sx = Math.round(X(added)) + 0.5; ctx.strokeStyle = '#B45F06'; ctx.lineWidth = u(1.4); ctx.setLineDash([u(2), u(3)]); ctx.beginPath(); ctx.moveTo(sx, T); ctx.lineTo(sx, T + H); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = '#8A4B08'; ctx.textAlign = sx > L + W - u(70) ? 'right' : 'left'; ctx.fillText(look.stimulus, sx + (sx > L + W - u(70) ? -u(4) : u(4)), T + u(20)); ctx.textAlign = 'left';
     }
     ctx.restore();
-    const ys = ticks(lo, hi, 5), xs = ticks(x0, x1, Math.max(2, Math.floor(W / 90)));
+    const ys = steppedTicks(lo, hi, look.yStep, ticks(lo, hi, 5)), xs = steppedTicks(x0, x1, look.xStep, ticks(x0, x1, Math.max(2, Math.floor(W / u(90)))));
     ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-    for (const v of ys.values) { const y = Math.round(Y(v)) + 0.5; ctx.strokeStyle = v === 0 ? '#AEB8C2' : '#DEE4EA'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(L + W, y); ctx.stroke(); ctx.fillStyle = '#65717D'; ctx.fillText(tickText(v, ys.step), L - 8, y); }
+    for (const v of ys.values) { const y = Math.round(Y(v)) + 0.5; ctx.lineWidth = look.axis; ctx.beginPath();
+      if (look.grid) { ctx.strokeStyle = v === 0 ? '#AEB8C2' : '#DEE4EA'; ctx.moveTo(L, y); ctx.lineTo(L + W, y); } else { ctx.strokeStyle = look.tickLine; ctx.moveTo(L - u(4), y); ctx.lineTo(L, y); }
+      ctx.stroke(); ctx.fillStyle = look.ink; ctx.fillText(tickText(v, ys.step), L - u(8), y); }
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    for (const v of xs.values) { const x = Math.round(X(v)) + 0.5; ctx.strokeStyle = '#DEE4EA'; ctx.beginPath(); ctx.moveTo(x, T + H); ctx.lineTo(x, T + H + 4); ctx.stroke(); ctx.fillStyle = '#65717D'; ctx.fillText(tickText(v, xs.step), x, T + H + 7); }
-    ctx.fillText('Time (s)', L + W / 2, h - 15);
-    ctx.save(); ctx.translate(13, T + H / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'middle'; ctx.fillText(signalName(), 0, 0); ctx.restore();
-    ctx.strokeStyle = '#C5CED8'; ctx.strokeRect(L + 0.5, T + 0.5, W, H);
+    for (const v of xs.values) { const x = Math.round(X(v)) + 0.5; ctx.strokeStyle = look.tickLine; ctx.beginPath(); ctx.moveTo(x, T + H); ctx.lineTo(x, T + H + u(4)); ctx.stroke(); ctx.fillStyle = look.ink; ctx.fillText(tickText(v, xs.step), x, T + H + u(7)); }
+    writeText(ctx, look.xTitle == null ? 'Time (s)' : look.xTitle, L + W / 2, h - u(15), look);
+    ctx.save(); ctx.translate(u(13), T + H / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'middle'; writeText(ctx, look.yTitle == null ? signalName() : look.yTitle, 0, 0, look); ctx.restore();
+    ctx.strokeStyle = look.line; ctx.lineWidth = look.axis;
+    if (look.frame === 'box') ctx.strokeRect(L + 0.5, T + 0.5, W, H); else { ctx.beginPath(); ctx.moveTo(L + 0.5, T); ctx.lineTo(L + 0.5, T + H + 0.5); ctx.lineTo(L + W, T + H + 0.5); ctx.stroke(); }
     ctx.save(); ctx.beginPath(); ctx.rect(L, T, W + 1, H + 1); ctx.clip(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     const line = (y) => { ctx.beginPath(); let pen = false; for (let i = 0; i < time.length && i < y.length; i++) { if (finite(y[i])) { const px = X(time[i]), py = Y(y[i]); if (pen && time[i] - time[i - 1] <= gapLimit) ctx.lineTo(px, py); else ctx.moveTo(px, py); pen = true; } else pen = false; } ctx.stroke(); };
     if (drawn.length) {
-      ctx.globalAlpha = drawn.length > 120 ? 0.22 : drawn.length > 40 ? 0.32 : 0.48; ctx.lineWidth = 0.9;
+      ctx.globalAlpha = drawn.length > 120 ? 0.22 : drawn.length > 40 ? 0.32 : 0.48; ctx.lineWidth = look.trace;
       // non-responders first, so the responders are not hidden under them
-      for (const responders of [false, true]) for (const name of drawn) { const call = callOf(name); if ((call === 'Responded') === responders) { ctx.strokeStyle = CALL[kind(call)]; line(shown[name]); } }
+      for (const responders of [false, true]) for (const name of drawn) { const call = callOf(name); if ((call === 'Responded') === responders) { ctx.strokeStyle = paint(CALL[kind(call)]); line(shown[name]); } }
       ctx.globalAlpha = 1;
     }
-    for (const s of series) {
-      ctx.fillStyle = shade(s.colour, drawn.length ? 0.28 : 0.20);
+    if (look.sem) for (const s of series) {
+      ctx.fillStyle = shade(paint(s.colour), drawn.length ? 0.28 : 0.20);
       for (let i = 1; i < time.length; i++) if (time[i] - time[i - 1] <= gapLimit && [s.mean[i - 1], s.mean[i], s.sem[i - 1], s.sem[i]].every(finite)) {
         ctx.beginPath(); ctx.moveTo(X(time[i - 1]), Y(s.mean[i - 1] - s.sem[i - 1])); ctx.lineTo(X(time[i]), Y(s.mean[i] - s.sem[i])); ctx.lineTo(X(time[i]), Y(s.mean[i] + s.sem[i])); ctx.lineTo(X(time[i - 1]), Y(s.mean[i - 1] + s.sem[i - 1])); ctx.closePath(); ctx.fill();
       }
     }
-    for (const level of levels) { ctx.strokeStyle = level.colour; ctx.lineWidth = level.name === 'required rise' ? 1.8 : 1; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(L, Y(level.value)); ctx.lineTo(L + W, Y(level.value)); ctx.stroke(); } ctx.setLineDash([]);
-    for (const s of series) { if (drawn.length) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 4.2; line(s.mean); } ctx.strokeStyle = s.colour; ctx.lineWidth = 2.4; line(s.mean); }
-    if (own) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 3.6; line(own); ctx.strokeStyle = '#1F2933'; ctx.lineWidth = 1.7; line(own); }
+    for (const level of levels) { ctx.strokeStyle = level.colour; ctx.lineWidth = level.name === 'required rise' ? u(1.8) : u(1); ctx.setLineDash([u(5), u(4)]); ctx.beginPath(); ctx.moveTo(L, Y(level.value)); ctx.lineTo(L + W, Y(level.value)); ctx.stroke(); } ctx.setLineDash([]);
+    for (const s of series) { if (drawn.length) { ctx.strokeStyle = '#fff'; ctx.lineWidth = look.mean + 1.8; line(s.mean); } ctx.strokeStyle = paint(s.colour); ctx.lineWidth = look.mean; line(s.mean); }
+    if (own) { ctx.strokeStyle = '#fff'; ctx.lineWidth = look.cell + 1.9; line(own); ctx.strokeStyle = paint('#1F2933'); ctx.lineWidth = look.cell; line(own); }
     ctx.restore();
   }
   function drawPlot() {
@@ -1304,30 +1337,23 @@
     return { value: best, time: at };
   }
   const TOP = 30, BOTTOM = 46, LEFT = 66, RIGHT = 92, ROW = 15;
-  function drawHeatmap() {
-    const canvas = $('heatmap'), box = $('heatmap-box'), r = S.results; $('heatmap-empty').hidden = !!r; if (!r || $('panel-heatmap').hidden) return;
-    const all = S.info.names, time = r.time, rank = (n) => callOf(n) === 'Responded' ? 0 : callOf(n) === 'Did not respond' ? 1 : 2;
+  /** How the page draws its own heatmap. A saved figure is drawn by the same painter with the look set in the figure editor. */
+  const PAGE_HEAT = { page: true, px: 12, family: null, ink: '#333', soft: '#65717D', background: '#fff', bar: true, marks: true, strip: true, key: true, selected: true, xTitle: null, yTitle: null, barTitle: null };
+  /** The heatmap's rows in the order chosen, its colour range (or the one typed in the figure editor) and the picture itself at
+   *  one pixel per sample and cell. */
+  function heatmapData(scaleTo) {
+    const r = S.results, all = S.info.names, time = r.time, rank = (n) => callOf(n) === 'Responded' ? 0 : callOf(n) === 'Did not respond' ? 1 : 2;
     const lastBaseline = r.baselineFrames && finite(r.baselineFrames[1]) ? r.baselineFrames[1] : 0;
     const peaks = {}; for (const n of all) peaks[n] = peakAfterBaseline(r.traces[n], time, lastBaseline);
     const names = all.slice(), original = (a, b) => all.indexOf(a) - all.indexOf(b);
     if (S.order === 'call') names.sort((a, b) => rank(a) - rank(b) || peaks[b].value - peaks[a].value || original(a, b));
     else if (S.order === 'tpeak') names.sort((a, b) => peaks[a].time - peaks[b].time || original(a, b));
     else if (S.order === 'amp') names.sort((a, b) => peaks[b].value - peaks[a].value || original(a, b));
-    Heat.names = names;
     const rows = names.map((n) => r.traces[n] || null), have = rows.filter(Boolean), signed = S.palette === 'signed';
     // the colour range: the largest value, or a limit that covers 99 % of the values so one extreme cell cannot wash out the rest
     const largest = share(have, 1, true), most = S.range === 'full' ? largest : share(have, 0.99, true);
-    const step0 = ticks(0, most > 0 ? most : 1, 5).step, limit = Math.max(step0, Math.ceil(most / step0 - 1e-9) * step0);
+    const step0 = ticks(0, most > 0 ? most : 1, 5).step, limit = finite(scaleTo) && scaleTo > 0 ? scaleTo : Math.max(step0, Math.ceil(most / step0 - 1e-9) * step0);
     const colours = ramp(S.palette), missing = [229, 229, 229];
-    const callKey = [[CALL.responded, 'responded'], [CALL.not, 'did not respond'], [CALL.other, 'excluded or unscorable']];
-    $('heatmap-legend').innerHTML = '<span class="chip">ΔF/F₀ <i class="scale" style="background:linear-gradient(to right,' + PALETTES[S.palette].join(',') + ')"></i>' + (signed ? '−' + fmt(limit) + ' to ' + fmt(limit) : '0 to ' + fmt(limit) + ' (below 0: darkest colour)') + '</span>' +
-      '<span class="chip">strip beside the Cell axis:</span>' + callKey.map(([colour, text]) => '<span class="chip"><i class="band" style="background:' + colour + '"></i>' + text + '</span>').join('') +
-      '<span class="chip"><i class="band" style="background:#e5e5e5"></i>no ΔF/F₀ trace</span><span class="chip">◀ selected cell · dashed line: stimulus · top strip: baseline and response window</span>';
-    const tall = S.tall, width = Math.max(320, box.clientWidth - 2), height = tall ? TOP + names.length * ROW + BOTTOM : Math.max(220, box.clientHeight - 2);
-    box.classList.toggle('fit', !tall); canvas.style.width = width + 'px'; canvas.style.height = height + 'px';
-    const { ctx, w, h } = fit(canvas), W = Math.max(10, w - LEFT - RIGHT), H = Math.max(10, h - TOP - BOTTOM), rowH = H / names.length;
-    const support = samplingSupport(), spans = responseSpans();
-    Heat.geom = { L: LEFT, T: TOP, W, H, rows: names.length, bounds: support.bounds };
     // one pixel per sample and cell, then stretched without smoothing: sharp edges at any size
     const small = document.createElement('canvas'); small.width = time.length; small.height = names.length;
     const sctx = small.getContext('2d'), data = sctx.createImageData(time.length, names.length);
@@ -1336,48 +1362,73 @@
       if (finite(v)) { const t = signed ? (Math.max(-1, Math.min(1, v / limit)) + 1) / 2 : Math.max(0, Math.min(1, v / limit)), k = Math.round(t * 255) * 3; colour = [colours[k], colours[k + 1], colours[k + 2]]; }
       data.data[o] = colour[0]; data.data[o + 1] = colour[1]; data.data[o + 2] = colour[2]; data.data[o + 3] = 255; } });
     sctx.putImageData(data, 0, 0);
-    const family = getComputedStyle(document.body).fontFamily;
-    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); ctx.imageSmoothingEnabled = false;
-    const X = (t) => LEFT + (t - time[0]) / (time[time.length - 1] - time[0]) * W;
-    ctx.fillStyle = '#e5e5e5'; ctx.fillRect(LEFT, TOP, W, H);
-    support.bounds.forEach((span, f) => { const x = X(span[0]), width = Math.max(0, X(span[1]) - x); if (width) ctx.drawImage(small, f, 0, 1, names.length, x, TOP, width, H); });
+    return { names, rank, signed, largest, limit, colours, small, callKey: [[CALL.responded, 'responded'], [CALL.not, 'did not respond'], [CALL.other, 'excluded or unscorable']] };
+  }
+  /** Draws the heatmap into a w × h area and returns where the picture itself lies. Lengths are written for 12-pixel text. */
+  function paintHeatmap(ctx, w, h, look, d, tall) {
+    const u = look.px === 12 ? (n) => n : (n) => n * look.px / 12, r = S.results, time = r.time, names = d.names, signed = d.signed, limit = d.limit, colours = d.colours;
+    const left = u(LEFT), top = u(TOP), right = look.bar ? u(RIGHT) : u(18), bottom = u(BOTTOM);
+    const W = Math.max(10, w - left - right), H = Math.max(10, h - top - bottom), rowH = H / names.length, support = samplingSupport(), spans = responseSpans();
+    const family = look.family || getComputedStyle(document.body).fontFamily;
+    if (look.background) { ctx.fillStyle = look.background; ctx.fillRect(0, 0, w, h); } ctx.imageSmoothingEnabled = false;
+    const X = (t) => left + (t - time[0]) / (time[time.length - 1] - time[0]) * W;
+    ctx.fillStyle = '#e5e5e5'; ctx.fillRect(left, top, W, H);
+    support.bounds.forEach((span, f) => { const x = X(span[0]), width = Math.max(0, X(span[1]) - x); if (width) ctx.drawImage(d.small, f, 0, 1, names.length, x, top, width, H); });
     // Actual timestamps determine sample widths; unsampled gaps remain blank.
     // where the baseline and the stimulus are
-    ctx.font = '11px ' + family; ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
-    for (const [span, colour, name] of [[spans.baseline, '#B8C2CC', 'response baseline'], [spans.response, '#E9A84C', 'response window']]) {
-      if (!span || !finite(span[0]) || !finite(span[1])) continue; const a = Math.max(LEFT, X(span[0])), b = Math.min(LEFT + W, X(span[1])); if (b <= a) continue;
-      ctx.fillStyle = colour; ctx.fillRect(a, TOP - 7, b - a, 4); if (ctx.measureText(name).width + 4 < b - a) { ctx.fillStyle = '#65717D'; ctx.fillText(name, a + 1, TOP - 11); }
+    ctx.font = u(11) + 'px ' + family; ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+    if (look.marks) {
+      for (const [span, colour, name] of [[spans.baseline, '#B8C2CC', 'response baseline'], [spans.response, '#E9A84C', 'response window']]) {
+        if (!span || !finite(span[0]) || !finite(span[1])) continue; const a = Math.max(left, X(span[0])), b = Math.min(left + W, X(span[1])); if (b <= a) continue;
+        ctx.fillStyle = colour; ctx.fillRect(a, top - u(7), b - a, u(4)); if (ctx.measureText(name).width + u(4) < b - a) { ctx.fillStyle = look.soft; ctx.fillText(name, a + u(1), top - u(11)); }
+      }
+      if (finite(spans.response[0]) && spans.response[0] > time[0]) { const x = Math.round(X(spans.response[0])) + 0.5; ctx.strokeStyle = signed ? 'rgba(31,41,51,0.55)' : 'rgba(255,255,255,0.75)'; ctx.setLineDash([u(4), u(3)]); ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, top + H); ctx.stroke(); ctx.setLineDash([]); }
     }
-    if (finite(spans.response[0]) && spans.response[0] > time[0]) { const x = Math.round(X(spans.response[0])) + 0.5; ctx.strokeStyle = signed ? 'rgba(31,41,51,0.55)' : 'rgba(255,255,255,0.75)'; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(x, TOP); ctx.lineTo(x, TOP + H); ctx.stroke(); ctx.setLineDash([]); }
     // the response call of each row, and lines between the groups when the rows are sorted by call
-    names.forEach((name, c) => { ctx.fillStyle = CALL[kind(callOf(name))]; ctx.fillRect(LEFT - 7, TOP + c * rowH, 4, Math.max(1, rowH - (rowH > 3 ? 0.5 : 0))); });
-    if (W > 760) { ctx.font = '11px ' + family; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; let kx = LEFT;   // the same key inside the picture, for saved files
-      for (const [colour, text] of callKey) { ctx.fillStyle = colour; ctx.fillRect(kx, h - 14, 10, 8); ctx.fillStyle = '#65717D'; ctx.fillText(text, kx + 14, h - 10); kx += 24 + ctx.measureText(text).width; } ctx.textBaseline = 'alphabetic'; }
-    if (S.order === 'call') names.forEach((name, c) => { if (c > 0 && rank(name) !== rank(names[c - 1])) { ctx.fillStyle = '#fff'; ctx.fillRect(LEFT, TOP + c * rowH - 1, W, 2); } });
-    const chosen = names.indexOf(S.cell);
-    if (chosen >= 0) { const y = TOP + chosen * rowH;
+    if (look.strip) {
+      names.forEach((name, c) => { ctx.fillStyle = CALL[kind(callOf(name))]; ctx.fillRect(left - u(7), top + c * rowH, u(4), Math.max(1, rowH - (rowH > 3 ? 0.5 : 0))); });
+      if (look.key && W > u(760)) { ctx.font = u(11) + 'px ' + family; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; let kx = left;   // the same key inside the picture, for saved files
+        for (const [colour, text] of d.callKey) { ctx.fillStyle = colour; ctx.fillRect(kx, h - u(14), u(10), u(8)); ctx.fillStyle = look.soft; ctx.fillText(text, kx + u(14), h - u(10)); kx += u(24) + ctx.measureText(text).width; } ctx.textBaseline = 'alphabetic'; }
+    }
+    if (S.order === 'call') names.forEach((name, c) => { if (c > 0 && d.rank(name) !== d.rank(names[c - 1])) { ctx.fillStyle = '#fff'; ctx.fillRect(left, top + c * rowH - 1, W, 2); } });
+    const chosen = look.selected ? names.indexOf(S.cell) : -1;
+    if (chosen >= 0) { const y = top + chosen * rowH;
       // thin rows are marked beside the picture, never drawn over; tall rows get a frame
-      if (rowH >= 8) { ctx.strokeStyle = '#1F2933'; ctx.lineWidth = 1.5; ctx.strokeRect(LEFT + 0.75, y + 0.75, W - 1.5, rowH - 1.5); }
-      ctx.fillStyle = '#1F2933'; ctx.beginPath(); ctx.moveTo(LEFT + W + 2, y + rowH / 2); ctx.lineTo(LEFT + W + 9, y + rowH / 2 - 5); ctx.lineTo(LEFT + W + 9, y + rowH / 2 + 5); ctx.closePath(); ctx.fill(); }
+      if (rowH >= 8) { ctx.strokeStyle = '#1F2933'; ctx.lineWidth = 1.5; ctx.strokeRect(left + 0.75, y + 0.75, W - 1.5, rowH - 1.5); }
+      ctx.fillStyle = '#1F2933'; ctx.beginPath(); ctx.moveTo(left + W + 2, y + rowH / 2); ctx.lineTo(left + W + 9, y + rowH / 2 - 5); ctx.lineTo(left + W + 9, y + rowH / 2 + 5); ctx.closePath(); ctx.fill(); }
     // classic axes: a line on the left and below, ticks outside
-    ctx.strokeStyle = '#333'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(LEFT - 9.5, TOP); ctx.lineTo(LEFT - 9.5, TOP + H + 0.5); ctx.lineTo(LEFT + W, TOP + H + 0.5); ctx.stroke();
-    ctx.fillStyle = '#333'; ctx.font = '12px ' + family; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    const xs = ticks(time[0], time[time.length - 1], Math.max(2, Math.floor(W / 110)));
-    for (const v of xs.values) { const x = Math.round(X(v)) + 0.5; ctx.beginPath(); ctx.moveTo(x, TOP + H); ctx.lineTo(x, TOP + H + 5); ctx.stroke(); ctx.fillText(tickText(v, xs.step), x, TOP + H + 8); }
+    ctx.strokeStyle = look.ink; ctx.lineWidth = u(1); ctx.beginPath(); ctx.moveTo(left - u(9.5), top); ctx.lineTo(left - u(9.5), top + H + 0.5); ctx.lineTo(left + W, top + H + 0.5); ctx.stroke();
+    ctx.fillStyle = look.ink; ctx.font = u(12) + 'px ' + family; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    const xs = ticks(time[0], time[time.length - 1], Math.max(2, Math.floor(W / u(110))));
+    for (const v of xs.values) { const x = Math.round(X(v)) + 0.5; ctx.beginPath(); ctx.moveTo(x, top + H); ctx.lineTo(x, top + H + u(5)); ctx.stroke(); ctx.fillText(tickText(v, xs.step), x, top + H + u(8)); }
     ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-    if (tall) { ctx.font = '11px ' + family; names.forEach((name, c) => { ctx.fillStyle = name === S.cell ? '#1F2933' : '#65717D'; ctx.fillText(shortName(name), LEFT - 13, TOP + (c + 0.5) * rowH); }); }
-    else { const every = ticks(0, names.length, Math.max(2, Math.floor(H / 60))).step; for (let c = every; c <= names.length; c += every) { const y = Math.round(TOP + (c - 0.5) * rowH) + 0.5; ctx.beginPath(); ctx.moveTo(LEFT - 9.5, y); ctx.lineTo(LEFT - 14, y); ctx.stroke(); ctx.fillText(String(c), LEFT - 17, y); } }
-    ctx.font = '600 13px ' + family; ctx.fillStyle = '#1F2933'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillText('Time (s)', LEFT + W / 2, h - 10);
-    if (!tall) { ctx.save(); ctx.translate(16, TOP + H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('Cell', 0, 0); ctx.restore(); }
+    if (tall) { ctx.font = u(11) + 'px ' + family; names.forEach((name, c) => { ctx.fillStyle = look.selected && name === S.cell ? '#1F2933' : look.soft; ctx.fillText(shortName(name), left - u(13), top + (c + 0.5) * rowH); }); }
+    else { const every = ticks(0, names.length, Math.max(2, Math.floor(H / u(60)))).step; for (let c = every; c <= names.length; c += every) { const y = Math.round(top + (c - 0.5) * rowH) + 0.5; ctx.beginPath(); ctx.moveTo(left - u(9.5), y); ctx.lineTo(left - u(14), y); ctx.stroke(); ctx.fillText(String(c), left - u(17), y); } }
+    ctx.font = '600 ' + u(13) + 'px ' + family; ctx.fillStyle = look.titleInk || '#1F2933'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; writeText(ctx, look.xTitle == null ? 'Time (s)' : look.xTitle, left + W / 2, h - u(10), look);
+    if (!tall) { ctx.save(); ctx.translate(u(16), top + H / 2); ctx.rotate(-Math.PI / 2); writeText(ctx, look.yTitle == null ? 'Cell' : look.yTitle, 0, 0, look); ctx.restore(); }
     // colour bar with ticks, as in the app
-    const barX = LEFT + W + 26, barH = Math.min(190, H), barY = TOP + (tall ? 0 : Math.max(0, (H - barH) / 2)), low = signed ? -limit : 0;
-    for (let i = 0; i < barH; i++) { const k = Math.round((1 - i / (barH - 1)) * 255) * 3; ctx.fillStyle = 'rgb(' + colours[k] + ',' + colours[k + 1] + ',' + colours[k + 2] + ')'; ctx.fillRect(barX, barY + i, 13, 1.5); }
-    ctx.strokeStyle = '#4d4d4d'; ctx.lineWidth = 0.6; ctx.strokeRect(barX + 0.3, barY + 0.3, 12.4, barH - 0.6);
-    ctx.font = '12px ' + family; ctx.fillStyle = '#333'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    const bs = ticks(low, limit, signed ? 6 : 5);
-    for (const v of bs.values) { const y = barY + (1 - (v - low) / (limit - low)) * (barH - 1); ctx.fillRect(barX + 13, Math.round(y), 4, 1);
-      ctx.fillText((v === limit && largest > limit ? '≥ ' : v === low && signed && largest > limit ? '≤ ' : '') + tickText(v, bs.step).replace('-', '−'), barX + 20, y); }
-    ctx.font = '600 13px ' + family; ctx.fillStyle = '#1F2933'; ctx.textBaseline = 'alphabetic'; ctx.fillText('ΔF/F₀', barX - 2, barY - 9);
+    if (look.bar) {
+      const barX = left + W + u(26), barH = Math.min(u(190), H), barY = top + (tall ? 0 : Math.max(0, (H - barH) / 2)), low = signed ? -limit : 0;
+      for (let i = 0; i < barH; i++) { const k = Math.round((1 - i / (barH - 1)) * 255) * 3; ctx.fillStyle = 'rgb(' + colours[k] + ',' + colours[k + 1] + ',' + colours[k + 2] + ')'; ctx.fillRect(barX, barY + i, u(13), 1.5); }
+      ctx.strokeStyle = '#4d4d4d'; ctx.lineWidth = 0.6; ctx.strokeRect(barX + 0.3, barY + 0.3, u(13) - 0.6, barH - 0.6);
+      ctx.font = u(12) + 'px ' + family; ctx.fillStyle = look.ink; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      const bs = ticks(low, limit, signed ? 6 : 5);
+      for (const v of bs.values) { const y = barY + (1 - (v - low) / (limit - low)) * (barH - 1); ctx.fillRect(barX + u(13), Math.round(y), u(4), 1);
+        ctx.fillText((v === limit && d.largest > limit ? '≥ ' : v === low && signed && d.largest > limit ? '≤ ' : '') + tickText(v, bs.step).replace('-', '−'), barX + u(20), y); }
+      ctx.font = '600 ' + u(13) + 'px ' + family; ctx.fillStyle = look.titleInk || '#1F2933'; ctx.textBaseline = 'alphabetic'; writeText(ctx, look.barTitle == null ? 'ΔF/F₀' : look.barTitle, barX - u(2), barY - u(look.page ? 9 : 14), look);
+    }
+    return { L: left, T: top, W, H, rows: names.length, bounds: support.bounds };
+  }
+  function drawHeatmap() {
+    const canvas = $('heatmap'), box = $('heatmap-box'), r = S.results; $('heatmap-empty').hidden = !!r; if (!r || $('panel-heatmap').hidden) return;
+    const d = heatmapData(), names = d.names, limit = d.limit, signed = d.signed; Heat.names = names;
+    $('heatmap-legend').innerHTML = '<span class="chip">ΔF/F₀ <i class="scale" style="background:linear-gradient(to right,' + PALETTES[S.palette].join(',') + ')"></i>' + (signed ? '−' + fmt(limit) + ' to ' + fmt(limit) : '0 to ' + fmt(limit) + ' (below 0: darkest colour)') + '</span>' +
+      '<span class="chip">strip beside the Cell axis:</span>' + d.callKey.map(([colour, text]) => '<span class="chip"><i class="band" style="background:' + colour + '"></i>' + text + '</span>').join('') +
+      '<span class="chip"><i class="band" style="background:#e5e5e5"></i>no ΔF/F₀ trace</span><span class="chip">◀ selected cell · dashed line: stimulus · top strip: baseline and response window</span>';
+    const tall = S.tall, width = Math.max(320, box.clientWidth - 2), height = tall ? TOP + names.length * ROW + BOTTOM : Math.max(220, box.clientHeight - 2);
+    box.classList.toggle('fit', !tall); canvas.style.width = width + 'px'; canvas.style.height = height + 'px';
+    const { ctx, w, h } = fit(canvas);
+    Heat.geom = paintHeatmap(ctx, w, h, PAGE_HEAT, d, tall);
   }
   function heatmapAt(event) {
     const g = Heat.geom; if (!S.results || !g) return null;
@@ -1465,31 +1516,166 @@
   }
   const Save = { format: 'png', size: '8x6', dpi: 300, compression: 'lzw' };
   const inches = () => Save.size === 'screen' ? null : Save.size.split('x').map(Number);
-  /** The plot as a picture of the chosen size and resolution: its title and legend are drawn in, the time cursor is left out. */
-  function plotPicture() {
-    const screen = $('plot'), size = inches() || [screen.clientWidth / 96, screen.clientHeight / 96], w = Math.round(size[0] * 96), h = Math.round(size[1] * 96), k = Save.dpi / 96;
-    const canvas = document.createElement('canvas'); canvas.width = Math.round(size[0] * Save.dpi); canvas.height = Math.round(size[1] * Save.dpi);
-    const ctx = canvas.getContext('2d'), font = getComputedStyle(document.body).fontFamily; ctx.setTransform(k, 0, 0, k, 0, 0); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
-    ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.fillStyle = '#1F2933'; ctx.font = '600 13px ' + font; ctx.fillText(S.info.recording, 12, 16);
-    ctx.font = '12px ' + font; let x = 12, y = 38;
-    for (const item of legendItems()) {
-      const width = (item.kind === 'note' ? 0 : 24) + ctx.measureText(item.text).width + 16; if (x + width > w - 8 && x > 12) { x = 12; y += 18; }
-      if (item.kind === 'line') { ctx.fillStyle = item.colour; ctx.fillRect(x, y - 1.5, 18, 3); }
-      else if (item.kind === 'band') { ctx.fillStyle = item.colour; ctx.fillRect(x, y - 5, 14, 10); ctx.strokeStyle = '#C5CED8'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y - 4.5, 14, 10); }
-      ctx.fillStyle = item.kind === 'note' ? item.colour : '#3E4C59'; ctx.fillText(item.text, x + (item.kind === 'note' ? 0 : 24), y); x += width;
-    }
-    const head = y + 14; ctx.translate(0, head); paintTraces(ctx, w, h - head);
-    Plot.dirty = true; drawPlot();   // the page's own plot is measured again for the screen
-    return canvas.toDataURL('image/png');
+  // ---------------------------------------------------------------- figures: how a saved plot or heatmap looks
+  const PT = 96 / 72;   // pixels in a point
+  const FONTS = { page: null, arial: 'Arial, Helvetica, sans-serif', times: '"Times New Roman", Times, serif', courier: '"Courier New", Courier, monospace' };
+  /** Everything the figure editor sets, with the values of a figure nobody has edited. Sizes in inches, text and lines in
+   *  points, as in a graphing program. null: the figure's own text, or the automatic value. */
+  const FIGURE_DEFAULT = {
+    plot: { width: 8, height: 6, title: null, xTitle: null, yTitle: null, font: 'page', text: 9, titleText: 10, ink: '#65717d', background: 'white',
+      xMin: null, xMax: null, xStep: null, yMin: null, yMax: null, yStep: null, frame: 'box', grid: true, axisWidth: 0.75,
+      meanWidth: 1.8, colourMean: '#0072b2', sem: 'band', cellWidth: 1.3, colourCell: '#1f2933', traceWidth: 0.7, colourResponded: CALL.responded.toLowerCase(), colourNot: CALL.not.toLowerCase(),
+      legend: 'top', stimulus: true, stimulusText: 'stimulus', baseline: true, window: true, levels: true },
+    heatmap: { width: 8, height: 6, title: null, xTitle: null, yTitle: null, barTitle: null, font: 'page', text: 9, titleText: 10, ink: '#333333', background: 'white', barMax: null, bar: true, marks: true, strip: true }
+  };
+  /** What belongs to one recording or one signal and is not carried to the next: the title, the Y axis title and the axis numbers. */
+  const FIGURE_OWN = ['title', 'yTitle', 'xMin', 'xMax', 'xStep', 'yMin', 'yMax', 'yStep', 'barMax'];
+  const FIGURE_MOST = 80e6;   // pixels in one saved figure: beyond this a browser may not draw it
+  const Fig = { plot: Object.assign({}, FIGURE_DEFAULT.plot), heatmap: Object.assign({}, FIGURE_DEFAULT.heatmap), open: null, queued: false };
+  /** The boxes of the figure editor, in order: [section, key, label, type, more]. Types: number (unit, least, most; an empty box
+   *  is "auto" where the default is null), text (the figure's own text until one is typed), choice, tick, colour, and page (a list
+   *  that lives on the page, such as the heatmap's colours, shown here too so one place has everything). "when" leaves out a box
+   *  for something the plot on screen does not show. */
+  const FIGURE_SIZE = [['Size', 'width', 'Width', 'number', { unit: 'in', least: 1, most: 20 }], ['Size', 'height', 'Height', 'number', { unit: 'in', least: 1, most: 20 }],
+    ['Size', 'save-dpi', 'Resolution', 'page'], ['Size', 'save-format', 'Format', 'page'], ['Size', 'save-compression', 'TIFF compression', 'page']];
+  const FIGURE_TEXT = [['Text', 'font', 'Font', 'choice', { options: [['page', 'As on the page'], ['arial', 'Arial'], ['times', 'Times New Roman'], ['courier', 'Courier New']] }],
+    ['Text', 'text', 'Text size', 'number', { unit: 'pt', least: 4, most: 48 }], ['Text', 'titleText', 'Title size', 'number', { unit: 'pt', least: 4, most: 72 }],
+    ['Text', 'ink', 'Text and axes', 'colour'], ['Text', 'background', 'Background', 'choice', { options: [['white', 'White'], ['transparent', 'Transparent']] }]];
+  const cellDrawn = () => S.plotMode === 'cell' && !!S.cell && !!shownTraces()[S.cell], callsDrawn = () => S.every || S.plotMode === 'calls';
+  const FIGURE_FIELDS = {
+    plot: FIGURE_SIZE.concat([['Text', 'title', 'Title', 'text'], ['Text', 'xTitle', 'X axis title', 'text'], ['Text', 'yTitle', 'Y axis title', 'text']], FIGURE_TEXT, [
+      ['Axes', 'xMin', 'X min', 'number', {}], ['Axes', 'xMax', 'X max', 'number', {}], ['Axes', 'xStep', 'X ticks every', 'number', { least: 0 }],
+      ['Axes', 'yMin', 'Y min', 'number', {}], ['Axes', 'yMax', 'Y max', 'number', {}], ['Axes', 'yStep', 'Y ticks every', 'number', { least: 0 }],
+      ['Axes', 'frame', 'Frame', 'choice', { options: [['box', 'Box'], ['open', 'Left and bottom']] }], ['Axes', 'grid', 'Grid lines', 'tick'], ['Axes', 'axisWidth', 'Axis thickness', 'number', { unit: 'pt', least: 0.25, most: 6 }],
+      ['Lines', 'meanWidth', 'Mean line', 'number', { unit: 'pt', least: 0.25, most: 10 }], ['Lines', 'colourMean', 'Mean colour', 'colour', { when: () => S.plotMode !== 'calls' }],
+      ['Lines', 'sem', 'SEM', 'choice', { options: [['band', 'Shaded band'], ['none', 'Not shown']] }],
+      ['Lines', 'cellWidth', 'Cell line', 'number', { unit: 'pt', least: 0.25, most: 10, when: cellDrawn }], ['Lines', 'colourCell', 'Cell colour', 'colour', { when: cellDrawn }],
+      ['Lines', 'traceWidth', 'All traces', 'number', { unit: 'pt', least: 0.1, most: 6, when: () => S.every }],
+      ['Lines', 'colourResponded', 'Responded', 'colour', { when: callsDrawn }], ['Lines', 'colourNot', 'Did not respond', 'colour', { when: callsDrawn }],
+      ['Marks', 'legend', 'Legend', 'choice', { options: [['top', 'Above the plot'], ['none', 'Not shown']] }], ['Marks', 'stimulus', 'Stimulus line', 'tick'], ['Marks', 'stimulusText', 'Stimulus label', 'text'],
+      ['Marks', 'baseline', 'Baseline', 'tick'], ['Marks', 'window', 'Response window', 'tick'], ['Marks', 'levels', 'Thresholds', 'tick', { when: () => S.plotMode === 'cell' && isDff() }]]),
+    heatmap: FIGURE_SIZE.concat([['Text', 'title', 'Title', 'text'], ['Text', 'xTitle', 'X axis title', 'text'], ['Text', 'yTitle', 'Y axis title', 'text'], ['Text', 'barTitle', 'Colour bar title', 'text']], FIGURE_TEXT, [
+      ['Colours', 'palette', 'Colours', 'page'], ['Colours', 'range', 'Range', 'page'], ['Colours', 'barMax', 'Scale to', 'number', { least: 0 }], ['Colours', 'bar', 'Colour bar', 'tick'], ['Colours', 'order', 'Sort', 'page'],
+      ['Marks', 'marks', 'Windows and stimulus', 'tick'], ['Marks', 'strip', 'Response calls', 'tick']])
+  };
+  /** Whether a value may be kept for a box: the one rule for what is typed and for what comes back from the preferences. */
+  function figureValid(kind, key, value) {
+    const field = FIGURE_FIELDS[kind].find((f) => f[1] === key), type = field && field[3], more = (field && field[4]) || {};
+    if (type === 'number') return value === null ? FIGURE_DEFAULT[kind][key] === null : finite(value) && (more.least == null || (more.least === 0 ? value > 0 : value >= more.least)) && (more.most == null || value <= more.most);
+    if (type === 'text') return value === null || (typeof value === 'string' && value.length <= 80);
+    if (type === 'tick') return typeof value === 'boolean'; if (type === 'colour') return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
+    return type === 'choice' && more.options.some((option) => option[0] === value);
   }
+  /** A figure's settings as kept in the preferences: only what differs from the defaults, without what belongs to one recording. */
+  const figureKept = (kind) => { const kept = {}; for (const key of Object.keys(FIGURE_DEFAULT[kind])) if (!FIGURE_OWN.includes(key) && Fig[kind][key] !== FIGURE_DEFAULT[kind][key]) kept[key] = Fig[kind][key]; return kept; };
+  /** Takes kept settings back: known boxes and valid values only, so an old or damaged preference cannot break a figure. */
+  function figureRestore(kind, text) {
+    let kept; try { kept = JSON.parse(text); } catch (broken) { return; } if (!kept || typeof kept !== 'object') return;
+    for (const key of Object.keys(FIGURE_DEFAULT[kind])) if (!FIGURE_OWN.includes(key) && kept[key] !== undefined && figureValid(kind, key, kept[key])) Fig[kind][key] = kept[key];
+  }
+  const sameColour = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+  /** The editor's settings as a painter's look: points become pixels, and a colour that was changed replaces the page's. While
+   *  "Text and axes" is untouched the figure keeps the page's own grays for its title, legend, frame and ticks. */
+  function figureLook(kind, fig) {
+    const own = !sameColour(fig.ink, FIGURE_DEFAULT[kind].ink);
+    const look = { px: fig.text * PT, titlePx: fig.titleText * PT, family: FONTS[fig.font] || null, ink: fig.ink, titleInk: own ? fig.ink : '#1F2933', background: fig.background === 'transparent' ? null : '#fff', xTitle: fig.xTitle, yTitle: fig.yTitle };
+    if (kind === 'heatmap') return Object.assign(look, { legendInk: own ? fig.ink : '#3E4C59', swap: {}, soft: own ? fig.ink : '#65717D', bar: fig.bar, marks: fig.marks, strip: fig.strip, selected: false, barTitle: fig.barTitle });
+    const swap = {}; for (const [key, colour] of [['colourMean', '#0072B2'], ['colourCell', '#1F2933'], ['colourResponded', CALL.responded], ['colourNot', CALL.not]]) if (!sameColour(fig[key], colour)) swap[colour] = fig[key];
+    return Object.assign(look, { legendInk: own ? fig.ink : '#3E4C59', line: own ? fig.ink : '#C5CED8', tickLine: own ? fig.ink : '#DEE4EA', grid: fig.grid, frame: fig.frame, axis: fig.axisWidth * PT,
+      mean: fig.meanWidth * PT, cell: fig.cellWidth * PT, trace: fig.traceWidth * PT, sem: fig.sem !== 'none', showStimulus: fig.stimulus, stimulus: fig.stimulusText || '', baseline: fig.baseline, window: fig.window, levels: fig.levels,
+      x: [fig.xMin, fig.xMax], y: [fig.yMin, fig.yMax], xStep: fig.xStep, yStep: fig.yStep, swap });
+  }
+  /** The plot or the heatmap as a figure of the size set in the editor: its title, the plot's legend, then the drawing by the
+   *  page's own painter. The preview and the saved file are this one drawing at different numbers of pixels per inch. */
+  function figureCanvas(kind, perInch) {
+    const fig = Fig[kind], w = Math.round(fig.width * 96), h = Math.round(fig.height * 96), look = figureLook(kind, fig);
+    const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(fig.width * perInch)); canvas.height = Math.max(1, Math.round(fig.height * perInch));
+    if (canvas.width * canvas.height > FIGURE_MOST) throw new Error('This figure would be ' + canvas.width + ' × ' + canvas.height + ' pixels. Choose a smaller size or resolution.');
+    const ctx = canvas.getContext('2d'), u = (n) => n * look.px / 12, family = look.family || getComputedStyle(document.body).fontFamily; ctx.setTransform(canvas.width / w, 0, 0, canvas.height / h, 0, 0);
+    if (look.background) { ctx.fillStyle = look.background; ctx.fillRect(0, 0, w, h); }
+    const title = fig.title == null ? S.info.recording : fig.title; let y = 0; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+    if (title) { ctx.fillStyle = look.titleInk; ctx.font = '600 ' + look.titlePx + 'px ' + family; writeText(ctx, title, u(12), u(6) + look.titlePx * 0.75, look); y = u(6) + look.titlePx * 1.5; }
+    const heat = kind === 'heatmap' ? heatmapData(fig.barMax) : null;
+    const items = heat ? (fig.strip ? heat.callKey.map(([colour, text]) => ({ kind: 'band', colour, text, fixed: true })) : []) : fig.legend !== 'none' ? legendItems(look) : [];
+    if (items.length) {
+      ctx.font = look.px + 'px ' + family; let x = u(12); y += u(12);
+      for (const item of items) {
+        const width = (item.kind === 'note' ? 0 : u(24)) + ctx.measureText(item.text).width + u(16); if (x + width > w - u(8) && x > u(12)) { x = u(12); y += u(18); }
+        const colour = item.fixed ? item.colour : look.swap[item.colour] || item.colour;
+        if (item.kind === 'line') { ctx.fillStyle = colour; ctx.fillRect(x, y - u(1.5), u(18), u(3)); }
+        else if (item.kind === 'band') { ctx.fillStyle = colour; ctx.fillRect(x, y - u(5), u(14), u(10)); ctx.strokeStyle = '#C5CED8'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y - u(5) + 0.5, u(14), u(10)); }
+        ctx.fillStyle = item.kind === 'note' ? item.colour : look.legendInk; writeText(ctx, item.text, x + (item.kind === 'note' ? 0 : u(24)), y, look); x += width;
+      }
+      y += u(14);
+    } else if (title) y += u(4);
+    ctx.translate(0, y); look.background = null;   // the whole figure has its background already
+    if (heat) paintHeatmap(ctx, w, h - y, look, heat, false); else paintTraces(ctx, w, h - y, look);
+    return canvas;
+  }
+  /** The pictures the Export menus and the editor save. "figure" says which figure's settings made them, for the file kept beside. */
+  const plotPicture = () => figureCanvas('plot', Save.dpi).toDataURL('image/png'); plotPicture.figure = 'plot';
+  const heatmapPicture = () => figureCanvas('heatmap', Save.dpi).toDataURL('image/png'); heatmapPicture.figure = 'heatmap';
+  /** What a text box of the editor shows before anything is typed: the figure's own text. */
+  const figureOwnText = (kind, key) => key === 'title' ? S.info.recording : key === 'xTitle' ? 'Time (s)' : key === 'yTitle' ? (kind === 'plot' ? signalName() : 'Cell') : key === 'barTitle' ? 'ΔF/F₀' : '';
+  /** Draws the preview: the saved picture itself, fitted into the stage. Asked for on every change, drawn once per screen refresh. */
+  function previewFigure() {
+    if (!Fig.open || Fig.queued) return; Fig.queued = true;
+    requestAnimationFrame(() => {
+      Fig.queued = false; const kind = Fig.open; if (!kind || !S.results) return;
+      const fig = Fig[kind], stage = $('figure-stage'), shown = $('figure-preview'), wide = Math.round(fig.width * Save.dpi), high = Math.round(fig.height * Save.dpi);
+      const scale = Math.max(0.05, Math.min((stage.clientWidth - 32) / (fig.width * 96), (stage.clientHeight - 32) / (fig.height * 96), 2)), made = figureCanvas(kind, 96 * scale * (window.devicePixelRatio || 1));
+      shown.width = made.width; shown.height = made.height; shown.style.width = Math.round(fig.width * 96 * scale) + 'px'; shown.style.height = Math.round(fig.height * 96 * scale) + 'px';
+      const ctx = shown.getContext('2d'); ctx.clearRect(0, 0, shown.width, shown.height); ctx.drawImage(made, 0, 0);
+      const note = $('figure-pixels'), most = wide * high > FIGURE_MOST; note.classList.toggle('bad', most);
+      note.textContent = wide + ' × ' + high + ' pixels' + (most ? ': too large to save. Choose a smaller size or resolution.' : ' · shown at ' + Math.round(100 * scale) + ' %');
+      $('figure-save').disabled = $('figure-download').disabled = most;
+    });
+  }
+  /** Rows that depend on another: TIFF compression belongs to TIFF. */
+  function figureRows() { const box = $('figure-save-compression'); if (box) box.closest('.row').hidden = Save.format !== 'tiff'; }
+  /** Builds the editor's boxes for the plot or the heatmap from FIGURE_FIELDS and opens it. */
+  function openFigure(kind) {
+    if (!S.results) return; Fig.open = kind; const fig = Fig[kind], holder = $('figure-controls'); holder.replaceChildren();
+    $('figure-name').textContent = kind === 'plot' ? 'Plot figure' : 'Heatmap figure'; $('figure-saved').textContent = '';
+    const changed = () => { store('step4.figure.' + kind, JSON.stringify(figureKept(kind))); previewFigure(); };
+    let section = null;
+    for (const [group, key, label, type, more] of FIGURE_FIELDS[kind]) {
+      const options = more || {}; if (options.when && !options.when()) continue;
+      if (group !== section) { section = group; const head = document.createElement('h3'); head.textContent = group; holder.appendChild(head); }
+      const row = document.createElement('label'), name = document.createElement('span'); row.className = 'row'; name.textContent = label; row.appendChild(name); let box;
+      if (type === 'page') {   // the same list as on the page: choosing here chooses there
+        const source = $(key); box = document.createElement('select'); for (const o of source.options) { const copy = document.createElement('option'); copy.value = o.value; copy.textContent = o.textContent; box.appendChild(copy); }
+        box.value = source.value; box.addEventListener('change', () => { source.value = box.value; source.dispatchEvent(new Event('change', { bubbles: true })); figureRows(); previewFigure(); });
+      } else if (type === 'choice') {
+        box = document.createElement('select'); for (const [value, text] of options.options) { const o = document.createElement('option'); o.value = value; o.textContent = text; box.appendChild(o); }
+        box.value = fig[key]; box.addEventListener('change', () => { fig[key] = box.value; changed(); });
+      } else if (type === 'tick') { box = document.createElement('input'); box.type = 'checkbox'; box.checked = !!fig[key]; box.addEventListener('change', () => { fig[key] = box.checked; changed(); });
+      } else if (type === 'colour') { box = document.createElement('input'); box.type = 'color'; box.value = fig[key]; box.addEventListener('input', () => { fig[key] = box.value; changed(); });
+      } else if (type === 'text') {
+        box = document.createElement('input'); box.type = 'text'; box.maxLength = 80; box.spellcheck = false; box.value = fig[key] == null ? figureOwnText(kind, key) : fig[key];
+        box.addEventListener('input', () => { fig[key] = box.value; changed(); });
+      } else {   // a number: kept as soon as it makes sense; an empty box is "auto" where the figure can choose
+        box = document.createElement('input'); box.type = 'text'; box.inputMode = 'decimal'; box.value = fig[key] == null ? '' : fig[key]; if (FIGURE_DEFAULT[kind][key] === null) box.placeholder = 'auto';
+        box.addEventListener('input', () => { const text = box.value.trim().replace(',', '.'), value = text === '' ? null : Number(text), ok = figureValid(kind, key, value);
+          if (ok) { fig[key] = value; changed(); box.removeAttribute('aria-invalid'); } else box.setAttribute('aria-invalid', 'true'); });
+        box.addEventListener('change', () => { box.value = fig[key] == null ? '' : fig[key]; box.removeAttribute('aria-invalid'); });
+      }
+      box.id = 'figure-' + key;
+      if (options.unit) { const cell = document.createElement('span'), unit = document.createElement('i'); cell.className = 'unit'; unit.textContent = options.unit; cell.append(box, unit); row.appendChild(cell); } else row.appendChild(box);
+      holder.appendChild(row);
+    }
+    figureRows(); figureBehind(true); $('figure-editor').hidden = false; holder.scrollTop = 0; previewFigure(); $('figure-close').focus();
+  }
+  /** While the editor is open the page behind it takes no clicks, keys or focus. */
+  function figureBehind(off) { for (const part of document.body.children) if (part.id !== 'figure-editor' && part.tagName !== 'SCRIPT') part.inert = off; }
+  function closeFigure() { const kind = Fig.open; if (!kind) return; $('figure-editor').hidden = true; Fig.open = null; figureBehind(false); const menu = $(kind === 'plot' ? 'export-plot' : 'export-heatmap'); if (menu) menu.querySelector('summary').focus(); }
+  /** Back to a figure nobody has edited, for this figure only. */
+  function resetFigure() { const kind = Fig.open; if (!kind) return; Fig[kind] = Object.assign({}, FIGURE_DEFAULT[kind]); store('step4.figure.' + kind, null); openFigure(kind); }
   /** A saved picture or frame is as wide as Options says (inches × dpi), up to 4 times its recorded pixels; its shape is the recording's. */
   const pictureScale = () => { const size = inches(), iw = S.info.width || 1; return size ? Math.max(0.25, Math.min(4, size[0] * Save.dpi / iw)) : (Save.dpi >= 600 ? 3 : Save.dpi >= 300 ? 2 : 1); };
-  /** The heatmap at the chosen width and resolution; its shape stays as on screen. */
-  function heatmapPicture() {
-    const canvas = $('heatmap'), size = inches(); S.exportScale = size ? size[0] * Save.dpi / Math.max(1, canvas.clientWidth) : Save.dpi / 96; drawHeatmap();
-    try { return canvas.toDataURL('image/png'); } finally { S.exportScale = null; drawHeatmap(); }
-  }
   const pictureOptions = () => ({ format: Save.format, dpi: Save.dpi, compression: Save.compression });
+  /** How a saved picture was made, for the file kept beside it: a figure's size and every setting of the editor, or the size from Options. */
+  const pictureRecord = (picture) => Object.assign(picture.figure ? { size: Fig[picture.figure].width + 'x' + Fig[picture.figure].height, figure: Object.assign({ kind: picture.figure }, Fig[picture.figure]) } : { size: Save.size }, pictureOptions());
   const viewMetadata = () => ({ schema: 'simpleca.view-export', schema_version: 1, recording: S.info.recording, plugin_version: S.info.pluginVersion, view: S.view, frame: S.frame, outlines: S.outlines });
   /** What the colours of the picture mean in the view on screen, then what the outlines mean. Each: [colour, text, is an outline]. */
   function pictureKey() {
@@ -1541,7 +1727,7 @@
   async function save(picture, kind, noteId) {
     const note = $(noteId); note.className = 'save-note'; note.textContent = 'Preparing…';
     try {
-      const metadata = JSON.stringify(Object.assign(S.results ? exportMetadata() : viewMetadata(), { picture: Object.assign({ size: Save.size }, pictureOptions()) }), null, 2), png = await picture();
+      const metadata = JSON.stringify(Object.assign(S.results ? exportMetadata() : viewMetadata(), { picture: pictureRecord(picture) }), null, 2), png = await picture();
       const reply = await api('convert', Object.assign({ png }, pictureOptions())), name = exportName(kind, reply.extension);
       const bytes = Uint8Array.from(atob(reply.base64), (c) => c.charCodeAt(0));
       download(new Blob([bytes], { type: reply.extension === 'tif' ? 'image/tiff' : 'image/png' }), name);
@@ -1553,7 +1739,7 @@
   async function saveToFolder(picture, kind, noteId, csv) {
     const note = $(noteId); note.className = 'save-note'; note.textContent = 'Saving…';
     try {
-      const metadata = Object.assign(S.results ? exportMetadata() : viewMetadata(), { picture: Object.assign({ size: Save.size }, pictureOptions()) }), name = exportName(kind, 'png').replace(/\.png$/, '');
+      const metadata = Object.assign(S.results ? exportMetadata() : viewMetadata(), { picture: pictureRecord(picture) }), name = exportName(kind, 'png').replace(/\.png$/, '');
       const reply = await api('export', Object.assign({ name, png: await picture(), csv: csv || null, metadata }, pictureOptions()));
       note.textContent = 'Saved ' + reply.saved[0] + (csv ? ' + CSV' : '') + ' ';
       const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open folder';
@@ -1592,7 +1778,8 @@
       now[end] = text !== '' && isFinite(value) ? value : null; Plot.dirty = true; drawPlot();
     });
     $('y-auto').addEventListener('click', () => { delete Plot.y[S.signal]; showY(); Plot.dirty = true; drawPlot(); });
-    const setSignal = (value) => { S.signal = Data.signal = value; $('signal').value = value; $('data-signal').value = value; showY(); Plot.dirty = true; drawPlot(); legend(); if (S.results && !$('panel-data').hidden) showData(); };
+    const setSignal = (value) => { if (value !== S.signal) Fig.plot.yTitle = Fig.plot.yMin = Fig.plot.yMax = Fig.plot.yStep = null;   // typed for the other signal
+      S.signal = Data.signal = value; $('signal').value = value; $('data-signal').value = value; showY(); Plot.dirty = true; drawPlot(); legend(); if (S.results && !$('panel-data').hidden) showData(); };
     $('signal').addEventListener('change', () => setSignal($('signal').value));
     $('save-plot-folder').addEventListener('click', () => saveToFolder(plotPicture, plotKind(), 'plot-saved', plotNumbers()));
     $('save-heatmap-folder').addEventListener('click', () => saveToFolder(heatmapPicture, 'heatmap', 'heatmap-saved'));
@@ -1662,7 +1849,7 @@
       for (const key of Object.keys(saveBoxes)) $(saveBoxes[key]).value = String(Save[key]);
       $('save-compression-label').hidden = Save.format !== 'tiff';
       const size = inches(), wide = S.info ? Math.round(S.info.width * pictureScale()) : 0;
-      $('save-pixels').textContent = (size ? 'Plot ' + Math.round(size[0] * Save.dpi) + ' × ' + Math.round(size[1] * Save.dpi) + ' px.' : 'Plot as on screen, at ' + Save.dpi + ' dpi.') + (wide ? ' Pictures and frames ' + wide + ' px wide' + (size && wide < Math.round(size[0] * Save.dpi) ? ' (4× the recording, the most it allows).' : '.') : '');
+      $('save-pixels').textContent = wide ? 'Pictures and frames ' + wide + ' px wide' + (size && wide < Math.round(size[0] * Save.dpi) ? ' (4× the recording, the most it allows).' : '.') : '';
     };
     for (const key of Object.keys(saveBoxes)) $(saveBoxes[key]).addEventListener('change', () => { Save[key] = key === 'dpi' ? Number($(saveBoxes[key]).value) : $(saveBoxes[key]).value; store('step4.' + key, String(Save[key])); showSaveOptions(); });
     for (const button of document.querySelectorAll('.save-options-toggle')) button.addEventListener('click', (event) => {
@@ -1674,6 +1861,14 @@
       event.stopPropagation();
     });
     document.addEventListener('click', (event) => { const panel = $('save-options'); if (!panel.hidden && !panel.contains(event.target) && !event.target.classList.contains('save-options-toggle')) panel.hidden = true; });
+    // the figure editor, opened from the plot's and the heatmap's Export menu: its preview is the picture that gets saved
+    $('edit-plot').addEventListener('click', () => openFigure('plot')); $('edit-heatmap').addEventListener('click', () => openFigure('heatmap'));
+    $('figure-close').addEventListener('click', closeFigure); $('figure-reset').addEventListener('click', resetFigure);
+    $('figure-save').addEventListener('click', () => Fig.open === 'plot' ? saveToFolder(plotPicture, plotKind(), 'figure-saved', plotNumbers()) : saveToFolder(heatmapPicture, 'heatmap', 'figure-saved'));
+    $('figure-download').addEventListener('click', () => Fig.open === 'plot' ? save(plotPicture, plotKind(), 'figure-saved') : save(heatmapPicture, 'heatmap', 'figure-saved'));
+    $('figure-editor').addEventListener('mousedown', (event) => { if (event.target === $('figure-editor')) closeFigure(); });
+    document.addEventListener('keydown', (event) => { if (Fig.open && event.key === 'Escape') { closeFigure(); event.preventDefault(); event.stopPropagation(); } }, true);   // before the page's own keys
+    window.addEventListener('resize', previewFigure);
     const metricsName = () => exportName($('metrics-table').value === 'summary' ? 'metrics_summary' : 'table_' + $('metrics-table').value, 'csv');
     $('metrics-download').addEventListener('click', () => download(new Blob([csvText(metricRows())], { type: 'text/csv' }), metricsName()));
     $('metrics-save').addEventListener('click', async () => {
@@ -1842,7 +2037,7 @@
       tip(fullName(at.name) + (callOf(at.name) ? ' · ' + callOf(at.name) : '') + (at.inside ? ' · ' + (at.gap ? 'acquisition gap; nearest frame' : finite(v) ? v.toFixed(3) : 'no value') + ' at ' + S.results.time[at.frame].toFixed(1) + ' s' : ''), event.clientX, event.clientY); });
     heatmap.addEventListener('mouseleave', () => tip(''));
 
-    document.addEventListener('keydown', (event) => { const tag = (event.target.tagName || '').toLowerCase(); if (tag === 'input' || tag === 'select' || tag === 'textarea' || $('panel-review').hidden) return;
+    document.addEventListener('keydown', (event) => { const tag = (event.target.tagName || '').toLowerCase(); if (tag === 'input' || tag === 'select' || tag === 'textarea' || $('panel-review').hidden || Fig.open) return;
       if (event.key === 'Escape' && S.cell && !event.defaultPrevented) { chooseCell(null); event.preventDefault(); }
       else if (event.key === 'ArrowLeft') { stepCell(-1); event.preventDefault(); } else if (event.key === 'ArrowRight') { stepCell(1); event.preventDefault(); } else if (event.key === ' ' && S.info && S.info.hasMovie && S.view !== 'picture' && tag !== 'button') { play(!S.timer); event.preventDefault(); } });
     window.addEventListener('resize', redraw);
@@ -1852,5 +2047,5 @@
 
   wire();
   start().catch((problem) => { $('lost').classList.add('on'); $('status').textContent = problem.message; });
-  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, rateText, samplesFor, cellTyped, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, exportMetadata, heatmapAt };   // for the browser test
+  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, FIGURE_DEFAULT, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, exportMetadata, heatmapAt };   // for the browser test
 })();
