@@ -72,8 +72,12 @@
   // ---------------------------------------------------------------- editable draft, applied results, and protocol exchange
   const clone = (v) => JSON.parse(JSON.stringify(v));
   const fmt = (v) => finite(Number(v)) && v !== '' && v !== null ? String(+Number(v).toPrecision(7)) : (v == null ? '' : String(v));
+  /** The frame rate as shown: four significant figures when it has more, so a rate read from the file
+   *  (1.0000537066691941) reads 1.000. The stored value keeps every digit. */
+  const rateText = (value) => { const n = Number(value); if (value == null || value === '' || !finite(n)) return value == null ? '' : String(value);
+    return String(+n.toPrecision(4)) === String(n) ? String(n) : n >= 1000 ? String(+n.toPrecision(4)) : n.toPrecision(4); };
   function exactInput(box, value, scale) {
-    const shown = box.id === 'sampling_hz' ? String(value == null ? '' : value) : scale ? fmt(Number(value) * scale) : fmt(value);
+    const shown = box.id === 'sampling_hz' ? rateText(value) : scale ? fmt(Number(value) * scale) : fmt(value);
     box.value = shown; box.dataset.shown = shown; box._exact = value; box._scale = scale || 1;
     box.title = value == null ? '' : 'Stored value: ' + value + '. Untouched fields keep their full precision.';
   }
@@ -214,7 +218,7 @@
         chip.addEventListener('click', () => { S.unlinked.add(key); cell.dataset.linked = ''; first.focus(); first.select(); });
         back.addEventListener('click', () => { S.unlinked.delete(key); cell.dataset.linked = '1'; applyFrames(index); draftChanged(); });
       };
-      const holder = document.createElement('span'); holder.className = 'with-button'; line('Stimulus added after frame', 'The last frame before the stimulus was added. The rows below follow it.').appendChild(holder);
+      const holder = document.createElement('span'); holder.className = 'with-button'; line('Stimulus after frame', 'The last frame before the stimulus was added. The rows below follow it.').appendChild(holder);
       const stimBox = frames('stim-frame-' + index, 'Stimulus added after frame'); holder.appendChild(stimBox);
       const fromFrame = document.createElement('button'); fromFrame.type = 'button'; fromFrame.className = 'from-frame'; fromFrame.textContent = 'Use frame';
       fromFrame.addEventListener('click', () => { stimBox.value = S.frame; applyFrames(index); draftChanged(); });
@@ -233,9 +237,9 @@
       const details = document.createElement('details'); details.className = 'rule'; const summaryTitle = document.createElement('summary'); summaryTitle.title = 'The response rule. Click to adjust it.';
       const summary = document.createElement('span'); summary.className = 'rule-summary'; summary.id = 'rule-summary-' + index; summaryTitle.appendChild(summary); details.appendChild(summaryTitle);
       add(details, 'Floor_local_fraction', 'Minimum rise (%)', { scale: 100 }); add(details, 'SD_multiplier', 'Baseline SD multiplier');
-      add(details, 'Duration_mode', 'Persistence measured in', { choices: [['seconds', 'Seconds'], ['samples', 'Consecutive samples']] });
+      add(details, 'Duration_mode', 'Duration measured in', { choices: [['seconds', 'Seconds'], ['samples', 'Consecutive samples']] });
       add(details, 'Min_duration_s', 'Minimum duration (s)'); add(details, 'Consecutive_samples', 'Consecutive samples');
-      add(details, 'Min_baseline_samples', 'Minimum baseline samples'); add(details, 'Max_gap_s', 'Maximum gap (s)').placeholder = 'auto';
+      add(details, 'Min_baseline_samples', 'Baseline samples').previousSibling.title = 'The fewest baseline samples a cell needs to be scored'; add(details, 'Max_gap_s', 'Maximum gap (s)').placeholder = 'auto';
       add(details, 'Expected_interval_s', 'Expected interval (s)').placeholder = 'auto'; add(details, 'Noise_floor_local_fraction', 'Noise floor (%)', { scale: 100 });
       add(details, 'Stimulus', 'Name in the output');
       section.appendChild(details); container.appendChild(section); showFrames(index, w);
@@ -504,41 +508,89 @@
     for (const message of new Set(notices)) { const li = document.createElement('li'); li.textContent = message; list.appendChild(li); }
     $('quality-filter').disabled = !affected;
   }
-  /** Mean, SD, SEM and number of cells of every numeric metric: for all cells, by response call, and by how the cells were
-   *  chosen when that was recorded. The summary SimpleCa shows; worked out here from the saved per-cell tables. */
+  /** What each saved metric column is: [column, name, unit, where it is measured or counted from, response].
+   *  response: the column describes the timing or shape of a response, so it is summarised only over cells that responded
+   *  (for a cell that did not respond it is the timing of noise). The order here is the order in the summary. A numeric
+   *  column that is not listed is still shown, under its saved name. */
+  const METRICS = [
+    ['Peak_dFF0', 'Peak', 'ΔF/F₀', 'whole recording'],
+    ['Response_Amplitude', 'Peak above baseline', 'ΔF/F₀', 'whole recording'],
+    ['Peak_increase', 'Peak rise', 'fraction of baseline', 'response window'],
+    ['Window_peak_local_fraction', 'Peak rise', 'fraction of baseline', 'response window'],
+    ['SNR', 'Signal-to-noise', 'peak ÷ baseline SD', 'whole recording'],
+    ['AUC', 'Area under the curve', 'ΔF/F₀ × s', 'whole recording, signed'],
+    ['Window_AUC_fraction_s', 'Area under the curve', 'fraction × s', 'response window, signed'],
+    ['Baseline_SD', 'Baseline SD', 'ΔF/F₀', 'F₀ frames'],
+    ['F0', 'F₀', 'gray levels', 'F₀ frames'],
+    ['Baseline_SD_raw', 'Baseline SD', 'gray levels', 'F₀ frames'],
+    ['Onset_s', 'Onset time', 's', 'from recording start', true],
+    ['Run_start_s', 'Onset time', 's', 'from recording start', true],
+    ['Response_latency_s', 'Latency', 's', 'from the stimulus', true],
+    ['Confirmation_s', 'Response confirmed', 's', 'from recording start', true],
+    ['Run_end_s', 'Response end', 's', 'from recording start', true],
+    ['Run_duration_s', 'Response duration', 's', 'above the threshold', true],
+    ['Time_to_Peak', 'Peak time', 's', 'from recording start', true],
+    ['Peak_latency_s', 'Peak latency', 's', 'from the stimulus', true],
+    ['Time_to_25_Peak', '25 % of peak reached', 's', 'from recording start', true],
+    ['Time_to_50_Peak', '50 % of peak reached', 's', 'from recording start', true],
+    ['Time_to_75_Peak', '75 % of peak reached', 's', 'from recording start', true],
+    ['Rise_Time', 'Rise time', 's', '10 % to 90 % of peak', true],
+    ['Rise_Rate_10_90_dFF0_per_s', 'Rise rate', 'ΔF/F₀ per s', '10 % to 90 % of peak', true],
+    ['FWHM', 'FWHM', 's', 'width at half of peak', true],
+    ['FWHM_Lower_Bound', 'FWHM, lower bound', 's', 'still above half at the end', true],
+    ['Half_Width', 'Half-width', 's', 'FWHM ÷ 2', true],
+  ];
+  const METRIC = new Map(METRICS.map((m, order) => [m[0], { name: m[1], unit: m[2], measured: m[3], response: !!m[4], order }]));
+  /** Columns that say how the analysis was set up or how much of a window had data, not what a cell did: left out of the summary. */
+  const NOT_METRICS = new Set(['Reference_value', 'Baseline_SD_input', 'Baseline_samples', 'Normalization_minimum_reference', 'Baseline_start_s', 'Baseline_end_s', 'Stimulus_onset_s', 'Start_s', 'End_s', 'Window_AUC_start_s', 'Window_AUC_end_s', 'Window_AUC_covered_s', 'Window_AUC_coverage_fraction', 'Run_samples', 'Eligible']);
+  /** Mean, SD, SEM and number of cells of every metric: for all cells, by response call, and by how the cells were chosen
+   *  when that was recorded. Worked out here from the saved per-cell tables, which are not changed.
+   *  - Each metric is one row. Saved columns that hold the same number for every cell in this analysis (which ones do
+   *    depends on the settings) share a row, and "Saved as" names them all.
+   *  - The timing and shape of a response are summarised over the cells that responded. */
   function metricSummary() {
     const r = S.results, tags = r.chosenBlind || null, primary = (r.windows || []).find((w) => w.role === 'Stimulus') || (r.windows || [])[0];
     const called = (primary && r.callsByWindow && r.callsByWindow[primary.key]) || r.calls || {}, status = (n) => (called[n] || {}).Status;
     const groups = [['All cells', () => true], ['Responded', (n) => status(n) === 'Responded'], ['Did not respond', (n) => status(n) === 'Did not respond']];
     if (tags) groups.push(['Chosen blind', (n) => tags[n] === true], ['Added after the response', (n) => tags[n] === false]);
-    const skip = new Set(['Reference_value', 'Baseline_SD_input', 'Baseline_samples', 'Normalization_minimum_reference', 'Baseline_start_s', 'Baseline_end_s', 'Stimulus_onset_s', 'Start_s', 'End_s', 'Window_AUC_start_s', 'Window_AUC_end_s', 'Run_samples', 'Eligible']);
-    const long = [['Metric', 'Group', 'Mean', 'SD', 'SEM', 'N_cells']], wide = [];
+    // every numeric column of the two per-cell tables, as cell -> number
+    const columns = [];
     for (const key of ['metrics', 'windowMetrics']) {
       const data = r.tables[key]; if (!data || !data.rows.length) continue;
       const cell = data.header.indexOf('Cell'), role = data.header.indexOf('Role'); if (cell < 0) continue;
       const rows = data.rows.filter((row) => role < 0 || row[role] === 'Stimulus');
       data.header.forEach((name, c) => {
-        if (c === cell || skip.has(name)) return;
-        const values = rows.map((row) => [row[cell], row[c]]).filter((pair) => pair[1] !== '' && pair[1] != null && pair[1] !== 'NA');
-        if (!values.length || !values.every((pair) => isFinite(Number(pair[1])))) return;
-        const label = name + (key === 'windowMetrics' ? ' (response window)' : ''), line = [label];
-        for (const [group, belongs] of groups) {
-          const xs = values.filter((pair) => belongs(pair[0])).map((pair) => Number(pair[1])), k = xs.length;
-          const mean = k ? xs.reduce((a, b) => a + b, 0) / k : NaN, sd = k > 1 ? Math.sqrt(xs.reduce((a, b) => a + (b - mean) * (b - mean), 0) / (k - 1)) : NaN, sem = k > 1 ? sd / Math.sqrt(k) : NaN;
-          long.push([label, group, k ? mean : '', k > 1 ? sd : '', k > 1 ? sem : '', k]);
-          line.push(k ? (+mean.toPrecision(4)) + (k > 1 ? ' ± ' + (+sem.toPrecision(3)) : '') + '  (n = ' + k + ')' : '–');
-        }
-        wide.push(line);
+        if (c === cell || NOT_METRICS.has(name)) return;
+        const pairs = rows.map((row) => [row[cell], row[c]]).filter((pair) => pair[1] !== '' && pair[1] != null && pair[1] !== 'NA');
+        if (!pairs.length || !pairs.every((pair) => isFinite(Number(pair[1])))) return;
+        const known = METRIC.get(name) || { name, unit: '', measured: key === 'windowMetrics' ? 'response window' : '', response: false, order: METRICS.length + columns.length };
+        columns.push({ saved: [name], values: new Map(pairs.map((pair) => [pair[0], Number(pair[1])])), ...known });
       });
     }
-    return { wide: { header: ['Metric'].concat(groups.map((g) => g[0] + ': mean ± SEM (n)')), rows: wide }, long };
+    columns.sort((a, b) => a.order - b.order);
+    // columns with the same number for every cell become one metric
+    const same = (a, b) => { if (a.values.size !== b.values.size) return false; for (const [cell, x] of a.values) { const y = b.values.get(cell); if (y === undefined || Math.abs(x - y) > 1e-9 * Math.max(1, Math.abs(x), Math.abs(y))) return false; } return true; };
+    const metrics = [];
+    for (const column of columns) { const twin = metrics.find((m) => same(m, column)); if (twin) twin.saved.push(column.saved[0]); else metrics.push(column); }
+    const long = [['Metric', 'Unit', 'Measured', 'Saved_as', 'Group', 'Mean', 'SD', 'SEM', 'N_cells']], wide = [];
+    for (const m of metrics) {
+      const line = [m.name, m.unit, m.measured];
+      for (const [group, belongs] of groups) {
+        const xs = []; for (const [cell, x] of m.values) if (belongs(cell) && (!m.response || status(cell) === 'Responded')) xs.push(x);
+        const k = xs.length, mean = k ? xs.reduce((a, b) => a + b, 0) / k : NaN, sd = k > 1 ? Math.sqrt(xs.reduce((a, b) => a + (b - mean) * (b - mean), 0) / (k - 1)) : NaN, sem = k > 1 ? sd / Math.sqrt(k) : NaN;
+        long.push([m.name, m.unit, m.measured, m.saved.join('; '), group, k ? mean : '', k > 1 ? sd : '', k > 1 ? sem : '', k]);
+        line.push(k ? (+mean.toPrecision(4)) + (k > 1 ? ' ± ' + (+sem.toPrecision(3)) : '') + '  (n = ' + k + ')' : '–');
+      }
+      line.push(m.saved.join(', ')); wide.push(line);
+    }
+    return { wide: { header: ['Metric', 'Unit', 'Measured'].concat(groups.map((g) => g[0]), ['Saved as']), rows: wide, computed: true }, long };
   }
   const csvText = (rows) => rows.map((row) => row.map((v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(',')).join('\n') + '\n';
   /** The table on the Metrics tab as CSV rows: the summary in long form (one row per metric and group), any other table as saved. */
   function metricRows() { const key = $('metrics-table').value; if (key === 'summary') return metricSummary().long; const data = S.results.tables[key] || { header: [], rows: [] }; return [data.header].concat(data.rows); }
   function showMetricTable() {
     const key = $('metrics-table').value;
-    if (key === 'summary') { $('metric-help').textContent = 'Mean ± SEM (n) of each metric. The saved file also has the SD.'; table('table-metrics', metricSummary().wide); return; }
+    if (key === 'summary') { $('metric-help').textContent = 'Mean ± SEM (n). Onset, latency, peak time, rise and width are given for cells that responded. Saved columns with the same numbers share a row. The saved file also has the SD.'; table('table-metrics', metricSummary().wide); return; }
     $('metric-help').textContent = key === 'metrics' ? 'Legacy metrics: AUC is the signed net integral over the whole recording; negative drift can make it negative. Peak time is a recording timestamp. Rise time is the 10–90% crossing interval after the display baseline and can be noise-sensitive. For stimulus-specific values, choose Response-window metrics (including Peak_latency_s and Window_AUC_fraction_s).' : key === 'windowMetrics' ? 'Response-window metrics use the baseline before the stimulus. Peak_latency_s is measured from the stimulus (the first frame after it), to the nearest frame; Window_AUC_fraction_s covers the response window.' : '';
     table('table-metrics', S.results.tables[key]);
   }
@@ -629,8 +681,9 @@
     { const d = collectDraft(), hz = Number(d.values.sampling_hz), first = d.protocol.windows[0], used = first ? windowFrames(expandWindow(first, d.protocol.schema_version === 1), editedTimes()) : null, st = used && used.stimulus;
       $('confirm-text').textContent = 'Timing checked' + (d.timestamps || (isFinite(hz) && hz > 0) ? ': ' + (d.timestamps ? 'recorded timestamps' : fmt(+hz.toPrecision(4)) + (fmt(+hz.toPrecision(4)) === '1' ? ' frame/s' : ' frames/s')) + (st ? ', stimulus ' + (st.before >= 1 && st.before < used.n ? 'after frame ' + st.before : 'outside the recording') : '') : '');
       // the recording's own frame rate, when a different one is typed
-      const own = Number(S.info.recordedHz), note = $('rate-note'), differs = !d.timestamps && isFinite(own) && own > 0 && isFinite(hz) && hz > 0 && Math.abs(hz - own) > 1e-9 * own, text = differs ? 'The file says ' + fmt(+own.toPrecision(6)) + ' (' + fmt(+(1 / own).toPrecision(6)) + ' s per frame). ' : '';
-      if (note.dataset.shown !== text) { note.dataset.shown = text; note.hidden = !differs; note.replaceChildren(text);
+      const own = Number(S.info.recordedHz), note = $('rate-note'), known = !d.timestamps && isFinite(own) && own > 0 && isFinite(hz) && hz > 0, differs = known && Math.abs(hz - own) > 1e-9 * own;
+      const text = differs ? 'The file says ' + fmt(+own.toPrecision(6)) + ' (' + fmt(+(1 / own).toPrecision(6)) + ' s per frame). ' : known ? 'From the file' + (rateText(own) === String(own) ? '.' : ': ' + fmt(+own.toPrecision(8)) + '.') : '';
+      if (note.dataset.shown !== text) { note.dataset.shown = text; note.hidden = !text; note.replaceChildren(text);
         if (differs) { const use = document.createElement('button'); use.type = 'button'; use.className = 'ghost repair'; use.textContent = 'Use it'; use.addEventListener('click', () => { exactInput($('sampling_hz'), S.info.recordedHz); applyAllFrames(); draftChanged(); }); note.appendChild(use); } } }
     $('open-folder').disabled = !state.folder; $('open-folder').hidden = !state.folder; $('open-folder').title = state.folder ? 'Open ' + String(state.folder).split(/[\\/]/).pop() : '';
     const pending = hasPending(), notice = $('applied-note'); notice.hidden = !S.results || !pending; notice.classList.toggle('pending', pending);
@@ -1286,7 +1339,9 @@
     columns = [...columns.filter((c) => c.name === 'Cell'), ...columns.filter((c) => c.name !== 'Cell')];
     // the recording's name, the role and the stimulus repeat on every row of a one-window run: leave them out so the numbers fit
     if (data.rows.length > 1) columns = columns.filter((c) => !['Field', 'Role', 'Stimulus'].includes(c.name) || new Set(data.rows.map((row) => row[c.index])).size > 1);
-    const labels = { Time_to_Peak: 'Peak timestamp from recording start (s)', AUC: 'Whole-recording signed AUC', Rise_Time: 'Legacy 10–90% rise time (s)' };
+    // a saved table keeps its saved column names; pointing at one says what the column is
+    const frozen = (name) => name === 'Cell' || (!!data.computed && name === data.header[0]);
+    const about = (name) => { const m = METRIC.get(name); return data.computed ? '' : (m ? m.name + (m.unit ? ' (' + m.unit + ')' : '') + (m.measured ? ', ' + m.measured : '') + '. ' : '') + 'Saved column: ' + name; };
     const cellColumn = data.header.indexOf('Cell'), numeric = data.header.map((_, c) => data.rows.some((row) => row[c] !== '' && row[c] !== undefined) && data.rows.every((row) => row[c] === '' || row[c] === undefined || isFinite(Number(row[c]))));
     const head = element.createTHead().insertRow(), body = element.createTBody(); let sorted = -1, direction = 1;
     const fill = (rows) => { body.innerHTML = '';
@@ -1295,11 +1350,11 @@
         for (const { name, index: c } of columns) { const value = row[c] == null ? '' : row[c], td = tr.insertCell();
           if (numeric[c] && value !== '') { const v = Number(value); td.className = 'num'; td.textContent = Number.isInteger(v) ? String(v) : String(+v.toPrecision(4)); td.title = value; }
           else if (name === 'Cell') { td.textContent = shortName(value); td.title = value; } else td.textContent = value;
-          if (name === 'Cell') td.classList.add('cell-column');
+          if (frozen(name)) td.classList.add('cell-column');
         }
       }
     };
-    columns.forEach(({ name, index: c }) => { const th = document.createElement('th'); th.textContent = labels[name] || name; th.title = 'Saved column: ' + name; if (name === 'Cell') th.classList.add('cell-column'); head.appendChild(th);
+    columns.forEach(({ name, index: c }) => { const th = document.createElement('th'); th.textContent = name; th.title = about(name); if (frozen(name)) th.classList.add('cell-column'); head.appendChild(th);
       th.addEventListener('click', () => { direction = sorted === c ? -direction : 1; sorted = c; for (const other of head.children) other.classList.remove('up', 'down'); th.classList.add(direction > 0 ? 'up' : 'down');
         fill(data.rows.slice().sort((a, b) => direction * (numeric[c] ? (Number(a[c] === '' ? NaN : a[c]) || 0) - (Number(b[c] === '' ? NaN : b[c]) || 0) : String(a[c]).localeCompare(String(b[c]))))); }); });
     body.addEventListener('click', (event) => { const tr = event.target.closest('tr'); if (tr && tr.dataset.cell) chooseCell(tr.dataset.cell); });
@@ -1708,7 +1763,7 @@
     plot.addEventListener('pointerleave', () => { tip(''); if (Plot.hover) { Plot.hover = null; drawPlot(); } });
     plot.addEventListener('pointerdown', (event) => { const at = traceAt(event); if (!at) return; event.preventDefault(); if (at.name && at.name !== S.cell) chooseCell(at.name); Plot.scrubbing = true; plot.setPointerCapture(event.pointerId); seek(at.time); });
     for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) plot.addEventListener(type, () => { Plot.scrubbing = false; });
-    plot.addEventListener('wheel', (event) => { const g = Plot.geom; if (!g) return; event.preventDefault(); const box = plot.getBoundingClientRect(), share01 = Math.max(0, Math.min(1, (event.clientX - box.left - g.L) / g.W));
+    plot.addEventListener('wheel', (event) => { const g = Plot.geom; if (!g || !(event.ctrlKey || event.metaKey)) return; event.preventDefault(); const box = plot.getBoundingClientRect(), share01 = Math.max(0, Math.min(1, (event.clientX - box.left - g.L) / g.W));
       const centre = g.x0 + share01 * (g.x1 - g.x0), factor = Math.pow(1.0015, event.deltaY), span = Math.min(g.full1 - g.full0, Math.max((g.full1 - g.full0) / 60, (g.x1 - g.x0) * factor));
       let a = centre - share01 * span, b = a + span; if (a < g.full0) { b += g.full0 - a; a = g.full0; } if (b > g.full1) { a -= b - g.full1; b = g.full1; }
       Plot.x0 = Math.max(g.full0, a); Plot.x1 = Math.min(g.full1, b); if (Plot.x1 - Plot.x0 >= g.full1 - g.full0 - 1e-9) Plot.x0 = Plot.x1 = null; Plot.dirty = true; drawPlot(); }, { passive: false });
@@ -1730,5 +1785,5 @@
 
   wire();
   start().catch((problem) => { $('lost').classList.add('on'); $('status').textContent = problem.message; });
-  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, exportMetadata, heatmapAt };   // for the browser test
+  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, rateText, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, exportMetadata, heatmapAt };   // for the browser test
 })();
