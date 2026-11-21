@@ -43,4 +43,28 @@ float[] all = View.mean(stack, 1, 15), settled = View.mean(stack, 1, 15, (1..9) 
 float[] rest = View.mean(stack, 10, 15)
 assert (0..<settled.length).every { Math.abs(settled[it] - rest[it]) < 1e-3f } && (0..<all.length).any { Math.abs(all[it] - rest[it]) > 50f }
 assert (0..<none.length).every { Math.abs(none[it] - View.mean(stack, 1, 3)[it]) < 1e-3f } : 'with every frame moved, the frames are used as they are'
-println 'PASS: movement check (shifts between steps, moved and slightly-off runs, counted from the frames the cells are chosen on, smeared reference, sentences) and a resting picture without moved frames'
+
+// The blind window the plugin offers: before the response, not before the stimulus.
+def Steps = loader.loadClass('CalciumSteps')
+def offer = { Map set -> def s = Steps.newInstance(); s.n = 300; s.found = false; set.each { k, v -> s[k] = v }; [window: s.proposedBlindWindow() as List, why: s.blindWindowWhy, movement: s.riseIsMovement()] }
+def flat = { int frames -> new double[frames][2] }
+assert Steps.BLIND_MARGIN == 25 && Steps.BLIND_CEILING == 60
+def rising = offer(found: true, onset: 122, b1: 113, motionShifts: flat(300))
+assert rising.window == [1, 97] && rising.why.contains('rise near frame 122') && rising.why.contains('25 frames before') && !rising.movement
+def silent = offer(found: false, motionShifts: flat(300))
+assert silent.window == [1, 60] && silent.why.startsWith('No response was found.') && silent.why.contains('up to frame 60') && !silent.why.contains('nothing responds')
+assert offer(found: false, n: 40, motionShifts: flat(40)).window == [1, 40] : 'a short recording: all of it'
+assert offer(found: false, motionShifts: null).window == [1, 60] : 'no movement check: still the first 60'
+def early = offer(found: true, onset: 22, b1: 13, motionShifts: flat(300))
+assert early.window == [1, 13] && early.why.contains('few frames before the response') : early
+// a rise that leaves fewer than 20 frames at the full margin keeps 20 frames, as long as 9 frames remain before the rise
+def middling = offer(found: true, onset: 35, b1: 26, motionShifts: flat(300))
+assert middling.window == [1, 20] && middling.why.contains('few frames before the response') : middling
+assert offer(found: true, onset: 45, b1: 36, motionShifts: flat(300)).window == [1, 20] && offer(found: true, onset: 46, b1: 37, motionShifts: flat(300)).window == [1, 21]
+// the field moves during frames 1-6 and settles by frame 12; the "rise" near frame 6 is that movement
+double[][] jolt = flat(300); (0..<6).each { jolt[it][1] = -18d }; (6..<12).each { jolt[it][1] = -6d }
+def moved = offer(found: true, onset: 6, b1: 3, motionShifts: jolt)
+assert moved.movement && moved.window == [13, 60] && moved.why.contains('where the field moved, so no response was found') && moved.why.endsWith('Frames 1-12 are left out: the field moved in them.') : moved
+def movedThenRise = offer(found: true, onset: 122, b1: 113, motionShifts: jolt)
+assert !movedThenRise.movement && movedThenRise.window == [13, 97] : movedThenRise
+println 'PASS: movement check (shifts between steps, moved and slightly-off runs, counted from the frames the cells are chosen on, smeared reference, sentences), a resting picture without moved frames, and the blind window offered (before the response, frame 60 when none, moved frames left out)'

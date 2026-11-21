@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026.11.20.18
+
+- **Blind selection uses the frames before the response, and the plugin offers them.** Until now it asked for "the last frame before the stimulus" and offered frame 20 when it found no response. Twenty frames are too few to see faint cells: on one recording the two blind pictures outlined 70 % of the audited cells on frames 1–20 and 79 % on frames 1–50, and the cells gained responded as often as the ones found before. The window offered now:
+  - with a response found: up to 25 frames before the rise (it was 9). The rise the plugin finds is the field's; on P3 Run2, C2 Run1 and P2 Run1 the first cells start their main rise 9 to 15 frames before it;
+  - with no response found: up to frame 60;
+  - without the frames at the start in which the field moved or was still settling. A "rise" that is only the field moving counts as no response.
+  You confirm or change the frames as before. They need not end where the stimulus was added; Step 4 asks for that separately.
+- Wording follows: **Before the response only (blind)** on the first screen, **Before response (blind)…** in Step 2, "Frames before the response" in the dialog. The saved record reads `Before the response, blind (frames a-b)` (it was `Pre-stimulus, blind (frames a-b)`).
+- Step 4 page: the frames the cells were chosen on are shown as "Cells chosen in Fiji on frames a–b, before the response." The page no longer warns that they run past the stimulus, and the starting stimulus frame taken from them is called a placeholder.
+- Offered on the 18 Nov recordings: P3 Run2 1–97, C2 Run1 1–58, P2 Run1 1–54, C3 Run2 1–60, P2 Run2 capsaicin 1–60, C1 Run3 KCl 13–60 (frames 1–12 moved; the rise near frame 6 is that movement).
+- Checked against the audited cells with margins of 15, 20 and 25 frames. Cells covered by the two blind pictures with the frames now offered: P3 Run2 66 %, C2 Run1 67 %, P2 Run1 56 %, C3 Run2 80 %, P2 Run2 capsaicin 95 %, C1 Run3 KCl 69 %. On frames 1–20 they were 42 % (P2 Run1), 70 % (C3 Run2), 77 % (P2 Run2 capsaicin) and 66 % (C1 Run3 KCl); with frames set by hand up to 9 before the rise, 68 %, 68 % and 59 % on the first three. The share of found cells with a clear rise is the same at every margin. No cell starts its main rise inside the frames: the first does so 10 to 16 frames after them (with a 15-frame margin it was 1 frame on P2 Run1, with 20 it was 5). Not changed by any of this: cells that are missed still respond more often than cells that are found (P3 Run2 71 % against 56 %), and longer windows give more suggestions that are not cells.
+- The frames end before the main response, not before every response: a few cells respond briefly earlier (1 to 4 audited cells per recording at frames 22–60). The dialog says so; end the frames earlier to leave those out.
+- Step 4 page: a movie frame that cannot load is no longer asked for again without pause (it was requested hundreds of times a second until the slider moved). It is left alone for 2 seconds; moving the slider or pressing Play asks again at once.
+
 ## 2026.11.20.17
 
 - **Movement is measured against the frames the cells are chosen on.** Build .16 compared every frame with where the field sits for most of the recording, so on a recording that drifts slowly it called the first hundred frames "moved", although those are the frames the outlines were drawn on. While cells are chosen blind, the message now reads, for example, "The field sits about 4 px from where the cells are chosen (frames 1–20) from frame 139 on."

@@ -26,7 +26,7 @@ const assert = require('assert/strict');
     const waitFrame = (frame) => page.waitForFunction((wanted) => {
       const app = window.calciumStep4;
       return app.S.frame === wanted && app.Pic.shownFrame === wanted && !app.Pic.loading && document.getElementById('movie-message').hidden;
-    }, frame);
+    }, frame, { polling: 100 });
     const slider = async (frame) => {
       await page.locator('#time').evaluate((element, wanted) => {
         element.value = wanted; element.dispatchEvent(new Event('input', { bubbles: true }));
@@ -96,7 +96,7 @@ const assert = require('assert/strict');
     assert.equal(await page.inputValue('#stim-frame-0'), '6');
     assert.equal(await editor0.locator('.derived[data-linked="1"]').count(), 0, 'a loaded protocol with windows of its own opens with those rows set separately');
     assert.deepEqual([await page.inputValue('#base-from-0'), await page.inputValue('#base-to-0'), await page.inputValue('#resp-from-0'), await page.inputValue('#resp-to-0')], ['2', '6', '7', '15']);
-    assert.match(await text('#suggestion-0'), /From the frames used in Fiji\. Set it to when the stimulus was added/);
+    assert.match(await text('#suggestion-0'), /A placeholder from the frames used in Fiji\. Set it to when the stimulus was added/);
     for (const cell of ['#f0-cell', '#base-cell-0', '#resp-cell-0']) await page.locator(cell + ' .relink').click();
     assert.equal(await editor0.locator('.derived[data-linked="1"]').count(), 3);
     let edited = await window0();
@@ -239,10 +239,16 @@ const assert = require('assert/strict');
     await page.evaluate(() => window.calciumStep4.resetFrames());
     const failedFrame = '**/api/frame?f=9&mode=raw&*'; injectedFrameFailure = true;
     await page.route(failedFrame, (route) => route.fulfill({ status: 503, body: 'Synthetic unavailable frame' }));
+    let askedForFailedFrame = 0; const countFailedFrame = (request) => { if (/\/api\/frame\?f=9&mode=raw&/.test(request.url())) askedForFailedFrame++; };
+    page.on('request', countFailedFrame);
     await page.locator('#time').evaluate((element) => { element.value = 9; element.dispatchEvent(new Event('input')); });
-    await page.waitForFunction(() => /could not load/.test(document.getElementById('movie-message').textContent));
+    await page.waitForFunction(() => /could not load/.test(document.getElementById('movie-message').textContent), null, { polling: 100 });
     assert.equal(await page.evaluate(() => window.calciumStep4.S.timer), null);
     assert.match(await text('#picture-note'), /Last displayed frame: 20/);
+    await page.waitForTimeout(400); page.off('request', countFailedFrame);
+    assert.equal(askedForFailedFrame, 1, 'a frame that cannot load is not asked for again and again');
+    // nothing is on its way when the route is removed: a request caught at that moment is never answered
+    await page.waitForFunction(() => window.calciumStep4.Buf.inflight.size === 0, null, { polling: 100 });
     await page.unroute(failedFrame); await slider(10); injectedFrameFailure = false;
     assert.equal(await page.evaluate(() => window.calciumStep4.Pic.error), null);
 
@@ -477,7 +483,7 @@ const assert = require('assert/strict');
     if (page) {
       // what the movie was doing, read before the screenshot (a full-page screenshot resizes the page and reloads the frame)
       const movie = await page.evaluate(() => { const app = window.calciumStep4; return !app ? 'page not loaded' : JSON.stringify({ frame: app.S.frame, shown: app.Pic.shownFrame, error: app.Pic.error,
-        message: document.getElementById('movie-message').textContent, note: document.getElementById('picture-note').textContent, buffer: app.Buf && { version: app.Buf.version, failed: Array.from(app.Buf.failed.keys()), inflight: Array.from(app.Buf.inflight.keys()), decoding: Array.from(app.Buf.decoding.keys()) },
+        message: document.getElementById('movie-message').textContent, messageHidden: document.getElementById('movie-message').hidden, visibility: document.visibilityState, note: document.getElementById('picture-note').textContent, buffer: app.Buf && { version: app.Buf.version, failed: Array.from(app.Buf.failed.keys()), inflight: Array.from(app.Buf.inflight.keys()), decoding: Array.from(app.Buf.decoding.keys()) },
         serverVersion: app.S.state && app.S.state.frameVersion }); }).catch((problem) => 'unreadable: ' + problem.message);
       console.error('Movie state at failure: ' + movie);
       await page.screenshot({ path: path.join(out, 'page-failure.png'), fullPage: true }).catch(() => {});

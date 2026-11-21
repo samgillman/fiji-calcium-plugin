@@ -199,7 +199,7 @@ def blindTask = Task.newInstance(progress: { p,s,d -> events << [p,s,d] })
 def blindMessage = suggest(blindTask)
 assert blindMessage.startsWith('5 suggestions from two pictures; Cellpose took ') && blindTask.succeeded && proposals.size() == 5 : blindMessage
 assert blindMessage ==~ /5 suggestions from two pictures; Cellpose took \d+ s and \d+ s \(CPU\)/ : 'a short line for the window: ' + blindMessage
-assert blindTask.snapshot().context.contains('Two pictures of the frames before the stimulus (0-2 and 0-8 gray levels)')
+assert blindTask.snapshot().context.contains('Two pictures of the frames before the response (0-2 and 0-8 gray levels)')
 assert proposals.collect { it.picture } == ['0 to 2', '0 to 2', '0 to 2', '0 to 8', '0 to 8'] && proposals.every { it.blind }
 assert proposals.collect { [it.roi.bounds.x, it.roi.bounds.y] } == [[10,10], [20,10], [30,10], [24,24], [60,60]]
 assert blindGraded == [null] * 5 : 'blind suggestions are graded the blind way'
@@ -228,7 +228,7 @@ picDirs.each { new File(it, 'fail-all').text = '' }
 def blindReuse = Task.newInstance(progress: { p,s,d -> })
 def reusedMessage = suggest(blindReuse)
 assert reusedMessage == '5 suggestions from two pictures; the outlines made earlier for this recording were used again' && blindReuse.succeeded : reusedMessage
-assert blindReuse.snapshot().context.contains('Two pictures of the frames before the stimulus') && blindReuse.snapshot().context.contains('Saved outlines reused')
+assert blindReuse.snapshot().context.contains('Two pictures of the frames before the response') && blindReuse.snapshot().context.contains('Saved outlines reused')
 new File(picDirs[0], 'fail-all').delete()
 binding.setVariable('forceFresh', true)
 def shownBeforeFailure = proposals.collect { it }

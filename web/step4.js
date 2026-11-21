@@ -226,7 +226,7 @@
       }
       derived('Baseline', 'The frames before the stimulus that set the noise level a response must exceed', 'base-cell-' + index, 'base-cell-' + index, frames('base-from-' + index, 'First baseline frame'), frames('base-to-' + index, 'Last baseline frame'));
       derived('Response window', 'The frames in which a response is looked for', 'resp-cell-' + index, 'resp-cell-' + index, frames('resp-from-' + index, 'First frame of the response window'), frames('resp-to-' + index, 'Last frame of the response window'));
-      if (index === 0 && S.info && S.info.fijiFrames) { const chosen = document.createElement('p'); chosen.className = 'fine fiji-frames'; chosen.id = 'fiji-frames'; chosen.textContent = 'Cells chosen in Fiji on frames ' + S.info.fijiFrames.first + '–' + S.info.fijiFrames.last + '.'; section.appendChild(chosen); }
+      if (index === 0 && S.info && S.info.fijiFrames) { const chosen = document.createElement('p'); chosen.className = 'fine fiji-frames'; chosen.id = 'fiji-frames'; chosen.textContent = 'Cells chosen in Fiji on frames ' + S.info.fijiFrames.first + '–' + S.info.fijiFrames.last + ', before the response.'; chosen.title = 'Blind selection uses the frames before any cell responds. They need not end where the stimulus was added.'; section.appendChild(chosen); }
       // the same timing in seconds, exactly as the engine gets it: filled from the frames, not shown
       const exact = document.createElement('div'); exact.hidden = true; exact.className = 'exact'; for (const key of TIME_KEYS) add(exact, key, key); section.appendChild(exact);
       const preview = document.createElement('p'); preview.className = 'frames-preview'; preview.id = 'frames-preview-' + index; section.appendChild(preview);
@@ -267,7 +267,7 @@
       // where the starting stimulus frame came from, until it is changed
       const note = $('suggestion-' + i), first = S.initialDraft && S.initialDraft.protocol.windows[i], from = S.info && S.info.stimulusFrom;
       const untouched = i === '0' && !S.results && !!first && typeof row.Stimulus_onset_s === 'number' && Number(first.Stimulus_onset_s) === row.Stimulus_onset_s;
-      const words = !untouched ? '' : from === 'last-session' ? 'From your last session on this recording.' : from === 'last-recording' ? 'Same as your last recording.' : from === 'fiji' ? 'From the frames used in Fiji. Set it to when the stimulus was added.' : 'A suggestion, not a measured time.';
+      const words = !untouched ? '' : from === 'last-session' ? 'From your last session on this recording.' : from === 'last-recording' ? 'Same as your last recording.' : from === 'fiji' ? 'A placeholder from the frames used in Fiji. Set it to when the stimulus was added.' : 'A suggestion, not a measured time.';
       if (note.dataset.shown !== words) {
         note.dataset.shown = words; note.hidden = !words; note.replaceChildren(words);
         if (words && from === 'last-session' && S.info.fijiDraft) { const use = document.createElement('button'); use.type = 'button'; use.className = 'ghost small repair'; use.textContent = 'Use Fiji’s values';
@@ -383,8 +383,7 @@
           const f0 = [Number(value.baseline_start), Number(value.baseline_end)], chosen = S.info.fijiFrames;
           if (Number.isInteger(f0[0]) && Number.isInteger(f0[1]) && f0[1] >= f0[0] && f0[1] > N)
             warn((Math.max(f0[0], N + 1) === f0[1] ? 'F₀ frame ' + f0[1] + ' comes' : 'F₀ frames ' + Math.max(f0[0], N + 1) + '–' + f0[1] + ' come') + ' after the stimulus.', { text: 'Use ' + rule[0] + '–' + rule[1], run: relink('f0-cell') });
-          if (chosen && chosen.last > N)
-            warn('Cells were chosen on frames ' + chosen.first + '–' + chosen.last + '. Frames ' + Math.max(chosen.first, N + 1) + '–' + chosen.last + ' are after the stimulus, so these cells were not chosen blind to it.');
+
         }
       }
       for (const key of ['Floor_local_fraction', 'SD_multiplier', 'Noise_floor_local_fraction']) if (numeric(row[key]) && Number(row[key]) < 0) add(prefix + key, label + 'thresholds cannot be negative.');
@@ -831,6 +830,8 @@
     Buf.decoding.set(key, job); return job.promise;
   }
   /** Keeps the buffer filled: the frame on screen first, then about 3 s of playback ahead (a few frames when paused). */
+  // A frame that just failed is left alone for 2 s, the one on screen included: every finished request calls this again, so without the wait a
+  // frame that cannot load would be asked for without pause. Moving the slider or pressing Play asks for it again at once.
   function pumpFrames() {
     if (!S.info || !S.info.hasMovie || still()) return;
     const mode = S.view, w = frameWidth(), speed = Number($('speed').value), wanted = [S.frame];
@@ -839,7 +840,7 @@
     if (!S.timer && S.frame > 1) wanted.push(S.frame - 1);
     wanted.forEach((f, i) => {
       const key = frameKey(f, mode), stored = Buf.blobs.get(key), failed = Buf.failed.get(key);
-      if ((!stored || stored.w < w) && Buf.inflight.size < PARALLEL && !Buf.inflight.has(key) && !(f !== S.frame && failed && performance.now() - failed < 2000)) fetchFrame(f, mode, w).catch(() => {});
+      if ((!stored || stored.w < w) && Buf.inflight.size < PARALLEL && !Buf.inflight.has(key) && !(failed && performance.now() - failed < 2000)) fetchFrame(f, mode, w).catch(() => {});
       else if (stored && stored.w >= w && i < 8 && !bitmapFor(f, mode)) decodeFrame(f, mode).catch(() => {});
     });
     trimFrames();
