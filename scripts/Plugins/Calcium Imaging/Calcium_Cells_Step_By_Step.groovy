@@ -1,4 +1,4 @@
-// Calcium imaging: cells step by step                                                    version 2026.11.21.5
+// Calcium imaging: cells step by step                                                    version 2026.11.21.6
 // One plugin for the whole job on one recording:
 //   1. choose the recording (already open in Fiji, or a file) and a folder for the results
 //   2. the plugin makes the cells visible: all-frames picture, response (found automatically, if there is one), and a
@@ -124,7 +124,7 @@ class CalciumSteps {
     /** Steps 1-2: pictures. The movie is only read. */
     void prepare(ImagePlus imp, boolean lookForResponse) {
         movie = imp; n = imp.getStackSize(); w = imp.getWidth(); h = imp.getHeight()
-        say("Calcium imaging plugin, version 2026.11.21.5")
+        say("Calcium imaging plugin, version 2026.11.21.6")
         say("Recording: " + imp.getTitle() + " (" + n + " frames, " + w + " x " + h + ", " + imp.getBitDepth() + "-bit)")
         // Did the field move? Nothing is corrected; moved frames are named so that they can be kept out of baselines.
         try { motionShifts = CalciumMotion.shifts(imp.getStack(), n) } catch (Throwable ignored) { motionShifts = null }
@@ -832,7 +832,7 @@ class CalciumSensitivity {
 
 /** Release lookup sends no recording data. Installation requires an explicit button click. */
 class CalciumRelease {
-    static final String VERSION = "2026.11.21.5"
+    static final String VERSION = "2026.11.21.6"
     static final String REPOSITORY = "https://github.com/samgillman/fiji-calcium-plugin"
     static final String API = "https://api.github.com/repos/samgillman/fiji-calcium-plugin/releases/latest"
     static final String ASSET = "Calcium_Imaging_Fiji_Plugin.zip"
@@ -1189,7 +1189,23 @@ class CalciumTheme {
     /** Makes a button the filled blue one (the next thing to press), or an ordinary one again. */
     static void primary(javax.swing.AbstractButton b, boolean on) { if (b.getUI() instanceof CalciumButtonUI && ((CalciumButtonUI) b.getUI()).primary != on) { ((CalciumButtonUI) b.getUI()).primary = on; b.setFont(font(on ? java.awt.Font.BOLD : java.awt.Font.PLAIN)); b.revalidate(); b.repaint() } }
     /** Marks a button as the current option of a group, or not. */
-    static void choose(javax.swing.AbstractButton b, boolean on) { if (b.getUI() instanceof CalciumButtonUI) { ((CalciumButtonUI) b.getUI()).chosen = on; b.repaint() } }
+    static void choose(javax.swing.AbstractButton b, boolean on) {
+        if (!(b.getUI() instanceof CalciumButtonUI)) return
+        ((CalciumButtonUI) b.getUI()).chosen = on; if (on && b.getParent() instanceof CalciumSegments) ((CalciumSegments) b.getParent()).raise(b); b.repaint()
+    }
+    /** Controls side by side, the first at the left edge so that it lines up with the text above and below it. */
+    static javax.swing.JPanel row(java.awt.Component... parts) {
+        def p = new javax.swing.JPanel(new CalciumRowLayout()); p.setOpaque(false); p.setAlignmentX(0f)
+        parts.each { p.add(it) }
+        p
+    }
+    /** A long name without spaces, cut in the middle so that it fits a width: its start and its end stay readable. */
+    static String fitMiddle(String text, java.awt.FontMetrics fm, int width) {
+        if (text == null || width <= 0) return ""
+        if (fm.stringWidth(text) <= width) return text
+        for (int most = text.length() - 1; most >= 3; most--) { String cut = middle(text, most); if (fm.stringWidth(cut) <= width) return cut }
+        return "…"
+    }
     static javax.swing.JLabel label(String text, Color colour = INK, int style = java.awt.Font.PLAIN, float delta = 0f) {
         def l = new javax.swing.JLabel(text); l.setFont(font(style, delta)); l.setForeground(colour); l.setAlignmentX(0f); l
     }
@@ -1240,6 +1256,7 @@ class CalciumTheme {
 /** Flat, rounded buttons that look the same on Mac, Windows and Linux. A primary button is filled blue. */
 class CalciumButtonUI extends javax.swing.plaf.basic.BasicButtonUI {
     boolean primary = false, chosen = false   // chosen: the current option of a group, drawn light blue
+    String segment = null                     // 'first', 'middle' or 'last' part of a CalciumSegments: square where it meets its neighbour
     void installUI(javax.swing.JComponent c) {
         super.installUI(c)
         def b = (javax.swing.AbstractButton) c
@@ -1258,11 +1275,154 @@ class CalciumButtonUI extends javax.swing.plaf.basic.BasicButtonUI {
             else if (primary) { fill = m.isArmed() && m.isPressed() ? CalciumTheme.BLUE_DARK : m.isRollover() ? new Color(0x0064A0) : CalciumTheme.BLUE; line = fill; ink = Color.white }
             else if (chosen) { fill = new Color(0xD3E6F0); line = CalciumTheme.BLUE; ink = CalciumTheme.BLUE_DARK }
             else { fill = m.isArmed() && m.isPressed() ? new Color(0xD3E6F0) : m.isRollover() ? CalciumTheme.BLUE_LIGHT : Color.white; line = m.isRollover() ? CalciumTheme.BLUE : new Color(0xC5CED8); ink = CalciumTheme.INK }
-            g.setColor(fill); g.fillRoundRect(0, 0, w - 1, h - 1, 10, 10)
-            g.setColor(line); g.drawRoundRect(0, 0, w - 1, h - 1, 10, 10)
-            if (b.isFocusOwner() && m.isEnabled()) { g.setColor(new Color(0, 114, 178, 110)); g.setStroke(new java.awt.BasicStroke(2f)); g.drawRoundRect(1, 1, w - 3, h - 3, 9, 9) }
+            if (segment) {
+                // one part of a joined switch: round only at the ends of the switch, and the edge between two parts stays gray
+                // unless one of them is the chosen one (which is drawn last, see CalciumSegments)
+                def shape = new java.awt.geom.Area(new java.awt.geom.RoundRectangle2D.Float(0f, 0f, (float) (w - 1), (float) (h - 1), 10f, 10f))
+                int half = w.intdiv(2)
+                if (segment != 'first') shape.add(new java.awt.geom.Area(new java.awt.geom.Rectangle2D.Float(0f, 0f, (float) half, (float) (h - 1))))
+                if (segment != 'last') shape.add(new java.awt.geom.Area(new java.awt.geom.Rectangle2D.Float((float) half, 0f, (float) (w - 1 - half), (float) (h - 1))))
+                if (!chosen && m.isEnabled()) line = new Color(0xC5CED8)
+                g.setColor(fill); g.fill(shape); g.setColor(line); g.draw(shape)
+            } else {
+                g.setColor(fill); g.fillRoundRect(0, 0, w - 1, h - 1, 10, 10)
+                g.setColor(line); g.drawRoundRect(0, 0, w - 1, h - 1, 10, 10)
+            }
+            if (b.isFocusOwner() && m.isEnabled() && !segment) { g.setColor(new Color(0, 114, 178, 110)); g.setStroke(new java.awt.BasicStroke(2f)); g.drawRoundRect(1, 1, w - 3, h - 3, 9, 9) }
             g.setFont(b.getFont()); def fm = g.getFontMetrics(); String text = b.getText() ?: ""
             g.setColor(ink); g.drawString(text, (int) ((w - fm.stringWidth(text)) / 2), (int) ((h - fm.getHeight()) / 2) + fm.getAscent())
+        } finally { g.dispose() }
+    }
+}
+
+/** Text that wraps at the width it is given, so it fills its card and follows the window when that is resized. (A label with a
+ *  width written into its text wraps there whatever the card's width is.) say() takes the words without html tags. */
+class CalciumText extends javax.swing.JLabel {
+    static final int NARROW = 200, EXPECTED = 440   // the width asked for (text never makes a card wider than its controls do), and the width a card usually has
+    int laidOut = -1
+    CalciumText(String words = "&nbsp;", Color colour = CalciumTheme.INK) {
+        setFont(CalciumTheme.font()); setForeground(colour); setAlignmentX(0f); setVerticalAlignment(javax.swing.SwingConstants.TOP); say(words)
+        // the height depends on the width, which is known only once the text has been laid out: lay out once more when it changes
+        addComponentListener(new java.awt.event.ComponentAdapter() { void componentResized(java.awt.event.ComponentEvent e) { if (getWidth() != laidOut) { laidOut = getWidth(); revalidate() } } })
+    }
+    void say(String words) { setText("<html>" + words + "</html>") }
+    /** The height the text takes when wrapped at a width. */
+    private int tall(int width) {
+        def view = getClientProperty(javax.swing.plaf.basic.BasicHTML.propertyKey)
+        if (!(view instanceof javax.swing.text.View)) return (int) super.getPreferredSize().height
+        def insets = getInsets()
+        ((javax.swing.text.View) view).setSize((float) Math.max(1, width - insets.left - insets.right), 0f)
+        return (int) Math.ceil(((javax.swing.text.View) view).getPreferredSpan(javax.swing.text.View.Y_AXIS)) + insets.top + insets.bottom
+    }
+    private int room() {
+        if (getWidth() > 0) return getWidth()
+        def p = getParent(); if (p != null && p.getWidth() > 0) { def i = p.getInsets(); return p.getWidth() - i.left - i.right }
+        return EXPECTED
+    }
+    private boolean wordless() { String t = getText(); t == null || t.replaceAll("<[^>]*>", "").trim().isEmpty() }
+    java.awt.Dimension getPreferredSize() { isPreferredSizeSet() ? super.getPreferredSize() : new java.awt.Dimension(NARROW, wordless() ? 0 : tall(room())) }
+    java.awt.Dimension getMinimumSize() { getPreferredSize() }
+    java.awt.Dimension getMaximumSize() { new java.awt.Dimension(Integer.MAX_VALUE, (int) getPreferredSize().height) }
+    protected void paintComponent(java.awt.Graphics g) { if (getWidth() > 0) tall(getWidth()); super.paintComponent(g) }
+}
+
+/** One line that may be long and has no spaces, such as a file name: shown whole when it fits, else with its middle left out. */
+class CalciumName extends javax.swing.JLabel {
+    String whole = ""
+    CalciumName(String text) { super(text ?: ""); whole = text ?: ""; setFont(CalciumTheme.font(java.awt.Font.BOLD)); setForeground(CalciumTheme.INK); setAlignmentX(0f); setToolTipText(whole) }
+    void setWhole(String text) { whole = text ?: ""; setText(whole); setToolTipText(whole); repaint() }
+    java.awt.Dimension getPreferredSize() { def fm = getFontMetrics(getFont()); new java.awt.Dimension(Math.min(CalciumText.NARROW, fm.stringWidth(whole)), fm.getHeight()) }
+    java.awt.Dimension getMinimumSize() { getPreferredSize() }
+    java.awt.Dimension getMaximumSize() { new java.awt.Dimension(Integer.MAX_VALUE, (int) getPreferredSize().height) }
+    protected void paintComponent(java.awt.Graphics g0) {
+        def g = (java.awt.Graphics2D) g0.create()
+        try { CalciumTheme.smooth(g); g.setFont(getFont()); def fm = g.getFontMetrics(); g.setColor(getForeground()); g.drawString(CalciumTheme.fitMiddle(whole, fm, getWidth()), 0, fm.getAscent()) } finally { g.dispose() }
+    }
+}
+
+/** Lays controls side by side, 6 pixels apart, starting at the left edge; hidden ones take no room. */
+class CalciumRowLayout implements java.awt.LayoutManager {
+    static final int GAP = 6, PAD = 3
+    void addLayoutComponent(String name, java.awt.Component c) { }
+    void removeLayoutComponent(java.awt.Component c) { }
+    java.awt.Dimension preferredLayoutSize(java.awt.Container p) {
+        int w = 0, h = 0, n = 0
+        for (java.awt.Component c : p.getComponents()) if (c.isVisible()) { def d = c.getPreferredSize(); w += (int) d.width + (n++ > 0 ? GAP : 0); h = Math.max(h, (int) d.height) }
+        def i = p.getInsets(); new java.awt.Dimension(w + i.left + i.right, h + 2 * PAD + i.top + i.bottom)
+    }
+    java.awt.Dimension minimumLayoutSize(java.awt.Container p) { preferredLayoutSize(p) }
+    void layoutContainer(java.awt.Container p) {
+        def i = p.getInsets(); int x = i.left, h = p.getHeight() - i.top - i.bottom
+        for (java.awt.Component c : p.getComponents()) if (c.isVisible()) { def d = c.getPreferredSize(); c.setBounds(x, i.top + (int) ((h - (int) d.height) / 2), (int) d.width, (int) d.height); x += (int) d.width + GAP }
+    }
+}
+
+/** Choices of one thing joined into one control, like the plot's "Average | One cell + average" on the Step 4 page. Each part
+ *  keeps its place whichever is chosen; the chosen one is tinted (CalciumTheme.choose). */
+class CalciumSegments extends javax.swing.JPanel {
+    List<javax.swing.AbstractButton> parts = []
+    CalciumSegments(javax.swing.AbstractButton... buttons) {
+        setLayout(null); setOpaque(false); setAlignmentX(0f)
+        buttons.eachWithIndex { b, i -> parts << b; if (b.getUI() instanceof CalciumButtonUI) ((CalciumButtonUI) b.getUI()).segment = i == 0 ? 'first' : i == buttons.length - 1 ? 'last' : 'middle'; add(b) }
+    }
+    boolean isOptimizedDrawingEnabled() { false }   // neighbours share one edge
+    java.awt.Dimension getPreferredSize() { int w = 0, h = 0; parts.each { def d = it.getPreferredSize(); w += (int) d.width; h = Math.max(h, (int) d.height) }; new java.awt.Dimension(w - (parts.size() - 1), h) }
+    java.awt.Dimension getMinimumSize() { getPreferredSize() }
+    java.awt.Dimension getMaximumSize() { getPreferredSize() }
+    void doLayout() { int x = 0, h = getHeight(); parts.each { def d = it.getPreferredSize(); it.setBounds(x, 0, (int) d.width, h); x += (int) d.width - 1 } }
+    /** The chosen part is drawn last, so where two parts meet the edge seen is the chosen one's. */
+    void raise(javax.swing.AbstractButton part) { if (part.getParent() == this) setComponentZOrder(part, 0); repaint() }
+}
+
+/** The tick box of this window: the same for a tick with words and for a Show switch, and it starts at the very left of its
+ *  control, so it lines up with the text and the buttons above and below. */
+class CalciumTick implements javax.swing.Icon {
+    boolean on; CalciumTick(boolean on) { this.on = on }
+    int getIconWidth() { 15 }
+    int getIconHeight() { 15 }
+    void paintIcon(java.awt.Component c, java.awt.Graphics g0, int x, int y) { draw((java.awt.Graphics2D) g0, x, y, on, c != null && !c.isEnabled(), false) }
+    static void draw(java.awt.Graphics2D g0, int x, int y, boolean on, boolean gray, boolean hover) {
+        def g = (java.awt.Graphics2D) g0.create()
+        try {
+            CalciumTheme.smooth(g); Color blue = gray ? new Color(0xB7D3E3) : CalciumTheme.BLUE
+            g.setColor(on ? blue : gray ? CalciumTheme.PAGE : Color.white); g.fillRoundRect(x, y, 14, 14, 5, 5)
+            g.setColor(on ? blue : hover ? CalciumTheme.BLUE : new Color(0xC5CED8)); g.drawRoundRect(x, y, 14, 14, 5, 5)
+            if (on) { g.setColor(Color.white); g.setStroke(new java.awt.BasicStroke(1.8f, java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND)); g.drawPolyline([x + 3, x + 6, x + 11] as int[], [y + 7, y + 10, y + 4] as int[], 3) }
+        } finally { g.dispose() }
+    }
+    /** Gives a tick with words this box. */
+    static void dress(javax.swing.JCheckBox box) {
+        box.setIcon(new CalciumTick(false)); box.setSelectedIcon(new CalciumTick(true)); box.setIconTextGap(6); box.setFocusPainted(false)
+        box.setBorder(javax.swing.BorderFactory.createEmptyBorder(3, 0, 3, 0)); box.setMargin(new java.awt.Insets(0, 0, 0, 0))
+    }
+}
+
+/** A switch for one kind of thing on the picture: a tick box, a sample of how it is drawn, its name. A click turns it off or
+ *  on; a double-click is passed on too ("only this one"). The owner decides what the clicks do and sets on or off. */
+class CalciumSwitch extends javax.swing.JComponent {
+    String words; javax.swing.Icon sample; boolean on = true, hover = false
+    Closure clicked = { boolean twice -> }
+    CalciumSwitch(String words, javax.swing.Icon sample) {
+        this.words = words; this.sample = sample
+        setFont(CalciumTheme.font(java.awt.Font.PLAIN, -1f)); setAlignmentX(0f); setOpaque(false); setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR))
+        addMouseListener(new java.awt.event.MouseAdapter() {
+            void mouseClicked(java.awt.event.MouseEvent e) { if (javax.swing.SwingUtilities.isLeftMouseButton(e)) clicked.call(e.getClickCount() >= 2) }
+            void mouseEntered(java.awt.event.MouseEvent e) { hover = true; repaint() }
+            void mouseExited(java.awt.event.MouseEvent e) { hover = false; repaint() }
+        })
+    }
+    void setOn(boolean value) { if (on != value) { on = value; repaint() } }
+    java.awt.Dimension getPreferredSize() { def fm = getFontMetrics(getFont()); new java.awt.Dimension(15 + 6 + (sample != null ? sample.getIconWidth() + 6 : 0) + fm.stringWidth(words) + 2, Math.max(22, fm.getHeight() + 4)) }
+    java.awt.Dimension getMinimumSize() { getPreferredSize() }
+    protected void paintComponent(java.awt.Graphics g0) {
+        def g = (java.awt.Graphics2D) g0.create()
+        try {
+            CalciumTheme.smooth(g); int h = getHeight(), x = 0
+            CalciumTick.draw(g, x, (int) ((h - 15) / 2), on, false, hover)
+            x += 15 + 6
+            if (sample != null) { sample.paintIcon(this, g, x, (int) ((h - sample.getIconHeight()) / 2)); x += sample.getIconWidth() + 6 }
+            g.setFont(getFont()); def fm = g.getFontMetrics(); g.setColor(on ? CalciumTheme.MUTED : CalciumTheme.FAINT)
+            g.drawString(words, x, (int) ((h - fm.getHeight()) / 2) + fm.getAscent())
         } finally { g.dispose() }
     }
 }
@@ -1343,7 +1503,7 @@ class CalciumCard extends javax.swing.JPanel {
 /** One compact Step 2 panel, updated only on Swing's event thread: a slim bar, the stage in plain words, and buttons for the details. */
 class CalciumOutlineProgress extends javax.swing.JPanel {
     javax.swing.JProgressBar bar = new javax.swing.JProgressBar(0, 100)
-    javax.swing.JLabel text = new javax.swing.JLabel()
+    javax.swing.JLabel text = new CalciumText()   // wraps at the card's width
     javax.swing.JButton cancelButton = new javax.swing.JButton("Cancel detection")
     javax.swing.JButton logButton = new javax.swing.JButton("View detection log")
     javax.swing.JButton detailsButton = new javax.swing.JButton("Progress details")
@@ -1368,7 +1528,7 @@ class CalciumOutlineProgress extends javax.swing.JPanel {
         text.setMinimumSize(new java.awt.Dimension(330, 118))
         text.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 118))
         text.setBorder(javax.swing.BorderFactory.createEmptyBorder(6, 0, 0, 0))
-        def buttons = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 4, 2)); buttons.setAlignmentX(0f); buttons.setOpaque(false)
+        def buttons = CalciumTheme.row()   // its buttons line up with every other row of the card
         cancelButton.setText("Cancel"); detailsButton.setText("Details"); logButton.setText("Log")
         cancelButton.setToolTipText("Stop the detection"); detailsButton.setToolTipText("Everything the detection has reported so far"); logButton.setToolTipText("Open Cellpose's own messages")
         [cancelButton, detailsButton, logButton].each { CalciumTheme.style(it, false); buttons.add(it) }
@@ -1426,9 +1586,9 @@ class CalciumOutlineProgress extends javax.swing.JPanel {
         if (running && seconds >= 600) quietMessage += " Over 10 minutes so far; check the log."
         String context = state.context ?: ""
         String muted = CalciumTheme.hex(CalciumTheme.MUTED)
-        text.setText("<html><body style='width:300px'><b>" + escape(state.stage) + "</b> &nbsp;<font color='" + muted + "'>" + state.percent + " %</font><br><font color='" + muted + "'>" + escape(elapsed) +
+        text.setText("<html><b>" + escape(state.stage) + "</b> &nbsp;<font color='" + muted + "'>" + state.percent + " %</font><br><font color='" + muted + "'>" + escape(elapsed) +
             (context ? " &nbsp;·&nbsp; " + escape(context) : "") + "</font><br>" + escape(message) +
-            (quietMessage ? "<br><font color='#865000'>" + escape(quietMessage) + "</font>" : "") + "</body></html>")
+            (quietMessage ? "<br><font color='#865000'>" + escape(quietMessage) + "</font>" : "") + "</html>")
         String details = state.stage + " (" + state.percent + "%)\n" + elapsed + "\n" + context + "\n" + message + "\n" + quietMessage +
             "\n\nPercentages mark completed stages, not remaining time. Cellpose does not report a reliable percentage while finding cells in one image.\n\nRecent events (up to 120; full output is in View detection log):\n" + (state.history ?: "")
         if (detailsText.getText() != details) {
@@ -1448,14 +1608,16 @@ class CalciumOutlineProgress extends javax.swing.JPanel {
         if (!ok) bar.setString(task.percent + "% - " + (task.cancelled ? "Cancelled" : "Stopped"))
         else {
             // Done: only the result stays (the stages, timings and settings are under Details), so the next step is not pushed away.
-            bar.setVisible(false); cancelButton.setVisible(false); roomFor(40)
-            text.setText("<html><body style='width:300px'>" + escape(message) + "</body></html>")
+            bar.setVisible(false); cancelButton.setVisible(false); roomAsNeeded()
+            text.setText("<html>" + escape(message) + "</html>")
         }
     }
     void roomFor(int height) {
         text.setPreferredSize(new java.awt.Dimension(330, height)); text.setMinimumSize(new java.awt.Dimension(330, height)); text.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, height))
         revalidate()
     }
+    /** A finished report takes the lines its words need at the card's width. */
+    void roomAsNeeded() { text.setPreferredSize(null); text.setMinimumSize(null); text.setMaximumSize(null); revalidate() }
     void close() { clock.stop(); if (running && task != null) task.cancel(); detailsWindow?.dispose() }
 }
 
@@ -4261,22 +4423,18 @@ def lineIcon = { Color c, int width, boolean dashed, boolean filled ->
 def hiddenKinds = [] as Set          // 'cells', 'background', 'g0' responds, 'g1' likely, 'g2' unsure, 'g3' precipitate?
 def legendEntries = [:]
 Closure legendClicked = null         // set below, once the picture can be redrawn
-def legendRow = { javax.swing.Icon ic, String s, String kind = null ->
-    def l = new javax.swing.JLabel(s, ic, javax.swing.SwingConstants.LEFT); l.setFont(CalciumTheme.font(java.awt.Font.PLAIN, -1f)); l.setForeground(CalciumTheme.MUTED); l.setIconTextGap(6); l.setAlignmentX(0f)
-    if (kind != null) {
-        legendEntries[kind] = [label: l, text: s]
-        l.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR))
-        l.setToolTipText("Click to hide or show these on the picture. Double-click to see only these (double-click again for everything).")
-        l.addMouseListener(new java.awt.event.MouseAdapter() { void mouseClicked(java.awt.event.MouseEvent e) { if (legendClicked != null) legendClicked.call(kind, e.getClickCount() >= 2) } })
-    }
-    l
+def legendRow = { javax.swing.Icon ic, String s, String kind, String what ->
+    def part = new CalciumSwitch(s, ic); legendEntries[kind] = [part: part, text: s]
+    part.setToolTipText("<html>" + what + "<br>Click to hide or show these on the picture. Double-click to see only these, and again for everything.</html>")
+    part.clicked = { boolean twice -> if (legendClicked != null) legendClicked.call(kind, twice) }
+    part
 }
 def section = { String number, String title, boolean collapsible = true -> new CalciumCard(number, title, collapsible) }
-def row = { java.awt.Component... cs -> def p = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 3)); p.setOpaque(false); cs.each { p.add(it) }; p.setAlignmentX(0f); p }
-def note = { String s -> def l = new javax.swing.JLabel("<html><body style='width:300px'>" + s + "</body></html>"); l.setFont(small); l.setForeground(CalciumTheme.INK); l.setAlignmentX(0f); l }
+def row = { java.awt.Component... cs -> CalciumTheme.row(cs) }
+def note = { String s -> def l = new CalciumText(s); l.setFont(small); l }
 def hint = { String s -> def l = note(s); l.setForeground(CalciumTheme.MUTED); l }
 def btn = { String s -> CalciumTheme.button(s) }
-def box = { String s, boolean on -> def b = new javax.swing.JCheckBox(s, on); b.setFont(small); b.setOpaque(false); b.setAlignmentX(0f); b }
+def box = { String s, boolean on -> def b = new javax.swing.JCheckBox(s, on); b.setFont(small); b.setOpaque(false); b.setAlignmentX(0f); CalciumTick.dress(b); b }
 
 def frame = new CalciumWindow("Calcium imaging: cells step by step")
 frame.setDefaultCloseOperation(javax.swing.WindowConstants.DISPOSE_ON_CLOSE)
@@ -4284,32 +4442,35 @@ def root = new CalciumScrollPanel(); root.setBorder(javax.swing.BorderFactory.cr
 
 // One card per step. Step 1 is already done; of steps 2 to 4 only one is open at a time, so the window fits the screen.
 def s1 = section("1", "Recording", false); s1.setDone(true)
+def recordingName = new CalciumName(imp.getTitle())
 def recordingNote = note("&nbsp;")
 // "The field moved (about 16 px) during frames 1–10.", or nothing (also for a window built without the movement check)
 // For Step 4 the movement is counted from the frames the cells were chosen on whenever such frames were confirmed, also after cells were added with the response.
 def motionForPage = { chosen -> try { return chosen != null && steps.motionShifts != null ? CalciumMotion.summary(steps.motionShifts, chosen.first as int, chosen.last as int) : steps.motion } catch (Throwable ignored) { return null } }
 def movedNote = { -> try { steps.sayMotion(); return CalciumMotion.sentence(steps.motion) } catch (Throwable ignored) { return "" } }
 def describeRecording = { ->
-    recordingNote.setText("<html><body style='width:300px'><b>" + CalciumTheme.middle(imp.getTitle(), 40) + "</b><br><font color='" + MUTED + "'>" + steps.n + " frames · " + (steps.blind ? "cells chosen blind on frames " + steps.blindFirst + "–" + steps.blindLast : steps.found ? "response near frame " + steps.onset + " (magenta)" : (steps.looked ? "no response found (no magenta)" : "response not looked for")) + "</font>" + (movedNote() ? "<br><font color='#9A5B00'>" + movedNote() + "</font>" : "") + "</body></html>")
-    recordingNote.setToolTipText(imp.getTitle() + ". " + (steps.blind ? "Cells are chosen on frames " + steps.blindFirst + "–" + steps.blindLast + ", before the response" + (steps.found ? "; the cells start to rise near frame " + steps.onset : "") + ". The response is not shown while choosing." : steps.found ? "Brightness rises near frame " + steps.onset + "; the response can be shown in magenta." : (steps.looked ? "No response was found, so there is no magenta. Every cell is still shown in green." : "The response has not been looked for. Choose Response (magenta) in Step 2 to look for it.")))
+    recordingName.setWhole(imp.getTitle())
+    recordingNote.setText("<html><font color='" + MUTED + "'>" + steps.n + " frames · " + (steps.blind ? "cells chosen blind on frames " + steps.blindFirst + "–" + steps.blindLast : steps.found ? "response near frame " + steps.onset + " (magenta)" : (steps.looked ? "no response found (no magenta)" : "response not looked for")) + "</font>" + (movedNote() ? "<br><font color='#9A5B00'>" + movedNote() + "</font>" : "") + "</html>")
+    recordingNote.setToolTipText(imp.getTitle() + ". " + (steps.blind ? "Cells are chosen on frames " + steps.blindFirst + "–" + steps.blindLast + ", before the response" + (steps.found ? "; the cells start to rise near frame " + steps.onset : "") + ". The response is not shown while choosing." : steps.found ? "Brightness rises near frame " + steps.onset + "; the response can be shown in magenta." : (steps.looked ? "No response was found, so there is no magenta. Every cell is still shown in green." : "The response has not been looked for. Choose Response in Step 2 to look for it.")))
 }
 describeRecording()
 def changeBtn = btn("‹ Change recording")
 changeBtn.setToolTipText("Back to the first screen, to choose another recording or results folder")
-s1.body.add(recordingNote); s1.body.add(row(changeBtn))
+s1.body.add(recordingName); s1.body.add(recordingNote); s1.body.add(row(changeBtn))
 
 def s2 = section("2", "Choose the cells")
 String selectionBasis = steps.blind ? steps.blindBasis() : steps.found ? 'Response-assisted review' : 'All-frames structural review'
 // What the colour picture shows while cells are chosen. The choice is recorded with the measurement as the selection basis.
-def viewAllBtn = btn('All frames'), viewBaselineBtn = btn('Before response (blind)…'), viewResponseBtn = btn('Response (magenta)')
+def viewAllBtn = btn('All frames'), viewBaselineBtn = btn('Before response'), viewResponseBtn = btn('Response')
+def viewSwitch = new CalciumSegments(viewAllBtn, viewBaselineBtn, viewResponseBtn)   // one joined switch; the line under it says what the choice means
 viewAllBtn.setToolTipText('The average of all frames with the background removed: cells by their structure')
-viewBaselineBtn.setToolTipText('<html>Only frames before the response. Suggestions are made on this picture too, traces are hidden<br>and grades use shape, size and brightness only, so whether a cell is chosen cannot depend on its response.</html>')
+viewBaselineBtn.setToolTipText('<html>Only frames before the response; you are asked which. Suggestions are made on this picture too, traces are hidden<br>and grades use shape, size and brightness only, so whether a cell is chosen cannot depend on its response.</html>')
 def blindNote = { -> 'Blind: frames ' + steps.blindFirst + '–' + steps.blindLast + ' only, before the response. Traces are hidden; grades use shape, size and brightness.' }
-viewResponseBtn.setToolTipText('<html>Cells that brighten after the stimulus turn magenta.<br>Choosing cells with this on is recorded as response-assisted selection,<br>which can raise percent responding.</html>')
+viewResponseBtn.setToolTipText('<html>The response in magenta: cells that brighten after the stimulus turn magenta.<br>Choosing cells with this on is recorded as response-assisted selection,<br>which can raise percent responding.</html>')
 def selectionNote = hint('&nbsp;')
 def showView = { String which, String text ->
     [all: viewAllBtn, baseline: viewBaselineBtn, response: viewResponseBtn].each { key, button -> CalciumTheme.choose(button, key == which) }
-    selectionNote.setText("<html><body style='width:300px'>" + text + "</body></html>")
+    selectionNote.setText("<html>" + text + "</html>")
 }
 def suggestBtn = CalciumTheme.button("Suggest cells automatically", true)
 suggestBtn.setToolTipText("Cellpose outlines the cells; then click inside each outline that is a real cell")
@@ -4322,59 +4483,75 @@ removeBtn.setToolTipText("Click a white outline to select it, then remove it"); 
 def removeMode = box("Click cells to remove", false)
 def editHint = hint("")   // messages about removing and undoing appear here; the how-to is on the buttons' tooltips
 removeMode.setToolTipText("While this is on, clicking a cell on the picture removes it")
-def showSug = box("Show suggestions", true), showBg = box("Show background", true)
-showBg.setToolTipText("The pixels used as each cell's background, in blue")
 def edgeBox = box("Leave out cells within " + CalciumSteps.EDGE_MARGIN + " px of the edge", true)
 edgeBox.setToolTipText("<html>At the edge a cell's background can only be taken from the inner, better-lit side,<br>so the cell comes out too dim. Untick to suggest, accept and measure edge cells like the others.</html>")
-def status = new javax.swing.JLabel("<html><body style='width:300px'><b>Cells chosen: 0</b></body></html>"); status.setFont(small); status.setForeground(CalciumTheme.INK); status.setAlignmentX(0f)
+def status = new CalciumText("<b>Cells chosen: 0</b>"); status.setFont(small)
 def info = note("&nbsp;")
 def trace = new CalciumTracePanel(); trace.setAlignmentX(0f); trace.setFont(small)
-if (steps.blind) { trace.show(null, "Traces are hidden while choosing cells blind", 0, 0); trace.setVisible(false) }   // no empty frame while choosing blind
+if (steps.blind) trace.show(null, "Traces are hidden while choosing cells blind", 0, 0)
+trace.setVisible(false)   // it takes its room when there is a trace to show: an empty frame only pushes the rest down
 // Step 2 leads through its own order: suggest, accept the likely ones, check the dashed ones, add the cells that only show when
 // they respond, continue. This line always names the one thing to do next (set in refresh, from what has been done so far).
 def nextLine = note("&nbsp;")
-def sayNext = { String text -> nextLine.setText("<html><body style='width:300px'><b><font color='#1F6FB2'>Next:</font></b> " + text + "</body></html>") }
+def sayNext = { String text -> nextLine.setText("<html><b><font color='" + CalciumTheme.hex(CalciumTheme.BLUE) + "'>Next:</font></b> " + text + "</html>") }
 def addRespondersBtn = btn("Add cells that respond…")
-addRespondersBtn.setToolTipText("<html>Shows the response (magenta) and looks for the cells that only show when they respond.<br>Your cells so far stay recorded as chosen blind; the ones you add are counted apart in Step 4.</html>")
-addRespondersBtn.setVisible(steps.blind == true)
+String respondersTip = "<html>Shows the response in magenta and looks for the cells that only show when they respond.<br>Your cells so far stay recorded as chosen blind; the ones you add are counted apart in Step 4.</html>"
+addRespondersBtn.setToolTipText(respondersTip)
 boolean detecting = false, autoSuggestAsked = false
 s2.body.add(nextLine); s2.body.add(javax.swing.Box.createVerticalStrut(4))
-s2.body.add(row(CalciumTheme.label('Picture:', CalciumTheme.MUTED), viewAllBtn, viewBaselineBtn, viewResponseBtn)); s2.body.add(selectionNote)
+s2.body.add(row(CalciumTheme.label('Picture:', CalciumTheme.MUTED), viewSwitch)); s2.body.add(selectionNote)
 def cpLabel = hint("&nbsp;")
 def setupBtn = btn("Set up Cellpose (one time)"); def setupRow = row(setupBtn)
 def detectionProgress = new CalciumOutlineProgress()
 def continueBtn = btn("Continue to measure  ›")
 showView(steps.blind ? 'baseline' : steps.found ? 'response' : 'all', steps.blind ? blindNote() : steps.found ? 'Magenta: cells that brightened near frame ' + steps.onset + '. Picking cells this way is recorded as response-assisted.' : 'Choosing cells on the average of all frames.')
-s2.body.add(row(suggestBtn, acceptAllBtn)); s2.body.add(row(addRespondersBtn, continueBtn)); s2.body.add(detectionProgress); s2.body.add(cpLabel); s2.body.add(setupRow)
-// Drawing by hand and what is shown are used now and then: one line opens them, so the sequence above stays short.
+// The four things this step asks for keep their places whatever has been done: suggest and accept on one line, add the
+// cells that only show when they respond and continue on the next. The next one to press is blue; one that cannot be pressed
+// now is gray, never gone. Each column is as wide as the longest label it ever shows, in bold, so nothing moves when a
+// label or the blue button changes.
+def actionMetrics = suggestBtn.getFontMetrics(CalciumTheme.font(java.awt.Font.BOLD))
+int actionHigh = (int) suggestBtn.getPreferredSize().height
+def columnWide = { List<String> longest -> (longest.collect { String one -> actionMetrics.stringWidth(one) }.max() as int) + 26 }
+int leftWide = columnWide(["Suggest cells automatically", "Suggest cells again", "Add cells that respond…"]), rightWide = columnWide(["Accept responding and likely (8888)", "Continue to measure  ›"])
+[suggestBtn, addRespondersBtn].each { it.setPreferredSize(new java.awt.Dimension(leftWide, actionHigh)) }
+[acceptAllBtn, continueBtn].each { it.setPreferredSize(new java.awt.Dimension(rightWide, actionHigh)) }
+s2.body.add(row(suggestBtn, acceptAllBtn)); s2.body.add(row(addRespondersBtn, continueBtn))
+s2.body.add(cpLabel); s2.body.add(setupRow)   // only when Cellpose is missing: it is what Suggest needs
+// Drawing by hand is used now and then: one line opens it, so the sequence above stays short.
 def moreRows = new javax.swing.JPanel(); moreRows.setLayout(new javax.swing.BoxLayout(moreRows, javax.swing.BoxLayout.Y_AXIS)); moreRows.setOpaque(false); moreRows.setAlignmentX(0f)
-moreRows.add(row(CalciumTheme.label("Draw:", CalciumTheme.MUTED), ovalBtn, freeBtn, addBtn)); moreRows.add(row(showSug, showBg)); moreRows.add(row(edgeBox))
-def moreBtn = btn("Draw by hand, what is shown  ▸"); moreBtn.setToolTipText("Oval, Freehand and Add outline; show or hide suggestions and background; cells at the edge")
+moreRows.add(row(CalciumTheme.label("Draw:", CalciumTheme.MUTED), ovalBtn, freeBtn, addBtn))
+def moreBtn = btn("Draw by hand  ▸"); moreBtn.setToolTipText("Oval, Freehand and Add outline")
 moreRows.setVisible(false)
-moreBtn.addActionListener { moreRows.setVisible(!moreRows.isVisible()); moreBtn.setText("Draw by hand, what is shown  " + (moreRows.isVisible() ? "▾" : "▸")); frame.revalidate(); frame.repaint() }
+moreBtn.addActionListener { moreRows.setVisible(!moreRows.isVisible()); moreBtn.setText("Draw by hand  " + (moreRows.isVisible() ? "▾" : "▸")); frame.revalidate(); frame.repaint() }
 s2.body.add(javax.swing.Box.createVerticalStrut(4)); s2.body.add(status)
-s2.body.add(row(removeBtn, undoBtn, removeMode)); s2.body.add(editHint)
-s2.body.add(row(moreBtn)); s2.body.add(moreRows)
-s2.body.add(info); s2.body.add(trace); s2.body.add(javax.swing.Box.createVerticalStrut(6))
-def legend = new javax.swing.JPanel(new java.awt.GridLayout(0, 3, 6, 2)); legend.setAlignmentX(0f); legend.setOpaque(false)
+// Your cells: what can be pressed on one line, how clicks and the edge are treated on the next (the counts above say how
+// many are left out at the edge). Drawing by hand opens under them.
+s2.body.add(row(removeBtn, undoBtn, moreBtn)); s2.body.add(row(removeMode, javax.swing.Box.createHorizontalStrut(8), edgeBox)); s2.body.add(editHint); s2.body.add(moreRows)
+// What is drawn on the picture: one switch per kind, each with a sample of how that kind is drawn. (Two ticks, "Show
+// suggestions" and "Show background", used to do the same job a second time.)
+def legend = new javax.swing.JPanel(new java.awt.GridLayout(0, 3, 10, 0)); legend.setAlignmentX(0f); legend.setOpaque(false)
 def acceptedIcon = new java.awt.image.BufferedImage(30, 14, java.awt.image.BufferedImage.TYPE_INT_ARGB)
 def acceptedGraphics = acceptedIcon.createGraphics()
 acceptedGraphics.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
 acceptedGraphics.setColor(new Color(24, 30, 36)); acceptedGraphics.fillRoundRect(0, 0, 30, 14, 6, 6)
 acceptedGraphics.setColor(Color.black); acceptedGraphics.setStroke(new java.awt.BasicStroke(5f)); acceptedGraphics.drawOval(6, 3, 18, 8)
 acceptedGraphics.setColor(Color.white); acceptedGraphics.setStroke(new java.awt.BasicStroke(2f)); acceptedGraphics.drawOval(6, 3, 18, 8); acceptedGraphics.dispose()
-legend.add(legendRow(new javax.swing.ImageIcon(acceptedIcon), "your cells", "cells"))
-def respondsLegend = legendRow(lineIcon(CYAN, 2, false, false), "responds", "g0"); respondsLegend.setVisible(!steps.blind)   // no such grade while choosing blind
-legend.add(legendRow(lineIcon(CYAN, 1, false, false), "likely a cell", "g1"))
-legend.add(legendRow(lineIcon(GREY, 1, true, false), "unsure", "g2"))
-legend.add(legendRow(lineIcon(BLUE, 1, false, true), "background", "background"))
-legend.add(legendRow(lineIcon(RED, 2, false, false), "precipitate?", "g3"))
+legend.add(legendRow(new javax.swing.ImageIcon(acceptedIcon), "your cells", "cells", "The cells you have chosen: white outlines."))
+def respondsLegend = legendRow(lineIcon(CYAN, 2, false, false), "responds", "g0", "Suggestions that rise after the stimulus on their own."); respondsLegend.setVisible(!steps.blind)   // no such grade while choosing blind
+legend.add(legendRow(lineIcon(CYAN, 1, false, false), "likely a cell", "g1", "Suggestions graded likely a cell."))
+legend.add(legendRow(lineIcon(GREY, 1, true, false), "unsure", "g2", "Suggestions graded unsure: dashed."))
+legend.add(legendRow(lineIcon(BLUE, 1, false, true), "background", "background", "The pixels used as each cell's background, in blue."))
+legend.add(legendRow(lineIcon(RED, 2, false, false), "precipitate?", "g3", "Suggestions that are very bright: probably precipitate."))
 legend.add(respondsLegend)   // last, so the grid has no hole when it is hidden
-legend.setToolTipText("White: your cells. Blue: the background used. The others are suggestions, by grade. Click an entry to hide or show it on the picture; double-click to see only that one.")
-def legendHint = CalciumTheme.label("Click an entry to hide or show it on the picture; double-click to see only that one.", CalciumTheme.MUTED)
-legendHint.setFont(CalciumTheme.font(java.awt.Font.PLAIN, -2f)); legendHint.setAlignmentX(0f)
-legend.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, (int) legend.getPreferredSize().height))
-s2.body.add(legend)   // how to use the legend is in its tooltip
+def showLabel = CalciumTheme.label('Show:', CalciumTheme.MUTED); showLabel.setVerticalAlignment(javax.swing.SwingConstants.TOP); showLabel.setBorder(javax.swing.BorderFactory.createEmptyBorder(3, 0, 0, 0))
+def showRow = new javax.swing.JPanel(new java.awt.BorderLayout(8, 0)); showRow.setOpaque(false); showRow.setAlignmentX(0f)
+showRow.setBorder(javax.swing.BorderFactory.createEmptyBorder(3, 0, 3, 0))
+showRow.add(showLabel, java.awt.BorderLayout.WEST); showRow.add(legend, java.awt.BorderLayout.CENTER)
+showRow.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, (int) showRow.getPreferredSize().height))
+s2.body.add(showRow)
+// Under what is looked at all the time: the bar while outlines are made, then the report of how they were made
+s2.body.add(detectionProgress)
+s2.body.add(javax.swing.Box.createVerticalStrut(4)); s2.body.add(info); s2.body.add(trace)   // last: when a trace appears nothing under it has to move
 
 def s3 = section("3", "Measure and save")
 def makeMovie = box("Also open a background-corrected movie", true)
@@ -4435,6 +4612,9 @@ scroll.getVerticalScrollBar().setUnitIncrement(24)
 scroll.getHorizontalScrollBar().setUnitIncrement(24)
 frame.getContentPane().add(scroll)
 frame.pack()
+// Wide enough for the sentences to read well. A narrower window still works: the text follows the width, down to the widest row of controls.
+int beside = (int) scroll.getVerticalScrollBar().getPreferredSize().width   // room for the scrollbar: a window that scrolls down gets no bar along the bottom
+frame.setSize(Math.max(520, frame.getWidth() + beside), frame.getHeight())
 // An ordinary window: clicking a picture or another program puts this window behind it, like any other window.
 // (It used to stay above all of Fiji's windows, and could not be sent back.) It opens beside the picture, so both stay visible.
 if (!testGui) { def scr = java.awt.Toolkit.getDefaultToolkit().getScreenSize(); frame.setLocation((int) Math.max(0, scr.width - frame.getWidth() - 12), 40) }
@@ -4516,7 +4696,7 @@ def evidenceText = { p ->
 def refresh = { boolean force ->
     try {
         def sp = splitCells(); Roi[] all = (Roi[]) sp.all; Roi[] cells = (Roi[]) sp.cells; Roi[] edgeCells = (Roi[]) sp.edge
-        def key = all.collect { it.getBounds().toString() + it.getContainedPoints().length }.join("|") + "#" + Arrays.toString(rm.getSelectedIndexes()) + "#" + showBg.isSelected() + "#" + proposals.size() + "#" + showSug.isSelected() + "#" + edgeBox.isSelected() + '#'+selectionBasis + '#' + responseSeen + (analysisMeasurement!=null ? '#'+measuredKey(all) : '')
+        def key = all.collect { it.getBounds().toString() + it.getContainedPoints().length }.join("|") + "#" + Arrays.toString(rm.getSelectedIndexes()) + "#" + hiddenKinds.sort(false).join(",") + "#" + proposals.size() + "#" + edgeBox.isSelected() + '#'+selectionBasis + '#' + responseSeen + (analysisMeasurement!=null ? '#'+measuredKey(all) : '')
         if (!force && key == lastKey) return
         lastKey = key
         boolean measuredNow = false   // the cells on the picture are the ones in the saved tables
@@ -4525,19 +4705,19 @@ def refresh = { boolean force ->
             measuredNow = current
             analyzeBtn.setEnabled(current && go.isEnabled())
             s3.setDone(current); s4.setSummary(current ? "ready" : "measure again first")
-            analysisNote.setText("<html><body style='width:300px'>" + (current ? "Review the recording, check timing, and run analysis in your browser. Keep Fiji open." : "Cell outlines changed. Measure and save again before analysis.") + "</body></html>")
+            analysisNote.setText("<html>" + (current ? "Review the recording, check timing, and run analysis in your browser. Keep Fiji open." : "Cell outlines changed. Measure and save again before analysis.") + "</html>")
         }
         steps.alsoAvoid = edgeCells
         lastBg = steps.backgrounds(cells)
         int none = lastBg.count { it.length == 0 } as int
         def ov = new Overlay()
-        if (showBg.isSelected() && cells.length > 0 && !hiddenKinds.contains('background')) {
+        if (cells.length > 0 && !hiddenKinds.contains('background')) {
             int sel = rm.getSelectedIndex(); int only = -1
             if (sel >= 0 && rm.getSelectedIndexes().length == 1) { def allR = rm.getRoisAsArray(); int k = -1; for (int i = 0; i <= sel && i < allR.length; i++) if (allR[i].isArea()) k++; only = sp.keptIdx.indexOf(k) }
             ov.add(steps.blueLayer(lastBg, only))
         }
         def left = unusedProposals(all)
-        if (showSug.isSelected()) left.each { p ->
+        left.each { p ->
             if (hiddenKinds.contains('g' + Math.min(3, (int) p.grade))) return
             def r = (Roi) p.roi.clone()
             if (p.grade == 0) { r.setStrokeColor(CYAN); r.setStrokeWidth(2) }
@@ -4552,14 +4732,15 @@ def refresh = { boolean force ->
         steps.colourPic.setOverlay(ov)
         int nLikely = left.count { it.grade <= 1 } as int
         int edgeSug = edgeBox.isSelected() ? (proposals.count { it.edge } as int) : 0
-        status.setText("<html><body style='width:300px'><b>Cells chosen: " + cells.length + "</b>" + (edgeCells.length > 0 ? " &nbsp;(+" + edgeCells.length + " at the edge, left out)" : "") + (none > 0 ? " &nbsp;(" + none + " without background)" : "") + (proposals.size() > 0 ? "<br><font color='" + MUTED + "'>Suggestions left: " + nLikely + " likely, " + left.count { it.grade == 2 } + " unsure, " + left.count { it.grade == 3 } + " very bright (precipitate?)" + (edgeSug > 0 ? "; " + edgeSug + " at the edge not shown" : "") + "</font>" : "") + "</body></html>")
+        status.setText("<html><b>Cells chosen: " + cells.length + "</b>" + (edgeCells.length > 0 ? " &nbsp;(+" + edgeCells.length + " at the edge, left out)" : "") + (none > 0 ? " &nbsp;(" + none + " without background)" : "") + (proposals.size() > 0 ? "<br><font color='" + MUTED + "'>Suggestions left: " + nLikely + " likely, " + left.count { it.grade == 2 } + " unsure, " + left.count { it.grade == 3 } + " very bright (precipitate?)" + (edgeSug > 0 ? "; " + edgeSug + " at the edge not shown" : "") + "</font>" : "") + "</html>")
         s2.setSummary(cells.length + (cells.length == 1 ? " cell chosen" : " cells chosen")); s2.setDone(cells.length > 0 && !s2.expanded)
         boolean withResponse = !steps.blind && steps.found && selectionBasis.startsWith('Response')
-        acceptAllBtn.setText((withResponse ? "Accept responding and likely (" : "Accept likely (") + nLikely + ")"); acceptAllBtn.setEnabled(nLikely > 0); acceptAllBtn.setVisible(nLikely > 0)
+        acceptAllBtn.setText((withResponse ? "Accept responding and likely (" : "Accept likely (") + nLikely + ")"); acceptAllBtn.setEnabled(nLikely > 0)
         int nUnsure = left.count { it.grade == 2 && !(edgeBox.isSelected() && it.edge) } as int
         def hiddenNames = legendEntries.findAll { k, v -> hiddenKinds.contains(k) }.collect { k, v -> v.text }
-        String hiddenNote = hiddenNames ? " <font color='#9A5B00'>Hidden on the picture now: " + hiddenNames.join(", ") + " (click them in the legend to show them).</font>" : ""
-        addRespondersBtn.setVisible(steps.blind == true); addRespondersBtn.setEnabled(steps.blind == true && all.length > 0 && !detecting)
+        String hiddenNote = hiddenNames ? " <font color='#9A5B00'>Hidden on the picture now: " + hiddenNames.join(", ") + ". Tick them under Show to see them.</font>" : ""
+        addRespondersBtn.setEnabled(steps.blind == true && all.length > 0 && !detecting)
+        addRespondersBtn.setToolTipText(steps.blind == true ? respondersTip : "The response is already shown or the cells are not chosen blind, so there is nothing to add this way.")
         boolean respondersNext = false
         try { respondersNext = respondersWaiting.call() && all.length > 0 && nLikely == 0 && !detecting; addMissedBtn.setVisible(respondersWaiting.call() && measuredNow) } catch (Throwable ignored) { }
         // one blue button: the next thing to press (cosmetic, so a window without these buttons carries on)
@@ -4579,7 +4760,7 @@ def refresh = { boolean force ->
         undoBtn.setEnabled(!cellEdits.history.isEmpty())
     } catch (Throwable t) { status.setText("" + t) }
 }
-def paintLegend = { -> legendEntries.each { k, v -> boolean off = hiddenKinds.contains(k); v.label.setText(off ? "<html><strike>" + v.text + "</strike></html>" : v.text); v.label.setForeground(off ? new Color(0xB0B7C0) : CalciumTheme.MUTED) } }
+def paintLegend = { -> legendEntries.each { k, v -> v.part.setOn(!hiddenKinds.contains(k)) } }
 legendClicked = { String kind, boolean only ->
     def kinds = legendEntries.keySet()
     if (only) {
@@ -4592,7 +4773,11 @@ legendClicked = { String kind, boolean only ->
 def viewButtons = [viewAllBtn, viewBaselineBtn, viewResponseBtn]
 def busyView = { boolean busy -> viewButtons.each { it.setEnabled(!busy) } }
 def currentView = { -> steps.blind ? 'baseline' : selectionBasis.startsWith('Response') ? 'response' : 'all' }
-def blindControls = { boolean on -> respondsLegend.setVisible(!on); sensBox.setVisible(on); trace.setVisible(!on); frame.refreshContents() }
+def blindControls = { boolean on ->
+    respondsLegend.setVisible(!on); sensBox.setVisible(on)
+    if (!on && trace.vals == null) trace.show(null, "Move the mouse over a cell or a suggestion to see its trace", 0, 0)   // no longer "hidden while choosing blind"
+    trace.setVisible(!on && trace.vals != null); frame.refreshContents()
+}
 viewAllBtn.addActionListener({
     if (steps.blind) endBlindChoosing()          // the all-frames picture holds the response frames: cells added from here on are not blind
     steps.stopBlind(); steps.showAllFrames(); steps.hideResponse()
@@ -4601,7 +4786,7 @@ viewAllBtn.addActionListener({
 } as java.awt.event.ActionListener)
 viewBaselineBtn.addActionListener({
     int[] range = CalciumStartDialog.askBlindFrames(steps); if (range == null) return
-    busyView(true); selectionNote.setText("<html><body style='width:300px'>Making the picture of frames " + range[0] + "–" + range[1] + "…</body></html>")
+    busyView(true); selectionNote.setText("<html>Making the picture of frames " + range[0] + "–" + range[1] + "…</html>")
     Thread.start('Calcium pre-stimulus picture') {
         float[] picture = null; String problem = null
         try { picture = steps.framesPicture(range[0], range[1]) } catch (Throwable t) { problem = t.message ?: t.toString() }
@@ -4614,7 +4799,7 @@ viewBaselineBtn.addActionListener({
             steps.startBlind(range[0], range[1], picture)
             // suggestions made with the response (or on all frames) would show it: only blind suggestions stay
             proposals.removeAll { !it.blind }; if (proposals.isEmpty()) suggestBtn.setText("Suggest cells automatically")
-            trace.show(null, "Traces are hidden while choosing cells blind", 0, 0); info.setText("<html><body style='width:300px'>&nbsp;</body></html>")
+            trace.show(null, "Traces are hidden while choosing cells blind", 0, 0); info.setText("<html>&nbsp;</html>")
             selectionBasis = steps.blindBasis()
             showView('baseline', blindNote()); blindControls(true); describeRecording(); refresh(true)
         }
@@ -4624,7 +4809,7 @@ viewResponseBtn.addActionListener({
     boolean explained = respondersExplained; respondersExplained = false   // the question before measuring has already said it
     if (steps.blind && !testGui && !explained && javax.swing.JOptionPane.showConfirmDialog(frame, "<html><body style='width:320px'>The cells you have now stay recorded as <b>chosen blind</b>, as long as you do not change them.<br><br>The response is shown next and the plugin looks for the cells that only show when they respond. Cells you add from now on are recorded as <b>added after the response was shown</b>. Step 4 gives % responding for both groups.</body></html>", "Add cells that respond", javax.swing.JOptionPane.OK_CANCEL_OPTION) != javax.swing.JOptionPane.OK_OPTION) return
     boolean first = !steps.looked
-    busyView(true); if (first) selectionNote.setText("<html><body style='width:300px'>Looking for the response in all " + steps.n + " frames…</body></html>")
+    busyView(true); if (first) selectionNote.setText("<html>Looking for the response in all " + steps.n + " frames…</html>")
     Thread.start('Calcium response picture') {
         String problem = null
         try { if (!steps.looked) steps.findResponse() } catch (Throwable t) { problem = t.message ?: t.toString() }
@@ -4655,18 +4840,18 @@ def acceptAll = { -> def todo = unusedProposals(cellRois()).findAll { it.grade <
 def lastHover = null
 def hoverAt = { int x, int y ->
     Roi[] cells = cellRois()
-    def p = showSug.isSelected() ? unusedProposals(cells).findAll { !hiddenKinds.contains('g' + Math.min(3, (int) it.grade)) && it.roi.contains(x, y) }.min { it.roi.getBounds().width * it.roi.getBounds().height } : null
+    def p = unusedProposals(cells).findAll { !hiddenKinds.contains('g' + Math.min(3, (int) it.grade)) && it.roi.contains(x, y) }.min { it.roi.getBounds().width * it.roi.getBounds().height }
     def target = null; def text = "&nbsp;"; def cap = ""
     if (p != null) { target = p.roi; text = evidenceText(p); cap = "this suggestion: gray levels above its background, over time" }
     else {
         int ci = -1; cells.eachWithIndex { c, i -> if (ci < 0 && c.contains(x, y)) ci = i }
         if (ci >= 0) { target = cells[ci]; text = "<b>Your cell " + (ci + 1) + "</b>"; cap = "cell " + (ci + 1) + ": gray levels above its background, over time" }
     }
-    if (target == null || target.is(lastHover)) { if (target == null && lastHover != null) { lastHover = null; info.setText("<html><body style='width:300px'>&nbsp;</body></html>") }; return text }
+    if (target == null || target.is(lastHover)) { if (target == null && lastHover != null) { lastHover = null; info.setText("<html>&nbsp;</html>") }; return text }
     lastHover = target
-    info.setText("<html><body style='width:300px'>" + text + "</body></html>")
+    info.setText("<html>" + text + "</html>")
     if (steps.blind) trace.show(null, "Traces are hidden while choosing cells blind", 0, 0)   // a trace would show the response
-    else { reveal(); trace.show(steps.traceOf(target, cells), cap, steps.found ? steps.p0 : 0, steps.found ? steps.p1 : 0) }
+    else { reveal(); trace.show(steps.traceOf(target, cells), cap, steps.found ? steps.p0 : 0, steps.found ? steps.p1 : 0); if (!trace.isVisible()) { trace.setVisible(true); frame.refreshContents() } }
     return text
 }
 def findCellposePython = { ->
@@ -4748,7 +4933,7 @@ def SETUP_TEXT = "Cellpose is the free program that suggests the cell outlines. 
 def cellposeBusy = false
 def showCellposeState = { String busyText ->
     def found = findCellposePython() != null
-    cpLabel.setText("<html><body style='width:300px'><font color='" + MUTED + "'>" + (busyText != null ? busyText : found ? "Cellpose: found on this computer." : "Cellpose (the program that suggests outlines) is not installed on this computer yet.") + "</font></body></html>")
+    cpLabel.setText("<html><font color='" + MUTED + "'>" + (busyText != null ? busyText : found ? "Cellpose: found on this computer." : "Cellpose (the program that suggests outlines) is not installed on this computer yet.") + "</font></html>")
     cpLabel.setVisible(!found || busyText != null)   // nothing to say once Cellpose is installed and idle
     setupRow.setVisible(!found || busyText != null); setupBtn.setEnabled(busyText == null)
 }
@@ -5030,7 +5215,7 @@ suggestBtn.addActionListener({ e ->
             if (hiddenKinds.removeAll(['g0', 'g1', 'g2', 'g3'])) paintLegend()      // new suggestions are never made invisible by an old legend click
             suggestBtn.setText(proposals.isEmpty() ? "Suggest cells automatically" : "Suggest cells again")
             // a finished run is already reported under the button; only a problem is repeated here, where the eye is
-            info.setText("<html><body style='width:300px'>" + (message ==~ /\d+ suggestions.*/ ? "&nbsp;" : "Suggestions: " + CalciumOutlineProgress.escape(message)) + "</body></html>")
+            info.setText("<html>" + (message ==~ /\d+ suggestions.*/ ? "&nbsp;" : "Suggestions: " + CalciumOutlineProgress.escape(message)) + "</html>")
             if (!cellposeBusy) showCellposeState(null)
             refresh(true)
         },
@@ -5043,13 +5228,13 @@ acceptAllBtn.addActionListener({ e ->
     int ans = javax.swing.JOptionPane.showConfirmDialog(frame, "Accept all " + nL + " outlines graded " + (steps.blind ? "" : "\"responds\" or ") + "\"likely a cell\"?\n\nIn tests about 7 in 10 of these were real cells, so about 3 in 10 are not.\nLook through them afterwards and remove the wrong ones.", "Accept all likely ones", javax.swing.JOptionPane.OK_CANCEL_OPTION)
     if (ans == javax.swing.JOptionPane.OK_OPTION) acceptAll()
 } as java.awt.event.ActionListener)
-def updateEditHint = { String message -> editHint.setText("<html><body style='width:300px'>" + message + "</body></html>") }
+def updateEditHint = { String message -> editHint.setText("<html>" + message + "</html>") }
 def leaveRemoveMode = { -> removeMode.setSelected(false); updateEditHint('Click a white outline to select it, then Remove. Or turn on <b>Click cells to remove</b>.') }
 ovalBtn.addActionListener({ e -> leaveRemoveMode(); IJ.setTool("oval") } as java.awt.event.ActionListener)
 freeBtn.addActionListener({ e -> leaveRemoveMode(); IJ.setTool("freehand") } as java.awt.event.ActionListener)
 addBtn.addActionListener({ e -> def r = steps.colourPic.getRoi()
-    if (r != null && r.isArea() && edgeBox.isSelected() && steps.nearEdge(r)) { info.setText("<html><body style='width:300px'><b>Not added:</b> this outline is within " + CalciumSteps.EDGE_MARGIN + " pixels of the picture's edge, where a cell's background can only come from one side. Untick \"Leave out cells at the picture's edge\" to add it anyway.</body></html>"); return }
-    if (r != null && r.isArea()) { cellEdits.change('add drawn cell') { addCell(r) }; rm.deselect(); steps.colourPic.deleteRoi(); refresh(true) } else info.setText("<html><body style='width:300px'>Draw around a cell on the colour picture first.</body></html>") } as java.awt.event.ActionListener)
+    if (r != null && r.isArea() && edgeBox.isSelected() && steps.nearEdge(r)) { info.setText("<html><b>Not added:</b> this outline is within " + CalciumSteps.EDGE_MARGIN + " pixels of the picture's edge, where a cell's background can only come from one side. Untick \"Leave out cells at the picture's edge\" to add it anyway.</html>"); return }
+    if (r != null && r.isArea()) { cellEdits.change('add drawn cell') { addCell(r) }; rm.deselect(); steps.colourPic.deleteRoi(); refresh(true) } else info.setText("<html>Draw around a cell on the colour picture first.</html>") } as java.awt.event.ActionListener)
 def removedMessage = { int count -> updateEditHint('Removed ' + count + (count == 1 ? ' cell.' : ' cells.') + ' <b>Undo last change</b> restores them.' + (removeMode.isSelected() ? '<br><b>Removal mode is ON:</b> click another white outline to remove it. Turn it off to accept suggestions.' : '')) }
 def removeSelected = { -> int count = cellEdits.remove(rm.getSelectedIndexes() as List); refresh(true); if (count > 0) removedMessage(count); count > 0 }
 def undoLast = { -> updateEditHint(cellEdits.undo() + (removeMode.isSelected() ? '<br><b>Removal mode is ON.</b> Turn it off to accept suggestions.' : '')); refresh(true) }
@@ -5067,14 +5252,12 @@ def clickCellAt = { int x, int y ->
         return count > 0
     }
     if (cellEdits.selectAt(x, y)) { refresh(true); updateEditHint('<b>Cell selected</b> (thicker white outline). Press <b>Remove selected cell</b> to remove it.'); return true }
-    boolean added = showSug.isSelected() && acceptAt(x, y)
+    boolean added = acceptAt(x, y)   // (a suggestion hidden with its switch is not there to be clicked)
     refresh(true)
     if (added) updateEditHint('<b>Cell added:</b> its outline is now white with a black border. Undo last change reverses this.')
     added
 }
-showSug.addActionListener({ e -> refresh(true) } as java.awt.event.ActionListener)
 edgeBox.addActionListener({ e -> refresh(true) } as java.awt.event.ActionListener)
-showBg.addActionListener({ e -> refresh(true) } as java.awt.event.ActionListener)
 if (steps.colourPic.getCanvas() != null) {
     def canvas = steps.colourPic.getCanvas(); int px0 = 0, py0 = 0; long lastMove = 0
     def cellMouse = new java.awt.event.MouseAdapter() {
@@ -5123,7 +5306,7 @@ changeBtn.addActionListener({ e ->
     String unmeasured = analysisMeasurement == null ? ' They have not been measured yet.' : ''
     def options = ['Clear outlines and go back', 'Keep outlines and go back', 'Cancel'] as Object[]
     int answer = javax.swing.JOptionPane.showOptionDialog(frame, '<html><body style="width:320px">The ROI Manager holds ' + count + ' outline' + (count == 1 ? '' : 's') + '.' + unmeasured +
-        ' The next recording starts with whatever outlines it holds, so clear them unless they belong to the next recording too.</body></html>',
+        ' The next recording starts with whatever outlines it holds, so clear them unless they belong to the next recording too.</html>',
         'Change recording', javax.swing.JOptionPane.DEFAULT_OPTION, javax.swing.JOptionPane.QUESTION_MESSAGE, null, options, options[0])
     if (answer == 0 || answer == 1) changeRecording(answer)
 } as java.awt.event.ActionListener)
@@ -5154,7 +5337,7 @@ go.addActionListener({ e ->
     final boolean checkSensitivity = steps.blind && sensBox.isSelected()
     steps.alsoAvoid = edgeCells
     steps.edgeNote = edgeBox.isSelected() ? "Cells at the picture's edge: outlines within " + CalciumSteps.EDGE_MARGIN + " pixels of the border are left out, because their background can only be taken from the inner, better-lit side (" + edgeCells.length + " outlines in the ROI Manager left out; they are not in the tables or the saved outlines)." : "Cells at the picture's edge were NOT left out (box unticked); the summary table marks them."
-    if (cells.length == 0) { result.setText("<html><body style='width:300px'>There are no cells yet. Choose cells in step 2 first.</body></html>"); return }
+    if (cells.length == 0) { result.setText("<html>There are no cells yet. Choose cells in step 2 first.</html>"); return }
     go.setEnabled(false); go.setText("Working..."); analyzeBtn.setEnabled(false); analysisMeasurement = null
     Thread.start {
         try {
@@ -5162,11 +5345,11 @@ go.addActionListener({ e ->
             def names = cells.collect { CalciumMeasurement.idFor(it) } as String[]
             ImagePlus corrected = null
             if (makeMovie.isSelected()) {
-                result.setText("<html><body style='width:300px'>Making the background-corrected movie...</body></html>")
+                result.setText("<html>Making the background-corrected movie...</html>")
                 corrected = steps.correctedMovie(cells)
                 if (saveMovie.isSelected()) IJ.saveAsTiff(corrected, outDir.getPath() + File.separator + base + "_background_corrected_movie.tif")
             }
-            result.setText("<html><body style='width:300px'>Measuring " + cells.length + " cells on " + steps.n + " frames...</body></html>")
+            result.setText("<html>Measuring " + cells.length + " cells on " + steps.n + " frames...</html>")
             steps.log.removeAll{it.startsWith('Cell selection basis:') || it.startsWith('Sensitivity check') || it.startsWith('Chosen blind or later:')};steps.say('Cell selection basis: '+measuredSelectionBasis+'. Accepted ROI registry includes premeasurement exclusions.')
             Map chosenBlind = null
             if (steps.blindLast > 0 && (steps.blind || blindCellKeys != null)) {
@@ -5204,7 +5387,7 @@ go.addActionListener({ e ->
             measured.inputHash=CalciumInstaller.digest(measured.csv.bytes)
             String sensitivityHtml = ""
             if (checkSensitivity) {
-                def check = runSensitivity(cells, outDir.getPath() + File.separator + base + "_", { String s -> javax.swing.SwingUtilities.invokeLater { result.setText("<html><body style='width:300px'>" + CalciumOutlineProgress.escape(s) + "</body></html>") } })
+                def check = runSensitivity(cells, outDir.getPath() + File.separator + base + "_", { String s -> javax.swing.SwingUtilities.invokeLater { result.setText("<html>" + CalciumOutlineProgress.escape(s) + "</html>") } })
                 def m = check.m
                 sensitivityHtml = m != null ? "Sensitivity check: the blind detection also found <b>" + m.found + " of " + m.cellLike + "</b> response-assisted outlines that could be cells (" + CalciumSensitivity.pct((int) m.found, (int) m.cellLike) + "); " + (m.cellLike - m.found) + " missed" + ((m.cellLike - m.found) > 0 ? ": <b>Add cells that respond…</b> below adds them" : "") + ". Details in what_was_done.txt.<br>" :
                     "<font color='#b05000'>" + CalciumOutlineProgress.escape((String) check.text) + "</font><br>"
@@ -5215,11 +5398,11 @@ go.addActionListener({ e ->
                 (edgeCells.length > 0 ? edgeCells.length + " outlines at the picture's edge were left out (dashed).<br>" : "") +
                 (steps.lastDim > 0 ? "<font color='#b05000'><b>" + steps.lastDim + " cells are not brighter than their background at rest.</b> Review their quality status in Step 4.</font><br>" : "") +
                 "<b>Continue to Step 4 to analyze responses inside Fiji.</b> It uses unlifted fluorescence and reports excluded and unscorable cells explicitly.<br>Saved in: " + savedIn
-            javax.swing.SwingUtilities.invokeLater { analysisMeasurement = measured; analyzeBtn.setEnabled(true); result.setText("<html><body style='width:300px'>" + html + "</body></html>"); go.setText("Measure again"); go.setEnabled(true); s3.setSummary(cells.length + " cells measured"); s4.setExpanded(true); refresh(true); openBtn.setVisible(true); frame.refreshContents() }
-        } catch (Throwable t) { go.setEnabled(true); go.setText("Measure and save"); result.setText("<html><body style='width:300px'>Could not measure: " + t + "</body></html>"); IJ.log("Calcium imaging plugin: " + t) }
+            javax.swing.SwingUtilities.invokeLater { analysisMeasurement = measured; analyzeBtn.setEnabled(true); result.setText("<html>" + html + "</html>"); go.setText("Measure again"); go.setEnabled(true); s3.setSummary(cells.length + " cells measured"); s4.setExpanded(true); refresh(true); openBtn.setVisible(true); frame.refreshContents() }
+        } catch (Throwable t) { go.setEnabled(true); go.setText("Measure and save"); result.setText("<html>Could not measure: " + t + "</html>"); IJ.log("Calcium imaging plugin: " + t) }
     }
 } as java.awt.event.ActionListener)
-if (testGui) { binding.setVariable("hooks", [nextLine: nextLine, addRespondersBtn: addRespondersBtn, addMissedBtn: addMissedBtn, continueBtn: continueBtn, acceptAllBtn: acceptAllBtn, autoSuggestAsked: { -> autoSuggestAsked }, legendClicked: { String k, boolean o -> legendClicked.call(k, o) }, hiddenKinds: hiddenKinds, cellRois: cellRois, sensBox: sensBox, basisFor: basisFor, responseSeen: { -> responseSeen }, reveal: { -> reveal() }, runSensitivity: runSensitivity, trace: trace, respondsLegend: respondsLegend, viewAllBtn: viewAllBtn, viewBaselineBtn: viewBaselineBtn, viewResponseBtn: viewResponseBtn, selectionNote: selectionNote, selectionBasis: { -> selectionBasis }, changeBtn: changeBtn, changeRecording: changeRecording, continueBtn: continueBtn, backToCellsBtn: backToCellsBtn, backToMeasureBtn: backToMeasureBtn, cards: [s1, s2, s3, s4], recordingNote: recordingNote, detectionProgress: detectionProgress, suggestBtn: suggestBtn, edgeBox: edgeBox, addBtn: addBtn, setForceFresh: { boolean v -> forceFresh = v }, setupCellpose: setupCellpose, findCellposePython: findCellposePython, setupBtn: setupBtn, setupRow: setupRow, cpLabel: cpLabel, showCellposeState: showCellposeState, setupText: SETUP_TEXT, saveMovie: saveMovie, makeMovie: makeMovie, rm: rm, refresh: refresh, go: go, status: status, steps: steps, outDir: outDir, showBg: showBg, frame: frame, suggest: suggest, acceptAt: acceptAt, acceptAll: acceptAll, hoverAt: hoverAt, proposals: proposals, result: result, info: info, removeSelected: removeSelected, undoLast: undoLast, root: root]); refresh(true); return }
+if (testGui) { binding.setVariable("hooks", [nextLine: nextLine, addRespondersBtn: addRespondersBtn, addMissedBtn: addMissedBtn, continueBtn: continueBtn, acceptAllBtn: acceptAllBtn, autoSuggestAsked: { -> autoSuggestAsked }, legendClicked: { String k, boolean o -> legendClicked.call(k, o) }, hiddenKinds: hiddenKinds, cellRois: cellRois, sensBox: sensBox, basisFor: basisFor, responseSeen: { -> responseSeen }, reveal: { -> reveal() }, runSensitivity: runSensitivity, trace: trace, respondsLegend: respondsLegend, viewAllBtn: viewAllBtn, viewBaselineBtn: viewBaselineBtn, viewResponseBtn: viewResponseBtn, selectionNote: selectionNote, selectionBasis: { -> selectionBasis }, changeBtn: changeBtn, changeRecording: changeRecording, continueBtn: continueBtn, backToCellsBtn: backToCellsBtn, backToMeasureBtn: backToMeasureBtn, cards: [s1, s2, s3, s4], recordingNote: recordingNote, detectionProgress: detectionProgress, suggestBtn: suggestBtn, edgeBox: edgeBox, addBtn: addBtn, setForceFresh: { boolean v -> forceFresh = v }, setupCellpose: setupCellpose, findCellposePython: findCellposePython, setupBtn: setupBtn, setupRow: setupRow, cpLabel: cpLabel, showCellposeState: showCellposeState, setupText: SETUP_TEXT, saveMovie: saveMovie, makeMovie: makeMovie, rm: rm, refresh: refresh, go: go, status: status, steps: steps, outDir: outDir, viewSwitch: viewSwitch, showSwitches: legendEntries, moreBtn: moreBtn, recordingName: recordingName, frame: frame, suggest: suggest, acceptAt: acceptAt, acceptAll: acceptAll, hoverAt: hoverAt, proposals: proposals, result: result, info: info, removeSelected: removeSelected, undoLast: undoLast, root: root]); refresh(true); return }
 frame.setVisible(true)
 timer.start()
 refresh(true)

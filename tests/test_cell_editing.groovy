@@ -48,15 +48,15 @@ try {
         steps.traceOf = { r, rois -> [1d,2d,1d] as double[] }
         def binding = new Binding(imp:picture,steps:steps,look:false,rm:manager,testGui:true,outDir:new File('build/results/cells').absoluteFile)
         ui = new GroovyShell(loader,binding).evaluate(imports + construction.replace('frame.setAlwaysOnTop(true)','frame.setAlwaysOnTop(false)') +
-            '\nshowBg.setSelected(false)\n' + logic + listeners +
-            '\nreturn [frame:frame, progress:detectionProgress, proposals:proposals, refresh:refresh, click:clickCellAt, remove:removeBtn, undo:undoBtn, mode:removeMode, hint:editHint, show:showSug, edge:edgeBox, add:addBtn, oval:ovalBtn, free:freeBtn, acceptAll:acceptAll, edits:cellEdits, status:status]')
+            '\nhiddenKinds.add("background")\n' + logic + listeners +
+            '\nreturn [frame:frame, progress:detectionProgress, proposals:proposals, refresh:refresh, click:clickCellAt, remove:removeBtn, undo:undoBtn, mode:removeMode, hint:editHint, hidden:hiddenKinds, edge:edgeBox, add:addBtn, oval:ovalBtn, free:freeBtn, acceptAll:acceptAll, edits:cellEdits, status:status]')
         def installed = picture.getCanvas().getMouseListeners().findAll { !originalMouseListeners.contains(it) }
         assert installed.size() == 1
         pluginMouse = installed.first()
         ui.frame.visible = true
         IJ.setTool('oval')
         cells.eachWithIndex { r,i -> manager.addRoi(r); manager.rename(i,'Cell '+(i+1)) }
-        ui.show.selected = false
+        ui.hidden.addAll(['g0', 'g1', 'g2', 'g3'])   // no suggestions on the picture
         ui.refresh(true)
         assert !ui.status.text.contains('Exception') : ui.status.text
     }
@@ -92,7 +92,7 @@ try {
 
     onUI {
         ui.proposals << [roi:new OvalRoi(120,120,30,30),cx:135,cy:135,grade:1,edge:false,ev:[1,900,0,0,1,0,0,0] as double[]]
-        ui.show.selected = true
+        ui.hidden.removeAll(['g0', 'g1', 'g2', 'g3'])
     }
     click(135,135)
     onUI { assert counts() == 3 : 'Removal mode accepted a suggestion'; ui.mode.doClick() }

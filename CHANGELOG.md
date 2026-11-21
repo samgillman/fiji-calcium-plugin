@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026.11.21.6
+
+The plugin's window in Fiji, polished: Step 2 "Choose the cells" most of all. No measurement, response call or saved table changes; what is recorded about how cells were chosen is unchanged.
+
+- **Text uses the card's width.** Every sentence used to wrap at one fixed width, short of the card, and left a strip empty on the right. It now fills the card and follows the window when you resize it.
+- **The four actions keep their places:** Suggest cells and Accept likely on one line, Add cells that respond… and Continue to measure on the next. The next one to press is blue; one that cannot be pressed now is gray instead of gone. Each column is as wide as its longest label, so nothing moves when a label or the blue button changes. Before, the blue button sat in a different place in each of five states.
+- **Picture is one joined switch:** All frames | Before response | Response, like "Average | One cell + average" on the Step 4 page. The line under it still says what the choice means (blind, magenta). The names lost their brackets and the ellipsis; Before response still asks which frames.
+- **The counts come straight after the actions,** then the tools for your cells on two lines: Remove selected, Undo and Draw by hand; then "Click cells to remove" and "Leave out cells within 40 px of the edge". The report of the last detection, with Details and Log, comes after them.
+- **Show: one switch per kind on the picture** (your cells, likely a cell, unsure, background, precipitate?, responds), each with a tick and a sample of how it is drawn. They were legend entries that looked like plain labels. "Show suggestions" and "Show background", which did the same job a second time, are gone; "Draw by hand, what is shown" is now "Draw by hand".
+- **No empty box.** The trace frame takes its room when there is a trace to show. After Add cells that respond it used to stand empty, saying "Traces are hidden while choosing cells blind" although the picture was the response.
+- One left edge for text, buttons and ticks (buttons sat 6 pixels in; Details and Log another 2 pixels off). One tick box everywhere in the window. "Next:" is the window's own blue.
+- The recording's name is cut in its middle to the width there is (it was cut to 40 characters); hover for the whole name.
+- The window opens with room for its scrollbar, so one that has to scroll down has no bar along the bottom.
+
 ## 2026.11.21.5
 
 The line on the Step 4 plot that marks the picture's frame is shown only while the frame moves. No measurement, response call or saved table changes.

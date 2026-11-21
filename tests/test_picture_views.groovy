@@ -65,6 +65,11 @@ try {
         assert hooks.viewBaselineBtn.getUI().chosen && !hooks.viewResponseBtn.getUI().chosen && hooks.selectionNote.text.contains('Blind')
         assert hooks.recordingNote.text.contains('blind') && !hooks.recordingNote.text.contains('magenta')
         assert hooks.sensBox.visible && !hooks.respondsLegend.visible && hooks.trace.vals == null && hooks.trace.caption.contains('hidden')
+        assert !hooks.trace.visible : 'No empty frame for a trace that is not shown'
+        // the picture choice is one joined switch with plain names; the four actions are always there, gray when they cannot be pressed
+        assert [hooks.viewAllBtn, hooks.viewBaselineBtn, hooks.viewResponseBtn]*.text == ['All frames', 'Before response', 'Response'] && [hooks.viewAllBtn, hooks.viewBaselineBtn, hooks.viewResponseBtn].every { it.parent.is(hooks.viewSwitch) }
+        assert [hooks.suggestBtn, hooks.acceptAllBtn, hooks.addRespondersBtn, hooks.continueBtn].every { it.visible } && !hooks.acceptAllBtn.enabled && hooks.suggestBtn.getUI().primary
+        assert hooks.recordingName.whole == 'views.tif' && hooks.showSwitches.keySet() == ['cells', 'g0', 'g1', 'g2', 'background', 'g3'] as Set
         // hovering over a cell shows what it is, but no trace
         hooks.rm.addRoi(new OvalRoi(16, 22, 16, 16)); hooks.refresh(true)
         assert hooks.hoverAt(24, 30).contains('Your cell 1') && hooks.trace.vals == null && !hooks.responseSeen() : 'No trace while choosing blind'
@@ -78,7 +83,9 @@ try {
         int drawnAll = picture.getOverlay().size()
         hooks.legendClicked('cells', false); int withoutCells = picture.getOverlay().size()
         assert withoutCells < drawnAll && hooks.hiddenKinds == ['cells'] as Set : 'Your cells can be hidden'
-        hooks.legendClicked('cells', false); assert picture.getOverlay().size() == drawnAll && hooks.hiddenKinds.isEmpty()
+        assert !hooks.showSwitches.cells.part.on && hooks.showSwitches.background.part.on && hooks.nextLine.text.contains('Tick them under Show') : 'The switch shows what is hidden, and the Next line says where to bring it back'
+        hooks.showSwitches.cells.part.clicked(false)   // a click on the switch itself
+        assert picture.getOverlay().size() == drawnAll && hooks.hiddenKinds.isEmpty() && hooks.showSwitches.cells.part.on
         hooks.legendClicked('background', false); hooks.legendClicked('background', true)
         assert hooks.hiddenKinds == ['cells', 'g0', 'g1', 'g2', 'g3'] as Set && picture.getOverlay().size() <= withoutCells : 'Double-click: only the background'
         hooks.legendClicked('background', false); hooks.legendClicked('background', true)
@@ -94,9 +101,11 @@ try {
         assert other.grade(new OvalRoi(16, 22, 16, 16)) == steps.grade(new OvalRoi(16, 22, 16, 16)) : 'Blind grades do not change with the response frames'
         canvas = picture.getCanvas(); listeners = canvas.getMouseListeners() as List
         hooks.viewAllBtn.doClick()
-        assert !hooks.addRespondersBtn.visible && hooks.nextLine.text.contains('Continue to measure') && !hooks.nextLine.text.contains('Add cells that respond') && !hooks.autoSuggestAsked()
+        assert hooks.addRespondersBtn.visible && !hooks.addRespondersBtn.enabled && hooks.nextLine.text.contains('Continue to measure') && !hooks.nextLine.text.contains('Add cells that respond') && !hooks.autoSuggestAsked()
         assert !steps.blind && hooks.selectionBasis() == 'All-frames structural review' && active(picture) == '110' && hooks.viewAllBtn.getUI().chosen
         assert !hooks.sensBox.visible && hooks.respondsLegend.visible && hooks.recordingNote.text.contains('response near frame')
+        assert !hooks.trace.visible && !hooks.trace.caption.contains('hidden') : 'Out of blind choosing nothing says traces are hidden; the frame waits for a trace'
+        assert hooks.hoverAt(24, 30).contains('Your cell 1') && hooks.trace.vals != null && hooks.trace.visible : 'The trace takes its room when there is one to show'
         assert (picture.getStack().getPixels(2) as float[]) == (steps.allPic.getProcessor().getPixels() as float[])
         hooks.viewResponseBtn.doClick()
     }

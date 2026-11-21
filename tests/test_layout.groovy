@@ -16,7 +16,8 @@ def makeUI = {
     new GroovyShell(loader,binding).evaluate('import ij.IJ\nimport ij.Prefs\nimport java.awt.Color\n' +
         fragment.replace('frame.setAlwaysOnTop(true)', 'frame.setAlwaysOnTop(false)') +
         '\nreturn [frame:frame,root:root,scroll:scroll,progress:detectionProgress,close:closeBtn,go:go,add:removeBtn,trace:trace,info:info,\n' +
-        '    openStep:openStep,choose:s2,measure:s3,analyze:s4,next:continueBtn,analyzeButton:analyzeBtn]')
+        '    openStep:openStep,choose:s2,measure:s3,analyze:s4,next:continueBtn,analyzeButton:analyzeBtn,\n' +
+        '    suggest:suggestBtn,accept:acceptAllBtn,responders:addRespondersBtn,views:viewSwitch,status:status,nextLine:nextLine,tick:removeMode,name:recordingName]')
 }
 def onUI = { Closure action -> SwingUtilities.invokeAndWait(action as Runnable) }
 def settle = { ui ->
@@ -36,7 +37,7 @@ def settle = { ui ->
 def controlsFit = { ui ->
     assert ui.root.height >= ui.root.preferredSize.height
     assert ui.root.width >= ui.root.preferredSize.width
-    assert ui.trace.height >= ui.trace.preferredSize.height
+    assert !ui.trace.visible || ui.trace.height >= ui.trace.preferredSize.height   // the trace takes room only when there is one
     def walk; walk = { c ->
         if (!c.visible) return
         c.components.each { child ->
@@ -112,11 +113,35 @@ try {
                 controlsFit(ui)
                 assert !ui.scroll.horizontalScrollBar.visible : 'Horizontal scrollbar should disappear when the layout fits'
                 reveal(ui,ui.close)
+                // Text fills its card and follows the window; buttons, ticks and text share one left edge.
+                def left = { c -> SwingUtilities.convertPoint(c.parent, c.location, ui.choose.body).x }
+                int inner = ui.choose.body.width - ui.choose.body.insets.left - ui.choose.body.insets.right
+                assert ui.info.width == inner && ui.status.width == inner && ui.nextLine.width == inner : 'Text is as wide as its card'
+                assert [ui.add, ui.suggest, ui.responders, ui.tick, ui.status, ui.nextLine].collect { left(it) }.unique() == [ui.choose.body.insets.left] : 'One left edge'
+                ui.nextLine.setText('<html>' + ('several words that have to wrap ' * 12) + '</html>'); ui.frame.validate()
+                int wide = ui.nextLine.height; assert wide > ui.status.height : 'A long sentence takes the lines it needs'
+                // The four actions keep their places and sizes whatever they say and whichever is the blue one.
+                def places = { [ui.suggest, ui.accept, ui.responders, ui.next].collect { SwingUtilities.convertRectangle(it.parent, it.bounds, ui.choose.body) } }
+                def before = places()
+                ui.accept.setText('Accept responding and likely (888)'); ui.suggest.setText('Suggest cells again'); ui.accept.setEnabled(true)
+                [ui.suggest, ui.accept, ui.responders, ui.next].each { b -> loader.loadClass('CalciumTheme').primary(b, b.is(ui.accept)) }
+                ui.frame.validate()
+                assert places() == before && ui.accept.width >= ui.accept.getFontMetrics(ui.accept.font).stringWidth(ui.accept.text) + 20 : 'Labels and the blue button change; places do not'
+                assert before[0].y == before[1].y && before[2].y == before[3].y && before[0].x == before[2].x && before[1].x == before[3].x && before[0].width == before[2].width && before[1].width == before[3].width
+                // The picture choice is one joined control: each part starts on the last pixel of the one before.
+                def parts = ui.views.parts; assert parts.size() == 3 && (1..2).every { parts[it].x == parts[it - 1].x + parts[it - 1].width - 1 && parts[it].height == parts[0].height }
+                // A trace takes its room when it is shown, and nothing else is squeezed.
+                ui.trace.setVisible(true); ui.frame.refreshContents(); ui.frame.validate(); controlsFit(ui); assert ui.trace.height >= ui.trace.preferredSize.height; ui.trace.setVisible(false)
+                // A long file name is cut in its middle to the width there is; the whole name is one hover away.
+                ui.name.setWhole('2026-11-18_' + ('a-very-long-part_' * 12) + 'end.zvi'); ui.frame.validate()
+                assert ui.name.width == inner && ui.name.toolTipText.endsWith('end.zvi')
+                def fm = ui.name.getFontMetrics(ui.name.font); String shown = loader.loadClass('CalciumTheme').fitMiddle(ui.name.whole, fm, ui.name.width)
+                assert shown.startsWith('2026-11-18_') && shown.endsWith('end.zvi') && shown.contains('…') && fm.stringWidth(shown) <= ui.name.width
                 ui.frame.setSize(320,260)
             }
             settle(ui)
-            onUI { controlsFit(ui); reveal(ui,ui.close) }
-            println 'PASS: step cards, interface font, resize, uncompressed controls, wheel scrolling, both scrollbars, bottom/right controls, stable size (' + look + ')'
+            onUI { controlsFit(ui); reveal(ui,ui.close); assert ui.nextLine.height > 0 && ui.nextLine.width < 700 : 'Text follows a narrower window too' }
+            println 'PASS: step cards, interface font, resize, uncompressed controls, wheel scrolling, both scrollbars, bottom/right controls, stable size, text that follows the width, one left edge, actions that keep their places, joined picture switch (' + look + ')'
         } finally {
             onUI { ui?.progress?.close(); ui?.frame?.dispose() }
         }
