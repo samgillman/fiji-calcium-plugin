@@ -416,6 +416,25 @@ const assert = require('assert/strict');
     assert.equal(await app('zoom'), zoomBefore, 'scrolling over the picture does not zoom it');
     await page.keyboard.down('Control'); await page.mouse.wheel(0, -300); await page.keyboard.up('Control'); await settledPaint();
     assert.ok(await app('zoom') > zoomBefore, 'Ctrl + scroll zooms'); await page.click('#zoom-all'); await page.evaluate(() => window.scrollTo(0, 0));
+    // The plot's time axis follows the same rule, and its hint says so.
+    const plotBox = await page.locator('#plot').boundingBox(), timeZoomed = () => page.evaluate(() => window.calciumStep4.Plot.x0 !== null);
+    await page.mouse.move(plotBox.x + plotBox.width / 2, plotBox.y + plotBox.height / 2); await page.mouse.wheel(0, -300); await settledPaint();
+    assert.equal(await timeZoomed(), false, 'scrolling over the plot does not zoom it');
+    await page.keyboard.down('Control'); await page.mouse.wheel(0, -300); await page.keyboard.up('Control'); await settledPaint();
+    assert.equal(await timeZoomed(), true, 'Ctrl + scroll zooms the time axis'); await page.mouse.dblclick(plotBox.x + plotBox.width / 2, plotBox.y + plotBox.height / 2);
+    assert.equal(await timeZoomed(), false, 'double-click resets it'); await page.evaluate(() => window.scrollTo(0, 0));
+    assert.match(await text('#plot-card .caption .help'), /Ctrl or ⌘ \+ scroll to zoom/);
+    // The settings: a label never wraps. Beside its control at the panel's usual width, above it when the panel is narrow.
+    const settingRows = () => page.evaluate(() => [...document.querySelectorAll('#side .row')].filter((r) => r.getBoundingClientRect().height).map((r) => { const label = r.querySelector('span'), a = label.getBoundingClientRect(), b = r.children[1].getBoundingClientRect(); return { label: label.textContent, wrapped: a.height > 30 || label.scrollWidth > label.clientWidth + 1, stacked: b.top >= a.bottom - 1 }; }));
+    const sideBefore = await page.evaluate(() => { const was = { width: document.documentElement.style.getPropertyValue('--side-w'), open: [...document.querySelectorAll('#side details')].map((d) => d.open) }; for (const d of document.querySelectorAll('#side details')) d.open = true; return was; });
+    for (const [width, stacked] of [[350, false], [300, true], [260, true], [460, false]]) {
+      await page.evaluate((w) => document.documentElement.style.setProperty('--side-w', w + 'px'), width); const rows = await settingRows();
+      assert.ok(rows.length >= 12, 'the settings rows are on the page'); assert.deepEqual(rows.filter((r) => r.wrapped).map((r) => r.label), [], 'no label wraps at ' + width);
+      assert.deepEqual(rows.filter((r) => r.stacked !== stacked).map((r) => r.label), [], (stacked ? 'every label above its control at ' : 'every label beside its control at ') + width);
+    }
+    await page.evaluate((was) => { if (was.width) document.documentElement.style.setProperty('--side-w', was.width); else document.documentElement.style.removeProperty('--side-w'); [...document.querySelectorAll('#side details')].forEach((d, i) => { d.open = was.open[i]; }); }, sideBefore);
+    // The frame rate is shown to four significant figures; the stored value keeps every digit.
+    assert.deepEqual(await page.evaluate(() => [1.0000537066691941, 0.999195, 2, 29.97, 0.5, 1000.04, '', null].map(window.calciumStep4.rateText)), ['1.000', '0.9992', '2', '29.97', '0.5', '1000', '', '']);
     // The settings panel folds away from its own edge.
     // One shape and one size: every button, list and field is the control height with the page's one corner, every box has that corner,
     // and nothing is a pill or a circle. Tabs, menu entries and links written as buttons are the stated exceptions.
@@ -481,7 +500,20 @@ const assert = require('assert/strict');
     assert.ok(await page.locator('#table-calls tbody .cell-column').first().evaluate((e) => {const a=e.getBoundingClientRect(),b=e.closest('.scroller').getBoundingClientRect();return a.left>=b.left-1&&a.left<b.left+5;}));
     await page.uncheck('#all-call-columns');
     await page.screenshot({ path: path.join(out, 'page-calls.png') });
-    await page.click('.tab[data-tab=metrics]'); await page.selectOption('#metrics-table', 'groups');
+    await page.click('.tab[data-tab=metrics]');
+    // The summary: each metric once, with its unit and where it is measured; saved columns with the same numbers share a row;
+    // the timing and shape of a response are given only for cells that responded.
+    const summary = await page.evaluate(() => { const t = document.getElementById('table-metrics'), saved = window.calciumStep4.S.results.tables.metrics;
+      return { head: [...t.tHead.rows[0].cells].map((c) => c.textContent), rows: [...t.tBodies[0].rows].map((r) => [...r.cells].map((c) => c.textContent)), frozen: t.tHead.rows[0].cells[0].classList.contains('cell-column'), savedHeader: saved.header }; });
+    assert.deepEqual(summary.head.slice(0, 3), ['Metric', 'Unit', 'Measured']); assert.equal(summary.head[summary.head.length - 1], 'Saved as'); assert.ok(summary.frozen, 'the metric names stay in view');
+    const savedAs = (row) => row[row.length - 1].split(', '), rowOf = (column) => summary.rows.find((row) => savedAs(row).includes(column)), allSaved = summary.rows.flatMap(savedAs);
+    assert.equal(new Set(allSaved).size, allSaved.length, 'no saved column is summarised twice'); assert.ok(allSaved.every((name) => summary.savedHeader.includes(name)));
+    assert.equal(rowOf('Peak_dFF0'), rowOf('Response_Amplitude'), 'columns with the same numbers share a row'); assert.deepEqual(rowOf('Peak_dFF0').slice(0, 3), ['Peak', 'ΔF/F₀', 'whole recording']);
+    assert.notEqual(rowOf('Time_to_Peak'), rowOf('Time_to_50_Peak')); assert.deepEqual(rowOf('Time_to_Peak').slice(0, 3), ['Peak time', 's', 'from recording start']);
+    const notResponded = summary.head.indexOf('Did not respond'), responded = summary.head.indexOf('Responded');
+    for (const column of ['Time_to_Peak', 'Time_to_50_Peak', 'Rise_Time', 'FWHM']) { assert.equal(rowOf(column)[notResponded], '–', column + ' is not given for cells that did not respond'); assert.match(rowOf(column)[responded], /n = \d/); }
+    assert.match(rowOf('Peak_dFF0')[notResponded], /n = \d/, 'the peak is given for every cell'); assert.match(await text('#metric-help'), /cells that responded/);
+    await page.selectOption('#metrics-table', 'groups');
     assert.match(await text('#table-metrics'), /No rows were saved/);
     await page.selectOption('#metrics-table', 'metrics'); assert.match(await text('#metric-help'), /signed net integral/);
     await page.click('#log'); await page.waitForFunction(() => /Opened .* on the Fiji computer/.test(document.getElementById('open-feedback').textContent));

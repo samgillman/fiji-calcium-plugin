@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026.11.20.23
+
+The Step 4 page only. No measurement, response call or saved per-cell table changes.
+
+- **The metrics summary lists each metric once**, with a plain name, its unit and where it is measured: over the whole recording or the response window, from recording start or from the stimulus. Saved columns that hold the same number for every cell share one row, and "Saved as" names them. Which columns do is read from the numbers, because it depends on the analysis. On the P2 Run1 and P3 Run2 analyses of 20 Nov:
+  - Peak_dFF0 = Response_Amplitude, Peak_increase = Window_peak_local_fraction and Onset_s = Run_start_s in both;
+  - all four peak columns are the same only in P2 Run1;
+  - AUC and Window_AUC_fraction_s are close but not the same (-18.996 against -18.991 on P2 Run1), so they stay two rows.
+- **The timing and shape of a response are summarised for cells that responded.** Onset, latency, peak time, rise and width of a cell that did not respond are the timing of noise: on P2 Run1 the 28 such cells averaged an FWHM of 2.1 s against 18.7 s for the cells that responded. "Did not respond" shows "–" in those rows, and "All cells" counts the responders there (its n says so). Peak, signal-to-noise, area and baseline are still given for every cell.
+- The summary's exported file (`metrics_summary`) gains the columns Unit, Measured and Saved_as. Two columns that say how much of the response window had data (Window_AUC_covered_s, Window_AUC_coverage_fraction) are no longer listed as metrics. The per-cell tables on disk are unchanged.
+- In a saved table, pointing at a column name says what the column is. The metric names stay in view when the summary scrolls sideways.
+- **Settings labels never wrap.** A label sits beside its control at the panel's usual width and above it when the panel is narrower than 344 pixels. Before, "Stimulus added after frame" took four lines in a narrow panel. Three labels are shorter: "Stimulus after frame", "Duration measured in", "Baseline samples".
+- **Frames per second is shown to four significant figures** (1.000, not 1.0000537066691941). The stored value keeps every digit, and the line under the box says when the value is the file's own.
+- **The plot zooms with Ctrl or ⌘ + scroll**, like the picture. A plain scroll over it moves the page.
+
 ## 2026.11.20.22
 
 The Step 4 page only. No measurement, response call or saved table changes.

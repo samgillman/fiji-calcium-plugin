@@ -309,7 +309,11 @@ body.has-results .workspace-heading { display: none; }
 #side .card { padding: 10px 12px; }
 #side .card h2 { font-size: 14px; margin: 0 0 4px; }
 #side .row { display: grid; grid-template-columns: minmax(0, 1fr) 176px; align-items: center; gap: 8px; margin: 4px 0; min-height: 28px; font-size: 13px; }
-#side .row > span:first-child { white-space: normal; color: var(--gray-900); }
+#side .row > span:first-child { white-space: nowrap; color: var(--gray-900); }
+/* A label never wraps. It sits beside its control while the panel is wide enough for the longest label on one line
+   (132px of label + 8 + the 176px control + the card's 28px); narrower than that, every label sits above its control. */
+aside { container: side / inline-size; }
+@container side (max-width: 343px) { #side .row { grid-template-columns: minmax(0, 1fr); gap: 2px; margin: 6px 0; } }
 #side .row > input, #side .row > select, #side .row .wide { width: 100%; max-width: none; min-width: 0; }
 #side .pair { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 5px; align-items: center; }
 #side .pair > input, #side .cell input { width: 100%; min-width: 0; }
