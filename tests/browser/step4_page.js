@@ -410,12 +410,26 @@ const assert = require('assert/strict');
       return { start: { x: x(S.results.time[12]), y: box.top + g.T + (g.hi - S.results.traces.Cell001[12]) / (g.hi - g.lo) * g.H },
         end: { x: x(S.results.time[21]), y: box.top + g.T + g.H / 2 } };
     });
+    // The numbers on the plot follow the pointer; nothing is written on the traces while nobody is reading it.
+    const readout = () => page.evaluate(() => window.calciumStep4.Plot.readout), secondsAt = (sample) => page.evaluate((i) => window.calciumStep4.S.results.time[i].toFixed(1) + ' s', sample);
+    const from = await secondsAt(12), to = await secondsAt(21);
+    await page.mouse.move(5, 5); assert.equal(await readout(), null, 'no box sits on the plot while the pointer is elsewhere');
+    await page.mouse.move(points.start.x, points.start.y);
+    assert.ok((await readout()).startsWith(from + ' · '), 'over the plot the numbers are those under the pointer'); assert.equal(await page.evaluate(() => window.calciumStep4.Plot.at), 12);
+    await page.mouse.move(points.end.x, points.end.y); assert.ok((await readout()).startsWith(to + ' · '), 'and move with it');
+    assert.notEqual(await page.evaluate(() => window.calciumStep4.S.frame), 22, 'looking does not move the recording');
+    await page.mouse.move(5, 5); assert.equal(await readout(), null, 'and go when the pointer leaves');
     await page.mouse.move(points.start.x, points.start.y); await page.mouse.down();
     assert.equal(await page.evaluate(() => window.calciumStep4.S.cell), 'Cell001');
     assert.ok(await page.evaluate(() => window.calciumStep4.Plot.scrubbing));
-    await page.mouse.move(points.end.x, points.end.y, { steps: 6 }); await page.mouse.up();
+    assert.ok((await readout()).startsWith(from + ' · Cell001 '), 'while dragging the numbers are the frame\'s');
+    await page.mouse.move(points.end.x, points.end.y, { steps: 6 }); assert.ok((await readout()).startsWith(to + ' · Cell001 '));
+    await page.mouse.up();
     await waitFrame(22);
     assert.equal(await page.evaluate(() => window.calciumStep4.Plot.scrubbing), false);
+    assert.ok((await readout()).startsWith(to + ' · Cell001 '), 'after the drag the numbers stay under the pointer');
+    await page.mouse.move(5, 5); assert.equal(await readout(), null, 'a click elsewhere leaves no box behind: the line alone marks the frame');
+    await page.mouse.move(points.end.x, points.end.y);
     assert.match(await text('#time-label'), /15\.50 s.*Frame 22 \/ 30/);
 
     // No cell selected is a state of its own (the page opens that way), and the plot follows the selection.

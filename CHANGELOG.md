@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.11.21.4
+
+The numbers on the Step 4 plot follow the pointer. No measurement, response call or saved table changes.
+
+- **No box sits on the traces any more.** The dark box with the time and the values used to stay at the frame shown in the picture (at 0.0 s when nothing had been moved), over the traces, whatever was clicked.
+- **Over the plot, the numbers are those under the pointer:** the time, each plotted mean and the selected cell, beside a dashed line. They move with the pointer and go when it leaves. Looking does not move the recording.
+- **While you drag in the plot or the movie plays,** the numbers are the frame's, at the solid line, as before. When the drag ends they go back to the pointer.
+- The solid line still marks the frame the picture shows.
+- The box moves to the top of the plot when a plotted value would be under it at the bottom.
+
 ## 2026.11.21.3
 
 A figure editor for the plot and the heatmap on the Step 4 page. No measurement, response call or saved table changes.

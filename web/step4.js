@@ -13,7 +13,7 @@
     (group === 3 && call === 'Excluded') || (group === 4 && call === 'Unscorable') || (group === 5 && qualityFor(name).length > 0 && (!S.qualityFlag || qualityFor(name).includes(S.qualityFlag)));
   const S = { unlinked: new Set(), validationShown: null, imported: null, info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'raw', viewChosen: false,
     every: false, plotMode: 'mean', signal: 'dff', outlines: true, outlineWidth: 1, order: 'call', palette: 'plasma', range: 'robust', tall: false, timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false };
-  const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, y: {}, hover: null, geom: null, scrubbing: false, drawn: [], series: [] };
+  const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, y: {}, hover: null, at: null, readout: null, geom: null, scrubbing: false, drawn: [], series: [] };
   const Pic = { base: null, shown: null, zoom: 1, panX: 0, panY: 0, drag: null, moved: false, shownFrame: null, error: null };
   // Movie frames: compressed images are kept for the session (about 40 MB for 300 full-size frames, much less at display size),
   // decoded ones only near the playhead. Keys carry the server's frame version, which changes with the baseline behind
@@ -1288,14 +1288,29 @@
       const y = shownTraces()[Plot.hover], gapLimit = samplingSupport().gap; ctx.strokeStyle = CALL[kind(callOf(Plot.hover))]; ctx.lineWidth = 2.2; ctx.lineJoin = 'round'; ctx.beginPath(); let pen = false;
       for (let i = 0; i < time.length; i++) { if (finite(y[i])) { if (pen && time[i] - time[i - 1] <= gapLimit) ctx.lineTo(X(time[i]), Y(y[i])); else ctx.moveTo(X(time[i]), Y(y[i])); pen = true; } else pen = false; } ctx.stroke();
     }
+    // The line marks the frame the picture shows. Its numbers are written only while that frame is being moved from here (a drag
+    // in the plot, or playing). Otherwise the numbers follow the pointer over the plot and go when it leaves: nothing sits on
+    // the traces while nobody is reading it.
+    const own = S.plotMode === 'cell' && S.cell ? shownTraces()[S.cell] : null, moving = Plot.scrubbing || !!S.timer; Plot.readout = null;
+    const plotted = (i) => (S.plotMode !== 'cell' ? Plot.series.map((series) => series.mean[i]) : []).concat(own ? [own[i]] : []);
+    const numbers = (at, i) => { let text = at.toFixed(1) + ' s'; if (S.plotMode !== 'cell') for (const series of Plot.series) if (finite(series.mean[i])) text += ' · ' + series.short + ' ' + series.mean[i].toFixed(3);
+      if (own && finite(own[i])) text += ' · ' + shortName(S.cell) + ' ' + own[i].toFixed(3); return text; };
+    /** The numbers in a box at the line x: along the bottom of the plot, or along the top when a plotted value lies under the box there. */
+    const label = (text, x, i) => {
+      ctx.font = '12px ' + getComputedStyle(document.body).fontFamily; const tw = ctx.measureText(text).width + 10, bx = Math.max(g.L, Math.min(g.L + g.W - tw, x - tw / 2));
+      const covers = (top) => plotted(i).some((v) => finite(v) && Y(v) > top - 4 && Y(v) < top + 22), bottom = g.T + g.H - 22, by = covers(bottom) && !covers(g.T + 8) ? g.T + 8 : bottom;
+      ctx.fillStyle = '#1F2933'; ctx.beginPath(); ctx.roundRect(bx, by, tw, 18, 6); ctx.fill(); ctx.fillStyle = '#fff'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.fillText(text, bx + 5, by + 9); Plot.readout = text;
+    };
     const t = Plot.playhead != null ? Plot.playhead : S.frame <= time.length ? time[S.frame - 1] : NaN;   // glides with the playhead while playing
     if (isFinite(t) && t >= g.x0 && t <= g.x1) {
       const x = Math.round(X(t)) + 0.5; ctx.strokeStyle = 'rgba(31,41,51,0.8)'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(x, g.T); ctx.lineTo(x, g.T + g.H); ctx.stroke();
-      const own = S.plotMode === 'cell' && S.cell ? shownTraces()[S.cell] : null; let text = t.toFixed(1) + ' s';
-      if (S.plotMode !== 'cell') for (const s of Plot.series) if (finite(s.mean[S.frame - 1])) text += ' · ' + s.short + ' ' + s.mean[S.frame - 1].toFixed(3);
-      if (own && finite(own[S.frame - 1])) { const y = Math.max(g.T, Math.min(g.T + g.H, Y(own[S.frame - 1]))); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, 5, 0, 7); ctx.fill(); ctx.fillStyle = '#1F2933'; ctx.beginPath(); ctx.arc(x, y, 3.2, 0, 7); ctx.fill(); text += ' · ' + shortName(S.cell) + ' ' + own[S.frame - 1].toFixed(3); }
-      ctx.font = '12px ' + getComputedStyle(document.body).fontFamily; const tw = ctx.measureText(text).width + 10, bx = Math.max(g.L, Math.min(g.L + g.W - tw, x - tw / 2));
-      ctx.fillStyle = '#1F2933'; ctx.beginPath(); ctx.roundRect(bx, g.T + g.H - 22, tw, 18, 6); ctx.fill(); ctx.fillStyle = '#fff'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.fillText(text, bx + 5, g.T + g.H - 13);
+      if (own && finite(own[S.frame - 1])) { const y = Math.max(g.T, Math.min(g.T + g.H, Y(own[S.frame - 1]))); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, 5, 0, 7); ctx.fill(); ctx.fillStyle = '#1F2933'; ctx.beginPath(); ctx.arc(x, y, 3.2, 0, 7); ctx.fill(); }
+      if (moving) label(numbers(t, S.frame - 1), x, S.frame - 1);
+    }
+    const at = moving ? null : Plot.at;   // the sample under the pointer
+    if (at != null && finite(time[at]) && time[at] >= g.x0 && time[at] <= g.x1) {
+      const x = Math.round(X(time[at])) + 0.5; ctx.strokeStyle = 'rgba(31,41,51,0.4)'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(x, g.T); ctx.lineTo(x, g.T + g.H); ctx.stroke(); ctx.setLineDash([]);
+      label(numbers(time[at], at), x, at);
     }
     ctx.restore();
   }
@@ -2018,13 +2033,14 @@
       if (Plot.scrubbing) {
         const g = Plot.geom, box = plot.getBoundingClientRect(); if (g) seek(g.x0 + Math.max(0, Math.min(1, (event.clientX - box.left - g.L) / g.W)) * (g.x1 - g.x0)); tip(''); return;
       }
-      const at = traceAt(event); if (!at) { tip(''); if (Plot.hover) { Plot.hover = null; drawPlot(); } return; }
-      if (at.name !== Plot.hover) { Plot.hover = at.name; drawPlot(); }
+      const at = traceAt(event), sample = at ? at.index : null, moved = sample !== Plot.at; Plot.at = sample;   // the numbers follow the pointer
+      if (!at) { tip(''); if (Plot.hover || moved) { Plot.hover = null; drawPlot(); } return; }
+      if (at.name !== Plot.hover || moved) { Plot.hover = at.name; drawPlot(); }
       tip(at.name ? fullName(at.name) + ' · ' + shownTraces()[at.name][at.index].toFixed(3) + ' at ' + S.results.time[at.index].toFixed(1) + ' s' + (callOf(at.name) ? ' · ' + callOf(at.name) : '') : '', event.clientX, event.clientY);
     });
-    plot.addEventListener('pointerleave', () => { tip(''); if (Plot.hover) { Plot.hover = null; drawPlot(); } });
+    plot.addEventListener('pointerleave', () => { tip(''); if (Plot.hover || Plot.at != null) { Plot.hover = null; Plot.at = null; drawPlot(); } });
     plot.addEventListener('pointerdown', (event) => { const at = traceAt(event); if (!at) return; event.preventDefault(); if (at.name && at.name !== S.cell) chooseCell(at.name); Plot.scrubbing = true; plot.setPointerCapture(event.pointerId); seek(at.time); });
-    for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) plot.addEventListener(type, () => { Plot.scrubbing = false; });
+    for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) plot.addEventListener(type, (event) => { if (!Plot.scrubbing) return; Plot.scrubbing = false; const at = traceAt(event); Plot.at = at ? at.index : null; drawPlot(); });   // the drag is over: the numbers go back to the pointer
     plot.addEventListener('wheel', (event) => { const g = Plot.geom; if (!g || !(event.ctrlKey || event.metaKey)) return; event.preventDefault(); const box = plot.getBoundingClientRect(), share01 = Math.max(0, Math.min(1, (event.clientX - box.left - g.L) / g.W));
       const centre = g.x0 + share01 * (g.x1 - g.x0), factor = Math.pow(1.0015, event.deltaY), span = Math.min(g.full1 - g.full0, Math.max((g.full1 - g.full0) / 60, (g.x1 - g.x0) * factor));
       let a = centre - share01 * span, b = a + span; if (a < g.full0) { b += g.full0 - a; a = g.full0; } if (b > g.full1) { a -= b - g.full1; b = g.full1; }
