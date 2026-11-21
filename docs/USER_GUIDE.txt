@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.21.1.
+A plugin for Fiji / ImageJ.  Version 2026.11.21.3.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -252,8 +252,9 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        group chosen under Show, and nothing else. The buttons above it switch to
                        "One cell + average" or "Responders vs non-responders".
                        Signal: dF/F0, gray levels above background, or raw gray values (not corrected).
-                       Cell list: None (no cell selected; the page opens that way, Esc returns to it)
-                       or a cell. With a cell selected the plot shows that cell over the average.
+                       Cell box: empty (no cell selected; the page opens that way, Esc returns to it)
+                       or a cell. Type its name, or its number and Enter, or pick it from the list.
+                       With a cell selected the plot shows that cell over the average.
                        View: Recording, Background removed, GFP (the same in green), Response in
                        magenta (GFP plus the rise above what the background did, averaged over
                        9 x 9 pixels and 5 frames), Change from baseline (that rise alone), Colour
@@ -264,9 +265,17 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        Each panel has one Export menu in its corner (the picture, the plot, the heatmap
                        and the tables). In it, Save plot puts the picture, its numbers (CSV) and how it
                        was made into a "plots" folder beside the tables, Download hands the same file to
-                       the browser, and Options sets the format (PNG or TIFF),
-                       the size in inches, the resolution (150, 300 or 600 dpi, recorded in the file)
-                       and the TIFF compression (LZW, ZIP or none; LZW and ZIP lose nothing).
+                       the browser. For the plot and the heatmap, Edit figure opens the figure with a
+                       preview that is the saved picture itself, and beside it: width and height in
+                       inches, resolution and format; title, axis titles, font, text sizes and colour;
+                       for the plot the axis minimum, maximum and tick spacing, frame, grid lines, and
+                       the thickness and colour of each line; for the heatmap its colours and a colour
+                       scale you can type so several recordings share one. Size, font, colours and
+                       thicknesses are kept for the next recording; the title and the axis numbers are
+                       not. Reset returns the figure to how it was. For pictures and frames, Options
+                       sets the format (PNG or TIFF), the width in inches, the resolution (150, 300 or
+                       600 dpi, recorded in the file) and the TIFF compression (LZW, ZIP or none; LZW
+                       and ZIP lose nothing). Format and resolution are the figures' too.
                        Save picture saves the view on screen with the outlines shown and a colour key;
                        Save frames… saves every Nth frame of a movie view, each labelled with its
                        frame and time. Signal also offers dF/F0 of the raw values. View: the recording as recorded, with the background
@@ -500,8 +509,10 @@ Invalid settings show inline errors and must be corrected before analysis. Rule 
 separate drafts; Discard pending changes restores the completed-run settings, including files.
 A positive control needs its actual timing entered. Review the suggested primary onset and
 keep the inclusive F0 baseline before stimulation; overlap produces a visible warning.
-Quality warnings are a chip in the row of result figures ("19 cells flagged"; click it for the list)
-and a line on the plot card under the selected cell's call, with a Needs quality review entry under
+Quality warnings are a button in the row of result figures ("19 cells flagged"). Its list has a row
+for every flagged cell with its call and its flags; a click on a row opens that cell, and the left
+and right arrow keys then step through the flagged cells. Warnings also show as
+a line on the plot card under the selected cell's call, with a Needs quality review entry under
 Show. Warnings do not automatically exclude cells or change saved calls.
 Where things are since 2026.11.20.19: a warning or error about a setting sits under that setting, and
 the Run box only says how many there are ("1 warning above"; click it to go there). The result figures

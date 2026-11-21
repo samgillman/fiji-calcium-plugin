@@ -96,6 +96,12 @@ assert Settings.pagePrefs() == ['step4.side': '420px', 'step4.split': '34.1%', '
 Settings.setPagePref('step4.side', null); assert !Settings.pagePrefs().containsKey('step4.side')
 ['step4.side': 'javascript:1', 'step4.split': '150%', 'other': '1'].each { k, v -> try { Settings.setPagePref(k, v); assert false : k } catch (IllegalArgumentException expected) { } }
 Settings.setPagePref('step4.split', null); Settings.setPagePref('step4.help', null)
+// The figure editor's settings are kept as one line of JSON for the plot and one for the heatmap; anything else is refused.
+String figure = '{"width":6,"height":4,"font":"arial","grid":false,"xTitle":"Time (s)","ink":"#000000"}'
+assert Settings.setPagePref('step4.figure.plot', figure).kept == 'step4.figure.plot' && Settings.pagePrefs()['step4.figure.plot'] == figure
+Settings.setPagePref('step4.figure.heatmap', '{}'); assert Settings.pagePrefs()['step4.figure.heatmap'] == '{}'
+[['step4.figure.plot', 'width=6'], ['step4.figure.heatmap', '{"a":1}\n{'], ['step4.figure.other', '{}'], ['step4.figure.plot', '{' + 'x' * 1600 + '}']].each { pair -> try { Settings.setPagePref(pair[0], pair[1]); assert false : pair } catch (IllegalArgumentException expected) { } }
+Settings.setPagePref('step4.figure.plot', null); Settings.setPagePref('step4.figure.heatmap', null); assert !Settings.pagePrefs().keySet().any { (it as String).startsWith('step4.figure') }
 println 'PASS: pane sizes and the explanations switch are remembered with Fiji\'s preferences'
 // saved pictures: PNG or TIFF with the resolution in the file; TIFF compressed LZW or ZIP, or not at all
 def Picture = loader.loadClass('CalciumPictureFile')
