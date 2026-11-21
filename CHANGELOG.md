@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026.11.20.20
+
+Fewer cells are left for you to pick up by hand. Measured by running this build on the four audited ATP recordings (837 audited cells; cells chosen blind on the frames the plugin offers). No measurement or response threshold changes.
+
+- **"Accept likely" takes more of the cells.** An outline is now also graded "likely a cell" when it is cell-sized (500 pixels or more), stands out from its surroundings by more than 0.3 gray levels, is not bright on average (8 gray levels or less) and has less than 60 % very bright pixels. Until now a bright dot inside (2 % of its pixels) made a cell "unsure", and 25 % bright pixels made it "very bright".
+  - Accept likely took the outlines of 232 audited cells; now 360.
+  - Of the outlines it accepts, 73 % were on audited cells; now 71 %.
+  - Unchanged: an outline brighter than 8 gray levels on average stays "very bright", and a small one or one touching the picture's border is not accepted in bulk.
+- **A third blind picture when Cellpose uses a graphics chip.** Besides the pictures shown 0–2 and 0–8 gray levels, Cellpose also gets the one shown 0–4, and its outlines are added by the same rule (less than 10 % shared with every outline kept so far). 567 audited cells get an outline instead of 547, for 6 % more outlines and about 18 seconds. Without a graphics chip the third picture is not run, because each picture takes minutes there.
+- Together, audited cells that end in a "likely" outline went from 243 (29 %) to 380 (45 %). Still open: 270 audited cells (32 %) get no outline at all, and 89 (11 %) sit in outlines hidden by the edge rule.
+- The grading rule was chosen on these same four recordings, so expect a little less on others. P3 Run2 is the weakest: 56 % of its accepted outlines are on audited cells (58 % before).
+
 ## 2026.11.20.19
 
 - **Responding cells are no longer walked past.** Blind selection alone leaves cells that only show when they respond without an outline: on P2 Run1 ATP it gave 65 cells, and 92 more were found once the response was shown. In a recording with a response:

@@ -1,4 +1,4 @@
-// Calcium imaging: cells step by step                                                    version 2026.11.20.19
+// Calcium imaging: cells step by step                                                    version 2026.11.20.20
 // One plugin for the whole job on one recording:
 //   1. choose the recording (already open in Fiji, or a file) and a folder for the results
 //   2. the plugin makes the cells visible: all-frames picture, response (found automatically, if there is one), and a
@@ -65,6 +65,9 @@ class CalciumSteps {
     static int MIN_PIXELS = 150          // fewer usable pixels: the band is doubled once; still fewer: no background
     static int SUGGEST_MIN_AREA = 150, SUGGEST_MAX_AREA = 6000   // automatic outlines outside this size (pixels) are not shown
     static double SUGGEST_BRIGHT = 12    // automatic outlines brighter than this on average are shown in red: probably precipitate
+    // the wider "likely" rule of 2026.11.20.20 (see grade): at least this many pixels, this much brighter than the surroundings, and less than this share of very bright pixels
+    static int LIKELY_MIN_AREA = 500
+    static double LIKELY_CONTRAST = 0.3, LIKELY_BRIGHT_SHARE = 0.6
     // Blind selection: cells are found and accepted on frames before the response only, so whether a cell is chosen cannot depend on its response.
     // Detection pictures for Cellpose: the picture of the frames before the response shown twice, from 0 to BLIND_CAP and from 0 to BLIND_CAP_HIGH gray
     // levels, brighter pixels capped. The low cap keeps precipitate and rounded cells from flattening the dim cells; the high cap
@@ -76,6 +79,10 @@ class CalciumSteps {
     // own 90th percentile was never better than the best fixed cap. Cost: 25-55 % more suggestions to review.
     static double BLIND_CAP = 2
     static double BLIND_CAP_HIGH = 8
+    // With a graphics chip a third picture, 0 to BLIND_CAP_MID, is run as well and its outlines are added by the same rule against
+    // the outlines kept so far. Measured 20 Nov 2026 on four audited recordings: 68.3 % of the audited cells get an outline against
+    // 65.5 % with two pictures, for 6 % more outlines. Without a graphics chip each picture takes minutes, so it is left out there.
+    static double BLIND_CAP_MID = 4
     static double BLIND_MERGE_OVERLAP = 0.10
     // -------------------------------------------------------------------
 
@@ -117,7 +124,7 @@ class CalciumSteps {
     /** Steps 1-2: pictures. The movie is only read. */
     void prepare(ImagePlus imp, boolean lookForResponse) {
         movie = imp; n = imp.getStackSize(); w = imp.getWidth(); h = imp.getHeight()
-        say("Calcium imaging plugin, version 2026.11.20.19")
+        say("Calcium imaging plugin, version 2026.11.20.20")
         say("Recording: " + imp.getTitle() + " (" + n + " frames, " + w + " x " + h + ", " + imp.getBitDepth() + "-bit)")
         // Did the field move? Nothing is corrected; moved frames are named so that they can be kept out of baselines.
         try { motionShifts = CalciumMotion.shifts(imp.getStack(), n) } catch (Throwable ignored) { motionShifts = null }
@@ -504,6 +511,13 @@ class CalciumSteps {
             if (brightShare < 0.02d && contrast > 0.2d && !edge && mean <= BRIGHT_ABOVE) g = 1
             if (own && brightShare < 0.10d && mean <= BRIGHT_ABOVE) g = 0
         }
+        // Wider "likely" (2026.11.20.20). A cell-sized outline that stands out from its surroundings and is not bright on average is
+        // likely a cell even with bright parts inside. Measured 20 Nov 2026 on the blind suggestions of four audited recordings
+        // (871 outlines, 427 on audited cells): the rule above alone marks 312 outlines likely, 73 % of them on audited cells, which is
+        // 53 % of the outlines that are cells; with this rule 472, 72 % and 80 %. It re-grades outlines that were unsure (a bright dot
+        // inside, or contrast between 0.2 and 0.3 is NOT enough: contrast must exceed LIKELY_CONTRAST) and outlines that were "very
+        // bright" only for their share of bright pixels. An outline brighter than BRIGHT_ABOVE on average stays as it was.
+        if (g >= 2 && mean <= BRIGHT_ABOVE && a >= LIKELY_MIN_AREA && contrast > LIKELY_CONTRAST && brightShare < LIKELY_BRIGHT_SHARE && !edge) g = 1
         // An outline that rises on its own at the stimulus is a cell even when part of it is very bright: precipitate does not
         // respond. Before 2026.11.20.9 such cells were graded unsure or precipitate and left out by "Accept likely" (on P3 Run2,
         // 17 of 58 clearly responding areas had no chosen cell; with this rule 6, of which 4 lie at the picture's edge). The rise must also be at least 5 % of the outline's brightness, so
@@ -818,7 +832,7 @@ class CalciumSensitivity {
 
 /** Release lookup sends no recording data. Installation requires an explicit button click. */
 class CalciumRelease {
-    static final String VERSION = "2026.11.20.19"
+    static final String VERSION = "2026.11.20.20"
     static final String REPOSITORY = "https://github.com/samgillman/fiji-calcium-plugin"
     static final String API = "https://api.github.com/repos/samgillman/fiji-calcium-plugin/releases/latest"
     static final String ASSET = "Calcium_Imaging_Fiji_Plugin.zip"
@@ -4617,12 +4631,18 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
     def dir = comparison != null ? (File) comparison.dir : new File(outDir, blindRun ? "automatic_outlines_blind" : "automatic_outlines"); dir.mkdirs()
     // Blind: Cellpose runs on two pictures, 0 to BLIND_CAP and 0 to BLIND_CAP_HIGH gray levels, each in its own folder, and the
     // outlines are combined (CalciumSteps.blindOutlinesToAdd). Otherwise one picture, in dir.
-    def runs = blindRun ? (0..1).collect { int i ->
-            double cap = i == 0 ? CalciumSteps.BLIND_CAP : CalciumSteps.BLIND_CAP_HIGH; String lv = CalciumSteps.levels(cap)
-            [label: "picture " + (i + 1) + " (0-" + lv + " gray levels)", part: "Blind picture " + (i + 1) + " of 2 (0-" + lv + " gray levels)", shown: "0 to " + lv,
-             dir: new File(dir, "picture_" + (i + 1) + "_shown_0_to_" + lv + "_gray_levels"), pic: steps.blindOutlinePicture(cap)] }
+    def blindPicture = { int i ->
+        double cap = i == 0 ? CalciumSteps.BLIND_CAP : i == 1 ? CalciumSteps.BLIND_CAP_HIGH : CalciumSteps.BLIND_CAP_MID; String lv = CalciumSteps.levels(cap)
+        [label: "picture " + (i + 1) + " (0-" + lv + " gray levels)", part: "Blind picture " + (i + 1) + (i < 2 ? " of 2" : ", with a graphics chip") + " (0-" + lv + " gray levels)", shown: "0 to " + lv,
+         dir: new File(dir, "picture_" + (i + 1) + "_shown_0_to_" + lv + "_gray_levels"), pic: steps.blindOutlinePicture(cap)] }
+    def runs = blindRun ? (0..1).collect(blindPicture)
         : [[label: "", part: "", shown: "", dir: dir, pic: comparison != null ? (ImagePlus) comparison.picture : steps.outlinePicture()]]
-    String pictureNote = blindRun ? steps.blindBasis() + ". Pictures for Cellpose: " + steps.blindRecipe() + "; no response channel. Folders: " + runs.collect { ((File) it.dir).getName() }.join(", ") + ".\n" : ""
+    // Whether this Cellpose runs on a graphics chip: known from an earlier run, or found out during the first picture.
+    def chip = { -> System.getProperty("calcium.steps.pretend_no_gpu") != null ? "CPU" : System.getProperty("calcium.steps.pretend_gpu") != null ? "GPU" : Prefs.get("calcium.steps.cellpose_gpu." + Integer.toHexString(py.hashCode()), "") }
+    boolean thirdPlanned = blindRun && chip.call() == "GPU"
+    if (thirdPlanned) runs << blindPicture(2)
+    def pictureNoteOf = { -> blindRun ? steps.blindBasis() + ". Pictures for Cellpose: " + steps.blindRecipe() + (runs.size() > 2 ? "; a third picture, from 0 to " + CalciumSteps.levels(CalciumSteps.BLIND_CAP_MID) + " gray levels, adds outlines by the same rule against the outlines kept so far (run because Cellpose uses a graphics chip here)" : "") + "; no response channel. Folders: " + runs.collect { ((File) it.dir).getName() }.join(", ") + ".\n" : "" }
+    String pictureNote = pictureNoteOf.call()
     if (blindRun) new File(dir, "detection_picture.txt").setText(pictureNote, "UTF-8")
     // One Cellpose run on one picture, in that picture's folder. Saved outlines are reused when the saved picture matches.
     // Gives [zip, how, cmd, pending], or [error] when Cellpose made no outlines.
@@ -4665,6 +4685,7 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
             def key = "calcium.steps.cellpose_gpu." + Integer.toHexString(py.hashCode())
             String known = Prefs.get(key, "")
             if (System.getProperty("calcium.steps.pretend_no_gpu") != null) known = "CPU"
+            else if (System.getProperty("calcium.steps.pretend_gpu") != null) known = "GPU"
             if (known == "") {
                 task.report(8, "Checking CPU / graphics support", "Checking whether this Cellpose installation can use a graphics processor.")
                 // A script file avoids Windows command-line quoting differences for Python -c.
@@ -4707,8 +4728,18 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
     def results = []
     try {
         for (int i = 0; i < runs.size(); i++) {
-            if (runs.size() > 1) { task.partFrom = 42 * i; task.partShare = 0.5 }   // two runs: 0-42 % and 42-84 % of the bar
+            // the graphics chip did not work for the first two pictures (Cellpose fell back to the CPU): no third slow run
+            if (i == 2 && task.device == "CPU") { runs.remove(2); break }
+            if (runs.size() == 2) { task.partFrom = 42 * i; task.partShare = 0.5 }   // two runs: 0-42 % and 42-84 % of the bar
+            else if (runs.size() == 3) { task.partFrom = 28 * i; task.partShare = 1d / 3 }   // three runs: 0-28, 28-56 and 56-84 %
             def done = detect(runs[i])
+            if (done.error) return done.error
+            results << done
+        }
+        // the first run of all on this computer finds out about the graphics chip only now: the third picture follows
+        if (blindRun && runs.size() == 2 && task.device == "GPU" && chip.call() == "GPU") {
+            runs << blindPicture(2); task.partFrom = 84; task.partShare = 0.01
+            def done = detect(runs[2])
             if (done.error) return done.error
             results << done
         }
@@ -4739,11 +4770,22 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
         def first = outlines.collect { it.roi }, second = readOutlines((File) results[1].zip)
         def shownFirst = outlines.findAll { it.ev[0] < 4 && !(CalciumSteps.tooThin(it.roi) && CalciumSteps.alongAnother(it.roi, first)) }.collect { it.roi }
         def add = CalciumSteps.blindOutlinesToAdd(shownFirst, second, ((ImagePlus) runs[0].pic).getWidth())
-        add.each { int j -> outlines << [roi: second[j], from: 1] }
+        def addedSecond = add.collect { int j -> [roi: second[j], from: 1] }
+        outlines.addAll(addedSecond)
         int unshown = first.size() - shownFirst.size()
         mergeNote = "all " + first.size() + " outlines from " + runs[0].label + " kept; " + add.size() + " of " + second.size() + " from " + runs[1].label +
             " added (the other " + (second.size() - add.size()) + " share at least " + (int) Math.round(CalciumSteps.BLIND_MERGE_OVERLAP * 100) + " % of the smaller outline's area with an outline from picture 1" +
             (unshown > 0 ? "; " + unshown + " outlines of picture 1 that are not shown, for their size or as a strip on another outline, were not counted" : "") + ")"
+        if (runs.size() > 2) {   // the third picture, against every outline that is kept and will be shown
+            addedSecond.each { it.ev = gradeOne(it.roi) }
+            def soFar = outlines.collect { it.roi }
+            def shownSoFar = shownFirst + addedSecond.findAll { it.ev[0] < 4 && !(CalciumSteps.tooThin(it.roi) && CalciumSteps.alongAnother(it.roi, soFar)) }.collect { it.roi }
+            def third = readOutlines((File) results[2].zip)
+            def addThird = CalciumSteps.blindOutlinesToAdd(shownSoFar, third, ((ImagePlus) runs[0].pic).getWidth())
+            addThird.each { int j -> outlines << [roi: third[j], from: 2] }
+            mergeNote += "; " + addThird.size() + " of " + third.size() + " from " + runs[2].label + " added by the same rule against the outlines kept so far"
+        }
+        pictureNote = pictureNoteOf.call()
         new File(dir, "detection_picture.txt").setText(pictureNote + "Combined: " + mergeNote + ".\n", "UTF-8")
     }
     def got = []; int hidden = 0, strips = 0, thinKept = 0
@@ -4781,18 +4823,19 @@ def suggest = { CalciumOutlineTask task = new CalciumOutlineTask(progress: { p, 
         finishRecord()
         return got.size() + " response-assisted outlines; " + how
     }
-    if (blindRun) steps.say("Automatic outlines are blind: Cellpose got two pictures of frames " + steps.blindFirst + "-" + steps.blindLast + " only (" + steps.blindRecipe() + "), saved as " + ((File) results[0].zip).getName().replace("_rois.zip", ".tif") + " in " + dir.getName() + "/" + runs.collect { ((File) it.dir).getName() }.join(" and " + dir.getName() + "/") + "; " + mergeNote + ". The outlines were graded on the pre-stimulus picture without the response.")
+    if (blindRun) steps.say("Automatic outlines are blind: Cellpose got " + (runs.size() > 2 ? "three" : "two") + " pictures of frames " + steps.blindFirst + "-" + steps.blindLast + " only (" + steps.blindRecipe() + "), saved as " + ((File) results[0].zip).getName().replace("_rois.zip", ".tif") + " in " + dir.getName() + "/" + runs.collect { ((File) it.dir).getName() }.join(" and " + dir.getName() + "/") + "; " + mergeNote + ". The outlines were graded on the pre-stimulus picture without the response.")
     steps.say("Automatic outlines (suggestions only): Cellpose, command: " + cmdText + " (" + how + "). " + got.size() + " outlines shown: " + got.count { it.grade == 0 } + " respond on their own, " + got.count { it.grade == 1 } + " likely cells, " + got.count { it.grade == 2 } + " unsure, " + got.count { it.grade == 3 } + " very bright; " + hidden + " left out for their size; " + strips + " thin strips along another outline's edge left out, " + thinKept + " thin outlines kept as unsure (narrower than " + (int) CalciumSteps.THIN_WIDTH + " pixels on average, or roundness under " + CalciumSteps.THIN_ROUNDNESS + "); " + got.count { it.edge } + " lie within " + CalciumSteps.EDGE_MARGIN + " pixels of the picture's edge" + (edgeBox.isSelected() ? " and are not shown (box ticked)" : "") + ". Grades are measured (brightness, share of very bright pixels, contrast" + (blindRun ? "; the response is not used" : ", rise after the stimulus inside against around") + "). Only the outlines the user accepted became cells.")
     task.checkCancelled()
     javax.swing.SwingUtilities.invokeAndWait { proposals.clear(); proposals.addAll(got) }
     finishRecord()
     task.succeeded = true
     if (!blindRun) return got.size() + " suggestions; " + how
-    task.settings = "Two pictures of the frames before the response (0-" + CalciumSteps.levels(CalciumSteps.BLIND_CAP) + " and 0-" + CalciumSteps.levels(CalciumSteps.BLIND_CAP_HIGH) + " gray levels)"
+    boolean three = runs.size() > 2
+    task.settings = (three ? "Three" : "Two") + " pictures of the frames before the response (0-" + CalciumSteps.levels(CalciumSteps.BLIND_CAP) + (three ? ", 0-" : " and 0-") + CalciumSteps.levels(CalciumSteps.BLIND_CAP_HIGH) + (three ? " and 0-" + CalciumSteps.levels(CalciumSteps.BLIND_CAP_MID) : "") + " gray levels)"
     def took = results.collect { (it.how =~ /^Cellpose took (\d+) s/) }.collect { it.find() ? it.group(1) : null }
-    String shortHow = took.every { it != null } ? "Cellpose took " + took.join(" s and ") + " s" + (task.device ? " (" + task.device + ")" : "") :
+    String shortHow = took.every { it != null } ? "Cellpose took " + (three ? took[0] + " s, " + took[1] + " s and " + took[2] : took.join(" s and ")) + " s" + (task.device ? " (" + task.device + ")" : "") :
         results.every { it.how.startsWith("the outlines made earlier") } ? "the outlines made earlier for this recording were used again" : how
-    return got.size() + " suggestions from two pictures; " + shortHow
+    return got.size() + " suggestions from " + (three ? "three" : "two") + " pictures; " + shortHow
 }
 
 
