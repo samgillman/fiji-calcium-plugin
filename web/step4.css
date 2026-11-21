@@ -69,7 +69,6 @@ select { border: 1px solid #C5CED8; border-radius: var(--radius-sm); padding: 4p
 .tile { text-align: left; padding: 10px 14px; border-radius: var(--radius-md); border: 1px solid var(--gray-100); box-shadow: var(--shadow-1); background: #fff; display: flex; flex-direction: column; }
 .tile b { font-size: 24px; line-height: 1.15; font-weight: 700; } .tile.big b { color: var(--blue); }
 .tile span { font-size: 12.5px; color: var(--gray-600); }
-.tile.on { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue), var(--shadow-1); }
 
 .tabs { display: flex; gap: 2px; align-items: flex-end; border-bottom: 1px solid var(--gray-100); flex: none; }
 .tab { border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: transparent; padding: 7px 12px; color: var(--gray-600); font-weight: 500; }
@@ -85,10 +84,6 @@ select { border: 1px solid #C5CED8; border-radius: var(--radius-sm); padding: 4p
 .verdict { flex: 1 1 100%; min-width: 0; color: var(--gray-600); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .verdict b { color: var(--gray-900); } .verdict .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
 .cell-quality { flex: 1 1 100%; color: var(--warn); font-size: 12px; overflow-wrap: anywhere; }
-.quality-review { flex: none; margin: 0; padding: 7px 12px; border: 1px solid #e0c28c; border-radius: 5px; background: #fff7e8; }
-.quality-review summary { color: var(--warn); }
-.quality-review ul { max-height: 170px; overflow-y: auto; padding-left: 20px; font-size: 12px; }
-.quality-review .fine { margin-top: 6px; }
 
 .split { flex: 1 1 auto; min-height: 220px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .stage { position: relative; flex: 1 1 auto; min-height: 0; background: #10161C; } .stage.light { background: #fff; }
@@ -268,7 +263,6 @@ body:not(.has-results) #resize-split { display: none; }
 .tiles { display: flex; gap: 10px; flex-wrap: wrap; }
 .tile { flex: 1 1 0; min-width: 120px; padding: 7px 12px; } .tile.big { flex: 3 1 0; border-left: 4px solid var(--blue); }
 .tile b { font-size: 21px; } .tile.big span { line-height: 1.35; }
-.tile.on { border-color: var(--blue); box-shadow: var(--shadow-1); }
 .tile.zero { flex: 0 1 112px; min-width: 96px; } .tile.zero b { font-size: 16px; color: var(--gray-600); font-weight: 600; }
 .legend .chip i.band { height: 10px; width: 14px; border: 1px solid #C5CED8; border-radius: 2px; }
 /* The settings column: the Run box stays short so the settings above it are not seen through a keyhole. */
@@ -287,7 +281,6 @@ body.has-results .workspace-heading { display: none; }
 .tile { flex-direction: row; align-items: baseline; gap: 7px; padding: 5px 11px; flex: 0 1 auto; min-width: 0; }
 .tile.big { flex: 1 1 auto; } .tile b { font-size: 17px; } .tile.big b { font-size: 21px; }
 .tile.zero { flex: 0 1 auto; min-width: 0; } .tile.zero b { font-size: 15px; }
-.quality-review { padding: 4px 11px; }
 /* A handle under the movie and the plot sets their height. */
 .resizer.h { flex: 0 0 12px; height: 12px; cursor: row-resize; }
 .resizer.h::after { width: 56px; height: 4px; margin: -2px 0 0 -28px; }
@@ -375,3 +368,58 @@ aside { gap: 8px; }
 .tiles #open-folder { align-self: center; margin-left: auto; }
 .y-axis { display: inline-flex; align-items: center; gap: 5px; color: var(--gray-600); } .y-axis i { font-style: normal; }
 .y-axis input { width: 58px; height: 28px; box-sizing: border-box; font-size: 13px; padding: 3px 6px; }
+
+/* ---- 2026.11.20.19: each control where you look for it ------------------------------------------------------------ */
+/* Playback sits directly under the picture it controls. */
+.timebar.dark { background: #10161C; color: #AEB8C2; border: 0; border-top: 1px solid #1c252e; border-radius: 0; box-shadow: none; padding: 6px 10px; }
+.timebar.dark button, .timebar.dark select { background: #1c252e; color: #E6EBF0; border-color: #33404d; }
+.timebar.dark button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+.timebar.dark button:hover:not(:disabled) { border-color: #5BC0FF; } .timebar.dark button:disabled { color: #5d6b78; background: #1c252e; border-color: #33404d; }
+.timebar.dark .speed-label, .timebar.dark #time-label { color: #AEB8C2; } .timebar.dark #time-label { min-width: 118px; }
+.timebar.dark #time-windows .stimulus { background: #fff; }
+#picture-card #playback-note { background: #10161C; color: #8B98A5; margin: 0; padding: 0 10px 5px; min-height: 0; flex: none; }
+#picture-card #playback-note:empty { display: none; }
+/* The selected cell's call and flags: a card on the plot they describe. */
+.cell-card { flex: none; padding: 0 12px; }
+.cell-card .verdict { flex: none; padding-top: 8px; white-space: normal; overflow: visible; }
+.cell-card .verdict:empty { display: none; }
+.cell-card .cell-quality { padding-top: 2px; }
+/* The summary figures are figures; "Show" is the one cell filter. */
+.tile { cursor: default; }
+/* Quality review: a chip in the summary row; its list opens over the page instead of pushing it down. */
+.quality-chip { position: relative; flex: none; align-self: center; }
+.quality-chip > summary { list-style: none; cursor: pointer; padding: 4px 12px; border: 1px solid #e0c28c; border-radius: 999px; background: #fff7e8; color: var(--warn); font-size: 12.5px; white-space: nowrap; user-select: none; }
+.quality-chip > summary::-webkit-details-marker { display: none; }
+.quality-chip > summary::after { content: '▾'; font-size: 10px; margin-left: 6px; opacity: .75; }
+.quality-chip[open] > summary { border-color: var(--warn); }
+.quality-pop { position: absolute; z-index: 15; top: calc(100% + 6px); left: 0; width: min(520px, 86vw); background: #fff; border: 1px solid var(--gray-100); border-radius: var(--radius-md); box-shadow: 0 8px 28px rgba(31,41,51,.22); padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.quality-pop p { margin: 0; } .quality-pop #quality-lead { color: var(--warn); font-weight: 600; }
+.quality-pop ul { max-height: 220px; overflow-y: auto; padding-left: 18px; margin: 0; font-size: 12.5px; align-self: stretch; }
+/* One Export menu per panel, in its corner. */
+details.export { position: relative; flex: none; margin-left: auto; }
+details.export > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid #C5CED8; border-radius: var(--radius-sm); background: #fff; color: var(--gray-900); font-size: 12.5px; user-select: none; white-space: nowrap; }
+details.export > summary::-webkit-details-marker { display: none; }
+details.export > summary::after { content: '▾'; font-size: 10px; opacity: .7; }
+details.export > summary:hover, details.export[open] > summary { border-color: var(--blue); }
+.caption.dark details.export > summary { background: #1c252e; color: #E6EBF0; border-color: #33404d; }
+.caption.dark details.export > summary:hover, .caption.dark details.export[open] > summary { border-color: #5BC0FF; }
+details.export .export-menu { position: absolute; z-index: 18; right: 0; bottom: calc(100% + 6px); min-width: 172px; display: flex; flex-direction: column; background: #fff; border: 1px solid var(--gray-100); border-radius: var(--radius-md); box-shadow: 0 8px 28px rgba(31,41,51,.22); padding: 4px; }
+details.export.down .export-menu { bottom: auto; top: calc(100% + 6px); }
+details.export .export-menu button { background: transparent; border: 0; border-radius: 4px; padding: 6px 10px; text-align: left; font-size: 13px; color: var(--gray-900); white-space: nowrap; width: 100%; min-height: 0; box-shadow: none; }
+details.export .export-menu button:hover:not(:disabled) { background: #EEF4F8; border: 0; }
+details.export .export-menu button:disabled { color: #9AA5B1; background: transparent; }
+details.export .export-menu .save-options-toggle { border-top: 1px solid var(--gray-100); border-radius: 0 0 4px 4px; margin-top: 3px; padding-top: 8px; }
+/* A warning sits under the field it is about; the Run box only says how many there are. */
+.field-warning { color: var(--warn); font-size: 12px; margin: -2px 0 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; text-align: right; }
+p + .field-warning, p + .field-error { justify-content: flex-start; text-align: left; margin-top: 2px; }
+.validation .jump { padding: 0; background: none; border: 0; color: var(--bad); text-decoration: underline; cursor: pointer; font-size: 12px; min-height: 0; }
+.validation .jump.warning { color: var(--warn); }
+/* The plot card now also carries the cell's call, so its other rows take less room and its plot keeps its height. */
+.plot-head { gap: 6px 12px; }
+.plot-head .seg button { padding: 3px 9px; }
+.plot-head select { max-width: 200px; }
+.cell-card .cell-quality { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+#plot-card .caption { flex-wrap: nowrap; }
+#plot-card .caption > .help { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#plot-card .caption > .grow { display: none; }
+#plot-card .caption > .save-note { flex: 0 1 auto; min-width: 0; }

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026.11.20.19
+
+Step 4 page: six things moved to where you look for them. No measurement, threshold or saved file changes.
+
+- **Playback is directly under the picture.** Play, the frame slider, previous/next frame and Speed sit in the picture's own card, under the picture they control.
+- **One cell filter.** The result figures at the top (% responding, registered, excluded, unscorable) are figures only. **Show**, beside **Cell**, is the one place that chooses which cells are listed, drawn and averaged.
+- **The selected cell's call is on the plot card.** "Cell 12: Responded · largest rise …" and its quality flags sit at the top of the plot they describe, instead of above both panels.
+- **One Export menu per panel**, in the panel's corner: Save, Download, Save frames… and Options… for the picture; Save, Download and Options… for the plot and the heatmap; Save and Download for the tables. Choosing an entry closes the menu.
+- **Quality review is a chip** in the row of result figures ("19 cells flagged"). Its list opens over the page instead of pushing the data down.
+- **A warning or error sits under the setting it is about**, with its one-click repair. The Run box only says how many there are ("1 warning above", "Fix 2 problems above") and takes you there. A message about a setting folded away in Advanced is still listed in the Run box.
+- "Enter the frame after which it was added" no longer flashes for a moment when the page opens on a recording with recorded frame times.
+
 ## 2026.11.20.18
 
 - **Blind selection uses the frames before the response, and the plugin offers them.** Until now it asked for "the last frame before the stimulus" and offered frame 20 when it found no response. Twenty frames are too few to see faint cells: on one recording the two blind pictures outlined 70 % of the audited cells on frames 1–20 and 79 % on frames 1–50, and the cells gained responded as often as the ones found before. The window offered now:

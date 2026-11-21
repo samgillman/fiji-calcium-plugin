@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.18.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.19.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -9,7 +9,7 @@ and use the same R engine and saved analysis results. The browser adds interacti
 table sorting and an interactive heatmap.
 
 The browser starts in Recording view. Play, the frame slider, previous/next frame and Speed are
-prominent at the top and work before analysis or R setup. The page identifies this as a preview;
+directly under the picture and work before analysis or R setup. The page identifies this as a preview;
 response-percentage tiles and result tables stay hidden until an analysis has completed.
 Playback follows the available frame times. Unconfirmed seconds are labeled provisional. With
 no valid time base, the page labels a preview fallback of 20 frames per second at 1x; this is a
@@ -238,8 +238,10 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        group chosen under Show, and nothing else. The buttons above it switch to
                        "One cell + average" or "Responders vs non-responders".
                        Signal: dF/F0, gray levels above background, or raw gray values (not corrected).
-                       Save plot puts the picture, its numbers (CSV) and how it was made into a "plots"
-                       folder beside the tables. Options (beside Save) sets the format (PNG or TIFF),
+                       Each panel has one Export menu in its corner (the picture, the plot, the heatmap
+                       and the tables). In it, Save plot puts the picture, its numbers (CSV) and how it
+                       was made into a "plots" folder beside the tables, Download hands the same file to
+                       the browser, and Options sets the format (PNG or TIFF),
                        the size in inches, the resolution (150, 300 or 600 dpi, recorded in the file)
                        and the TIFF compression (LZW, ZIP or none; LZW and ZIP lose nothing).
                        Save picture saves the view on screen with the outlines shown and a colour key;
@@ -468,8 +470,12 @@ Invalid settings show inline errors and must be corrected before analysis. Rule 
 separate drafts; Discard pending changes restores the completed-run settings, including files.
 A positive control needs its actual timing entered. Review the suggested primary onset and
 keep the inclusive F0 baseline before stimulation; overlap produces a visible warning.
-Quality warnings are available above the results and beside the selected cell, with a Needs
-quality review filter. Warnings do not automatically exclude cells or change saved calls.
+Quality warnings are a chip in the row of result figures ("19 cells flagged"; click it for the list)
+and a line on the plot card under the selected cell's call, with a Needs quality review entry under
+Show. Warnings do not automatically exclude cells or change saved calls.
+Where things are since 2026.11.20.19: a warning or error about a setting sits under that setting, and
+the Run box only says how many there are ("1 warning above"; click it to go there). The result figures
+at the top are figures only; Show, beside Cell, is the one cell filter.
 Legacy whole-recording AUC, peak timestamp and rise time are labelled separately from the
 stimulus-window metrics. See docs/SIMPLECA.md for the definitions.
 Each measurement has a separate review page and preserved inputs. Keep Fiji open; you may

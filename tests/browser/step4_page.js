@@ -81,8 +81,15 @@ const assert = require('assert/strict');
     assert.ok(await page.evaluate(() => {
       const transport = document.getElementById('transport').getBoundingClientRect();
       const picture = document.getElementById('picture').getBoundingClientRect();
-      return transport.bottom <= picture.top;
-    }), 'the frame slider is above the recording');
+      return transport.top >= picture.bottom - 1 && document.getElementById('picture-card').contains(document.getElementById('transport'));
+    }), 'the frame slider is directly under the recording, in its card');
+    // Each control where it is looked for: the cell's call on the plot card, the quality review as a chip in the summary row,
+    // one Export menu per panel, and summary figures that are not a second cell filter.
+    assert.ok(await page.evaluate(() => document.getElementById('plot-card').contains(document.getElementById('verdict')) && document.getElementById('plot-card').contains(document.getElementById('cell-quality'))));
+    assert.ok(await page.evaluate(() => document.getElementById('result-tiles').contains(document.getElementById('quality-review'))));
+    assert.equal(await page.locator('#result-tiles button.tile, #result-tiles [data-group]').count(), 0);
+    assert.deepEqual(await page.locator('details.export').evaluateAll((menus) => menus.map((m) => m.id + ':' + m.querySelectorAll('button').length)), ['export-picture:4', 'export-plot:3', 'export-heatmap:3', 'export-metrics:2', 'export-data:2']);
+    assert.equal(await page.locator('main button', { hasText: /^(Save|Download)/ }).evaluateAll((buttons) => buttons.filter((b) => !b.closest('details.export, .save-options')).length), 0, 'every save button is in an Export menu');
     const initial = await page.evaluate(() => window.calciumStep4.collectDraft());
     const originalProtocol = initial.protocol;
     assert.equal(originalProtocol.schema_version, 2);
@@ -127,9 +134,12 @@ const assert = require('assert/strict');
     assert.equal(await page.locator('#side .field-error').count(), 0); assert.equal((await window0()).Baseline_end_s, times[9]);
     // F₀ frames after the stimulus: a warning with its repair.
     await page.locator('#f0-cell .link-toggle').click(); await page.fill('#baseline_end', '11');
-    assert.match(await text('#validation'), /F₀ frames 10–11 come after the stimulus\./);
-    await page.locator('#validation .repair', { hasText: 'Use 1–9' }).click();
-    assert.equal(await page.inputValue('#baseline_end'), '9'); assert.doesNotMatch(await text('#validation'), /F₀ frame/);
+    const under = (id) => page.evaluate((field) => { const note = document.getElementById(field).closest('.row').nextElementSibling; return note ? [note.className, note.textContent] : null; }, id);
+    assert.deepEqual(await under('f0-cell'), ['field-warning', 'F₀ frames 10–11 come after the stimulus.Use 1–9'], 'a warning sits under the field it is about');
+    assert.match((await under('base-from-1'))[1], /^Control: the baseline holds 1 frame but at least 3 are needed/, 'the control\'s warning is under the control\'s baseline');
+    assert.equal(await text('#validation'), '2 warnings above', 'the Run box only says how many there are');
+    await page.locator('#side .field-warning .repair', { hasText: 'Use 1–9' }).click();
+    assert.equal(await page.inputValue('#baseline_end'), '9'); assert.equal((await under('f0-cell') || [''])[0] === 'field-warning', false); assert.equal(await text('#validation'), '1 warning above');
     // Too few baseline frames would leave every cell without a call: the run is stopped and the reason is given.
     await page.locator('#base-cell-0 .relink').click(); await page.fill('#stim-frame-0', '2');
     assert.match(await editor0.locator('.field-error').textContent(), /Stimulus: the baseline holds 2 frames but at least 3 are needed\. No cell would get a call\./);
@@ -151,7 +161,8 @@ const assert = require('assert/strict');
     for (const invalid of ['0', '-1', 'abc', '', '2abc']) {
       await page.fill('#sampling_hz', invalid);
       assert.ok(await page.isDisabled('#analyze'));
-      assert.match(await text('#validation'), /Frame rate/);
+      assert.ok((await page.locator('#side .field-error').allTextContents()).some((s) => /Frame rate/.test(s)), 'the frame rate message is under the frame rate');
+      assert.match(await text('#validation'), /^Fix \d+ problems? above/);
       assert.equal(await page.getAttribute('#sampling_hz', 'aria-invalid'), 'true');
     }
     await page.fill('#sampling_hz', '2');
@@ -317,9 +328,11 @@ const assert = require('assert/strict');
     await page.selectOption('#cell', 'Cell001'); assert.match(await text('#verdict'), /Cell001: Responded/);
     // The duration notice is set on every cell by the engine but belongs to the recording: it is shown once and flags no cell.
     assert.deepEqual(await page.locator('#group option').allTextContents(), ['All cells (6)', 'Responded (2)', 'Did not respond (1)', 'Excluded (2)', 'Unscorable (1)', 'Needs quality review (1)']);
-    assert.match(await text('#quality-summary'), /1 cell flagged, including 1 responder$/);
+    assert.equal(await text('#quality-summary'), '1 cell flagged'); assert.ok(await page.isHidden('#quality-list'), 'the chip does not push the data down');
     await page.selectOption('#cell', 'Cell005'); assert.match(await text('#cell-quality'), /Low F₀/);
     await page.locator('#quality-review summary').click(); assert.match(await text('#quality-list'), /Applies to the whole recording: Minimum response duration is shorter than one frame interval/);
+    assert.equal(await text('#quality-lead'), '1 cell flagged, including 1 responder.');
+    assert.ok(await page.evaluate(() => { const tabs = document.querySelector('.tabs').getBoundingClientRect(), row = document.getElementById('result-tiles').getBoundingClientRect(); return tabs.top - row.bottom < 40; }), 'the open list lies over the page');
     await page.locator('#quality-list .flag-filter').first().click();
     assert.equal(await page.inputValue('#group'), '5'); assert.deepEqual(await page.locator('#cell option').evaluateAll((o) => o.map((x) => x.value)), ['Cell005']);
     await page.locator('#quality-list .flag-filter').first().click(); assert.equal(await page.evaluate(() => window.calciumStep4.S.qualityFlag), null);
@@ -346,17 +359,14 @@ const assert = require('assert/strict');
     assert.match(await text('#tile-responding'), /Ionomycin \(control\): 1 of 3 evaluable/);
     await page.selectOption('#group', '1');
     assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell002']);
-    await page.click('#tile-responding');
-    assert.equal(await page.inputValue('#response-window'), 'Stimulus::Capsaicin');
+    await page.selectOption('#response-window', 'Stimulus::Capsaicin');
     assert.match(await text('#tile-responding'), /Capsaicin: 2 of 3 evaluable/);
     assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell001', 'Cell005']);
-    await page.click('#tile-excluded');
+    await page.selectOption('#group', '3');
     assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell003', 'Cell004']);
-    assert.ok(await page.locator('#tile-excluded').evaluate((e) => e.classList.contains('on')));
-    assert.ok(!(await page.locator('#tile-unscorable').evaluate((e) => e.classList.contains('on'))));
-    await page.click('#tile-unscorable');
+    await page.selectOption('#group', '4');
     assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value)), ['Cell006']);
-    await page.click('#tile-registered'); await page.selectOption('#cell', 'Cell002');
+    await page.selectOption('#group', '0'); await page.selectOption('#cell', 'Cell002');
 
     // Dragging begins on another cell's trace; pointer capture keeps it scrubbing.
     await page.locator('#plot').scrollIntoViewIfNeeded();
@@ -444,7 +454,13 @@ const assert = require('assert/strict');
       const listener = (download) => { downloads.push(download); if (downloads.length === 2) { clearTimeout(timeout); page.off('download', listener); resolve(); } };
       page.on('download', listener);
     });
-    await page.click('#save-plot'); await downloadedPlots;
+    assert.ok(await page.isHidden('#save-plot'), 'the save buttons are inside the Export menu');
+    await page.locator('#export-plot > summary').click(); await page.click('#save-plot'); await downloadedPlots;
+    assert.ok(!(await page.locator('#export-plot').evaluate((menu) => menu.open)), 'choosing an entry closes the menu');
+    await page.locator('#export-plot > summary').click(); await page.locator('#export-plot .save-options-toggle').click();
+    assert.ok(await page.isVisible('#save-options') && !(await page.locator('#export-plot').evaluate((menu) => menu.open)), 'Options opens from the Export menu');
+    assert.ok(await page.evaluate(() => { const panel = document.getElementById('save-options').getBoundingClientRect(), button = document.querySelector('#export-plot > summary').getBoundingClientRect(); return panel.bottom <= button.top + 1 && Math.abs(panel.right - button.right) < 24; }), 'the options sit against the Export button');
+    await page.keyboard.press('Escape'); await page.locator('#plot').click({ position: { x: 5, y: 5 } }); assert.ok(await page.isHidden('#save-options'));
     for (const download of downloads) await download.saveAs(path.join(out, download.suggestedFilename()));
     const names = downloads.map((d) => d.suggestedFilename()), image = names.find((n) => n.endsWith('.png'));
     assert.match(image, /^Fixture_recording_traces_Cell\w+_\d{8}-\d{6}\.png$/, 'plot names carry the recording, the cell and the time');

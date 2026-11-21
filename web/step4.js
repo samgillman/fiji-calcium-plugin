@@ -260,7 +260,8 @@
       }
       for (const button of section.querySelectorAll('button')) button.disabled = busy || button.dataset.fixed === '1';
       const row = {}; for (const key of TIME_KEYS) row[key] = readInput(box(key), false);
-      if (!section.dataset.framesShown && editedTimes()) showFrames(i, row);
+      // the boxes were empty until the frame times arrived: check again at once, so "enter the frame" does not stay up until the next poll
+      if (!section.dataset.framesShown && editedTimes()) { showFrames(i, row); if (section.dataset.framesShown) queueMicrotask(() => { if (S.state) showState(); }); }
       const used = windowFrames(row, editedTimes());
       for (const id of ['base-to', 'resp-from']) frameBox(id, i).disabled = busy || legacy;
       paintFrames(i);
@@ -327,10 +328,13 @@
   function fileNote(key) { const file = S.draft[key]; $(key + '-name').textContent = file ? file.name : 'No file selected'; $(key + '-clear').hidden = !file; }
   // Draft validation reports errors without changing settings, saved calls or the applied movie clock.
   function validateDraft(draft) {
-    const errors = [], listed = [], warnings = [], repairs = new Map(), inline = [], fields = new Set(), add = (field, message) => { errors.push(message); listed.push(message); if (field) fields.add(field); };
+    // Every message sits under the field it is about, with its repair. Only a message with no field, or whose field is folded away
+    // (Advanced), is listed in the Run box, which otherwise just says how many there are.
+    const errors = [], warnings = [], notes = [], fields = new Set();
+    const add = (field, message) => { errors.push(message); if (field) fields.add(field); notes.push({ beside: field, message, level: 'error' }); };
     // Two time fields that disagree: both are marked, and one message sits beside the field to change, with the repair.
-    const conflict = (mark, beside, message, repair) => { errors.push(message); mark.forEach((f) => fields.add(f)); inline.push({ beside, message, repair }); };
-    const warn = (message, repair) => { warnings.push(message); if (repair) repairs.set(message, repair); };
+    const conflict = (mark, beside, message, repair) => { errors.push(message); mark.forEach((f) => fields.add(f)); notes.push({ beside, message, repair, level: 'error' }); };
+    const warn = (message, repair, beside) => { warnings.push(message); notes.push({ beside, message, repair, level: 'warning' }); };
     const times = draftTimes(draft.timestamps, draft.values.sampling_hz);
     const numeric = (v) => v !== null && v !== '' && typeof v !== 'boolean' && Number.isFinite(Number(v));
     const value = draft.values, n = S.info.frames;
@@ -358,31 +362,31 @@
         else if (has('Min_baseline_samples') && used && used.baseline && used.baseline.count < v('Min_baseline_samples')) {
           // for the primary stimulus this leaves every cell without a call, so the run is stopped; for the control it only loses the control
           const words = label + 'the baseline holds ' + plural(used.baseline.count, 'frame') + ' but at least ' + v('Min_baseline_samples') + ' are needed. No cell would get a call.', fix = N >= v('Min_baseline_samples') ? { text: 'Use ' + rule[0] + '–' + rule[1], run: relink('base-cell') } : null;
-          if (index) warn(words, fix); else conflict(ids('base-from', 'base-to'), 'base-from-' + index, words, fix);
+          if (index) warn(words, fix, 'base-from-' + index); else conflict(ids('base-from', 'base-to'), 'base-from-' + index, words, fix);
         }
         if (!(c >= 1 && d >= c && d <= n)) conflict(ids('resp-from', 'resp-to'), 'resp-from-' + index, label + 'the response window needs a first and a last frame, up to ' + n + '.', { text: 'Use ' + (N + 1) + '–' + n, run: relink('resp-cell') });
         else if (c <= N) conflict(ids('resp-from'), 'resp-from-' + index, label + 'the response window starts at frame ' + c + ', before the stimulus.', { text: 'Start at ' + (N + 1), run: setFrames([['resp-from', N + 1]]) });
         else if (has('End_s') && v('End_s') > last + 1e-9) {   // a loaded setting that runs past the recording
-          if (legacy) warn(label + 'the response window ends after the last frame. Cells may get no call.', { text: 'End at frame ' + n, run: setFrames([['resp-to', n]]) });
+          if (legacy) warn(label + 'the response window ends after the last frame. Cells may get no call.', { text: 'End at frame ' + n, run: setFrames([['resp-to', n]]) }, 'resp-to-' + index);
           else conflict(ids('resp-to'), 'resp-to-' + index, label + 'the response window ends after the last frame (' + seconds(+last.toFixed(2)) + '). No cell would get a call.', { text: 'End at frame ' + n, run: setFrames([['resp-to', n]]) });
         }
         // A field that sits a few pixels from where the cells were chosen: said once, as the plugin words it (no repair: nothing is wrong with the frames chosen)
-        if (!index && S.info.motion && S.info.motionNote && !S.info.motion.moved && S.info.motion.slight > 0) warn(S.info.motionNote + ' The outlines are slightly off the cells there.');
-        if (!index && S.info.motion && S.info.motion.moved && S.info.motion.smeared) warn('The cells were chosen on frames ' + S.info.motion.smeared[0] + '–' + S.info.motion.smeared[1] + ', which include the movement, so their picture is smeared.');
+        if (!index && S.info.motion && S.info.motionNote && !S.info.motion.moved && S.info.motion.slight > 0) warn(S.info.motionNote + ' The outlines are slightly off the cells there.', null, 'fiji-frames');
+        if (!index && S.info.motion && S.info.motion.moved && S.info.motion.smeared) warn('The cells were chosen on frames ' + S.info.motion.smeared[0] + '–' + S.info.motion.smeared[1] + ', which include the movement, so their picture is smeared.', null, 'fiji-frames');
         if (!index && movedRuns().length) {
           // The field moved: in those frames the outlines are not on the same cells. Baselines should leave them out.
           const f0 = [Number(value.baseline_start), Number(value.baseline_end)], size = 'The field moved (about ' + S.info.motion.largest + ' px) during ' + movedText() + '. ';
           const inF0 = Number.isInteger(f0[0]) && Number.isInteger(f0[1]) ? movedWithin(f0[0], f0[1]) : { count: 0 }, inBase = movedWithin(a, b), inResp = movedWithin(c, d);
           const sameAsF0 = a === f0[0] && b === f0[1];
-          if (inF0.count) warn(size + 'F₀ frames ' + f0[0] + '–' + f0[1] + ' include ' + plural(inF0.count, 'moved frame') + '.', inF0.after <= f0[1] ? { text: 'Use ' + inF0.after + '–' + f0[1], run: () => { S.unlinked.add('f0'); $('f0-cell').dataset.linked = ''; exactInput($('baseline_start'), inF0.after); applyFrames(index); draftChanged(); } } : null);
-          if (inBase.count && !(sameAsF0 && inF0.count && fr('base-cell').dataset.linked === '1')) warn(size + 'Baseline frames ' + a + '–' + b + ' include ' + plural(inBase.count, 'moved frame') + '.', inBase.after <= b ? { text: 'Use ' + inBase.after + '–' + b, run: () => { S.unlinked.add('base-cell-' + index); fr('base-cell').dataset.linked = ''; fr('base-from').value = inBase.after; applyFrames(index); draftChanged(); } } : null);
-          if (inResp.count) warn(size + 'The response window includes ' + plural(inResp.count, 'moved frame') + ': values there are not of the same cells.');
+          if (inF0.count) warn(size + 'F₀ frames ' + f0[0] + '–' + f0[1] + ' include ' + plural(inF0.count, 'moved frame') + '.', inF0.after <= f0[1] ? { text: 'Use ' + inF0.after + '–' + f0[1], run: () => { S.unlinked.add('f0'); $('f0-cell').dataset.linked = ''; exactInput($('baseline_start'), inF0.after); applyFrames(index); draftChanged(); } } : null, 'f0-cell');
+          if (inBase.count && !(sameAsF0 && inF0.count && fr('base-cell').dataset.linked === '1')) warn(size + 'Baseline frames ' + a + '–' + b + ' include ' + plural(inBase.count, 'moved frame') + '.', inBase.after <= b ? { text: 'Use ' + inBase.after + '–' + b, run: () => { S.unlinked.add('base-cell-' + index); fr('base-cell').dataset.linked = ''; fr('base-from').value = inBase.after; applyFrames(index); draftChanged(); } } : null, 'base-from-' + index);
+          if (inResp.count) warn(size + 'The response window includes ' + plural(inResp.count, 'moved frame') + ': values there are not of the same cells.', null, 'resp-from-' + index);
         }
         if (!index) {
           // F₀ frames after the stimulus, and cells that were chosen on frames after it
           const f0 = [Number(value.baseline_start), Number(value.baseline_end)], chosen = S.info.fijiFrames;
           if (Number.isInteger(f0[0]) && Number.isInteger(f0[1]) && f0[1] >= f0[0] && f0[1] > N)
-            warn((Math.max(f0[0], N + 1) === f0[1] ? 'F₀ frame ' + f0[1] + ' comes' : 'F₀ frames ' + Math.max(f0[0], N + 1) + '–' + f0[1] + ' come') + ' after the stimulus.', { text: 'Use ' + rule[0] + '–' + rule[1], run: relink('f0-cell') });
+            warn((Math.max(f0[0], N + 1) === f0[1] ? 'F₀ frame ' + f0[1] + ' comes' : 'F₀ frames ' + Math.max(f0[0], N + 1) + '–' + f0[1] + ' come') + ' after the stimulus.', { text: 'Use ' + rule[0] + '–' + rule[1], run: relink('f0-cell') }, 'f0-cell');
 
         }
       }
@@ -394,7 +398,7 @@
       for (const key of ['Max_gap_s', 'Expected_interval_s']) if (row[key] !== null && row[key] !== '' && (!numeric(row[key]) || Number(row[key]) <= 0)) add(prefix + key, label + FIELD_TITLES[key] + ' must be positive or blank.');
       if (!draft.timestamps && numeric(value.sampling_hz) && Number(value.sampling_hz) > 0) {
         const interval = 1 / Number(value.sampling_hz);
-        if (!legacy && row.Duration_mode === 'seconds' && numeric(row.Min_duration_s) && Number(row.Min_duration_s) < interval) warn(label + 'minimum duration (' + row.Min_duration_s + ' s) is shorter than the frame interval (' + fmt(interval) + ' s). Timing is coarsely resolved.');
+        if (!legacy && row.Duration_mode === 'seconds' && numeric(row.Min_duration_s) && Number(row.Min_duration_s) < interval) warn(label + 'minimum duration (' + row.Min_duration_s + ' s) is shorter than the frame interval (' + fmt(interval) + ' s). Timing is coarsely resolved.', null, prefix + 'Min_duration_s');
       }
     });
     if (!String(draft.protocol.name || '').trim()) add('protocol-name', 'Enter a protocol name.');
@@ -402,29 +406,43 @@
     const signature = JSON.stringify(draft);
     if (signature === S.draftAck && S.state && S.state.validation) {
       // One message per problem: the plugin's general checks are shown only for what this page did not already explain.
-      if (!errors.length) for (const message of S.state.validation.errors) { errors.push(message); listed.push(message); }
+      if (!errors.length) for (const message of S.state.validation.errors) { errors.push(message); notes.push({ beside: null, message, level: 'error' }); }
       const mine = [/F₀ baseline includes/, /response end exceeds/, /holds \d+ samples?/, /^Check acquisition timing/];
-      for (const message of S.state.validation.warnings) if (!times || !mine.some((p) => p.test(message))) warnings.push(message);
+      for (const message of S.state.validation.warnings) if (!times || !mine.some((p) => p.test(message))) { warnings.push(message); notes.push({ beside: null, message, level: 'warning' }); }
     }
     for (const box of document.querySelectorAll('#side [aria-invalid]')) box.removeAttribute('aria-invalid');
     for (const id of fields) if ($(id)) $(id).setAttribute('aria-invalid', 'true');
     // Rebuilt only when what is shown changes, so a button is never replaced under the mouse by a routine refresh.
-    const shown = JSON.stringify([listed, warnings, inline.map((e) => [e.beside, e.message, e.repair && e.repair.text]), Array.from(repairs.values()).map((r) => r.text)]);
+    const onPage = (id) => { const field = id && $(id); return !!field && (field.closest('.row') || field).offsetParent !== null; };   // its row, since a row that follows the stimulus hides its own boxes
+    for (const note of notes) note.inline = onPage(note.beside);
+    const shown = JSON.stringify(notes.map((e) => [e.beside, e.message, e.level, e.inline, e.repair && e.repair.text]));
     if (shown !== S.validationShown) {
       S.validationShown = shown;
       const action = (repair) => { const button = document.createElement('button'); button.type = 'button'; button.className = 'ghost small repair'; button.textContent = repair.text; button.addEventListener('click', repair.run); return button; };
-      for (const old of document.querySelectorAll('#side .field-error')) old.remove();
-      for (const entry of inline) {
-        const field = $(entry.beside); if (!field) continue;
-        const after = field.closest('.row') || field;
-        const note = document.createElement('div'); note.className = 'field-error'; note.setAttribute('role', 'alert'); const text = document.createElement('span'); text.textContent = entry.message; note.appendChild(text);
-        if (entry.repair) note.appendChild(action(entry.repair)); after.after(note);
+      for (const old of document.querySelectorAll('#side .field-error, #side .field-warning')) old.remove();
+      const said = new Set();
+      for (const entry of notes) {
+        if (!entry.inline || said.has(entry.beside + '|' + entry.message)) continue; said.add(entry.beside + '|' + entry.message);
+        const field = $(entry.beside), after = field.closest('.row') || field;
+        const note = document.createElement('div'); note.className = entry.level === 'error' ? 'field-error' : 'field-warning'; note.setAttribute('role', entry.level === 'error' ? 'alert' : 'status');
+        const text = document.createElement('span'); text.textContent = entry.message; note.appendChild(text);
+        if (entry.repair) note.appendChild(action(entry.repair));
+        let last = after; while (last.nextElementSibling && /^field-(error|warning)$/.test(last.nextElementSibling.className)) last = last.nextElementSibling;
+        last.after(note);
       }
-      const box = $('validation'); box.hidden = !listed.length && !warnings.length; box.replaceChildren();
-      for (const [messages, className] of [[listed, ''], [warnings, 'warning']]) if (messages.length) {
+      const box = $('validation'), loose = notes.filter((e) => !e.inline), above = { error: notes.filter((e) => e.inline && e.level === 'error').length, warning: notes.filter((e) => e.inline && e.level === 'warning').length };
+      box.hidden = !notes.length; box.replaceChildren();
+      if (above.error || above.warning) {   // the messages themselves are beside their fields; this takes you to the first
+        const jump = document.createElement('button'); jump.type = 'button'; jump.id = 'validation-jump'; jump.className = 'ghost small jump' + (above.error ? '' : ' warning');
+        jump.textContent = above.error ? (above.error === 1 ? 'Fix 1 problem above' : 'Fix ' + above.error + ' problems above') : plural(above.warning, 'warning') + ' above';
+        jump.addEventListener('click', () => { const first = document.querySelector(above.error ? '#side .field-error' : '#side .field-warning'); if (first) first.scrollIntoView({ block: 'center', behavior: 'smooth' }); });
+        box.appendChild(jump);
+      }
+      for (const [level, className] of [['error', ''], ['warning', 'warning']]) {
+        const messages = loose.filter((e) => e.level === level); if (!messages.length) continue;
         const list = document.createElement('ul'); list.className = className;
-        const once = new Map(); for (const message of messages) once.set(String(message).split('. ')[0], message);
-        for (const message of once.values()) { const li = document.createElement('li'); li.textContent = message; if (repairs.has(message)) { li.append(' '); li.appendChild(action(repairs.get(message))); } list.appendChild(li); }
+        const once = new Map(); for (const entry of messages) once.set(String(entry.message).split('. ')[0], entry);
+        for (const entry of once.values()) { const li = document.createElement('li'); li.textContent = entry.message; if (entry.repair) { li.append(' '); li.appendChild(action(entry.repair)); } list.appendChild(li); }
         box.appendChild(list);
       }
     }
@@ -473,7 +491,8 @@
       notices.push('Applies to the whole recording: ' + FLAG_TEXT.DURATION_BELOW_SAMPLE_INTERVAL + '.');
     if (S.qualityFlag && !counts.has(S.qualityFlag)) S.qualityFlag = null;
     $('quality-review').hidden = !affected && !notices.length;
-    summary.textContent = affected ? 'Quality review: ' + plural(affected, 'cell') + ' flagged' + (called() ? ', including ' + plural(responders, 'responder') : '') : 'Review the applied timing';
+    summary.textContent = affected ? plural(affected, 'cell') + ' flagged' : 'Timing note';
+    $('quality-lead').textContent = affected ? plural(affected, 'cell') + ' flagged' + (called() ? ', including ' + plural(responders, 'responder') : '') + '.' : 'Review the applied timing.';
     list.replaceChildren();
     for (const [flag, count] of counts) {
       // each flag is a filter of its own, so a small group (for example the cells whose ΔF/F₀ falls below −1) can be isolated
@@ -682,7 +701,6 @@
     const select = $('cell'); select.innerHTML = '';
     for (const name of S.listed) { const o = document.createElement('option'); o.value = name; o.textContent = shortName(name); o.title = name; select.appendChild(o); }
     $('previous').disabled = $('next').disabled = S.listed.length < 2;
-    for (const tile of document.querySelectorAll('.tile')) tile.classList.toggle('on', !!S.results && ((tile.id === 'tile-responding' && S.group === 1) || (tile.id === 'tile-registered' && S.group === 0) || (tile.id === 'tile-excluded' && S.group === 3) || (tile.id === 'tile-unscorable' && S.group === 4)));
     pick(S.listed.includes(S.cell) ? S.cell : (S.listed[0] || null));
   }
   function showGroup(group) { if (S.group !== group) { S.group = group; $('group').value = group; listCells(); } }
@@ -700,7 +718,7 @@
       verdict.innerHTML = parts.filter(Boolean).join(' · ');
       verdict.title = 'Rise and threshold are shown as percentages of local prestimulus fluorescence. The saved call table stores the corresponding fractions.';
     }
-    const flags = qualityFor(name); $('cell-quality').hidden = !flags.length; $('cell-quality').textContent = flags.map(flagText).join(' · ');
+    const flags = qualityFor(name); $('cell-quality').hidden = !flags.length; $('cell-quality').textContent = flags.map(flagText).join(' · '); $('cell-quality').title = $('cell-quality').textContent;
     $('zoom-cell').disabled = !name || !(S.info.hasPicture || S.info.hasMovie);
     for (const row of document.querySelectorAll('tbody tr')) row.classList.toggle('on', row.dataset.cell === name);
     if (Pic.zoom > 1 && name) centreOn(S.info.names.indexOf(name));
@@ -1454,6 +1472,23 @@
     $('save-picture-folder').addEventListener('click', () => saveToFolder(viewPicture, viewKind(), 'picture-saved'));
     $('save-picture').addEventListener('click', () => save(viewPicture, viewKind(), 'picture-saved'));
     $('outline-width').addEventListener('change', () => { S.outlineWidth = Number($('outline-width').value) || 1; store('step4.outline', $('outline-width').value); drawPicture(); });
+    // One Export menu per panel holds its save buttons. Choosing an entry closes the menu; so does a click elsewhere or Escape.
+    // A panel opened from an entry (Options, Save frames) is placed against the menu's own button, which stays on screen.
+    const anchorOf = (button) => button.closest('details.export') || button;
+    const menus = Array.from(document.querySelectorAll('details.export, details.quality-chip'));
+    for (const menu of menus) {
+      menu.addEventListener('click', (event) => { if (event.target.closest('.export-menu button')) menu.open = false; }, true);
+      menu.addEventListener('toggle', () => {
+        if (!menu.open) return;
+        for (const other of menus) if (other !== menu) other.open = false;
+        const pop = menu.querySelector('.quality-pop'); if (!pop) return;   // the chip can sit anywhere in its row: its list is kept inside the work area
+        const area = document.querySelector('main').getBoundingClientRect(), chip = menu.getBoundingClientRect(), width = Math.min(520, area.width - 16);
+        pop.style.width = width + 'px'; pop.style.left = Math.round(Math.max(area.left + 8, Math.min(chip.left, area.right - 8 - width)) - chip.left) + 'px';
+      });
+    }
+    // the path as the click travelled: an entry that redraws itself when clicked is no longer inside the menu by now
+    document.addEventListener('click', (event) => { const path = event.composedPath(); for (const menu of menus) if (menu.open && !path.includes(menu)) menu.open = false; });
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape') for (const menu of menus) if (menu.open) { menu.open = false; menu.querySelector('summary').focus(); } });
     // every Nth frame of the view on screen, each its own labelled picture, in a folder of their own
     const framesPanel = $('frames-options'), framesEvery = () => Math.round(Number($('frames-every').value));
     const framesCount = () => { const every = framesEvery(), ok = every >= 1 && every <= S.info.frames; $('frames-go').disabled = !ok;
@@ -1465,7 +1500,7 @@
       if (still()) { note.className = 'save-note bad'; note.textContent = 'Choose a recording view first: this view is one still picture.'; return; }
       if (!framesPanel.hidden) { framesPanel.hidden = true; return; }
       $('frames-every').value = stored('step4.every') || '50'; $('frames-every').max = S.info.frames; framesCount(); framesPanel.hidden = false;
-      const box = $('save-frames').getBoundingClientRect(); framesPanel.style.left = Math.max(8, Math.min(window.innerWidth - 316, box.right - 300)) + 'px'; framesPanel.style.top = ''; framesPanel.style.bottom = '';
+      const box = anchorOf($('save-frames')).getBoundingClientRect(); framesPanel.style.left = Math.max(8, Math.min(window.innerWidth - 316, box.right - 300)) + 'px'; framesPanel.style.top = ''; framesPanel.style.bottom = '';
       if (box.top > window.innerHeight / 2) framesPanel.style.bottom = (window.innerHeight - box.top + 6) + 'px'; else framesPanel.style.top = (box.bottom + 6) + 'px';
       $('frames-every').focus(); $('frames-every').select(); event.stopPropagation();
     });
@@ -1502,7 +1537,7 @@
       const panel = $('save-options'), open = panel.hidden || panel.dataset.by !== String(Array.from(document.querySelectorAll('.save-options-toggle')).indexOf(button));
       panel.hidden = !open; if (!open) return;
       panel.dataset.by = String(Array.from(document.querySelectorAll('.save-options-toggle')).indexOf(button)); showSaveOptions();
-      const box = button.getBoundingClientRect(); panel.style.left = Math.max(8, Math.min(window.innerWidth - 316, box.right - 300)) + 'px'; panel.style.top = ''; panel.style.bottom = '';
+      const box = anchorOf(button).getBoundingClientRect(); panel.style.left = Math.max(8, Math.min(window.innerWidth - 316, box.right - 300)) + 'px'; panel.style.top = ''; panel.style.bottom = '';
       if (box.top > window.innerHeight / 2) panel.style.bottom = (window.innerHeight - box.top + 6) + 'px'; else panel.style.top = (box.bottom + 6) + 'px';
       event.stopPropagation();
     });
@@ -1529,12 +1564,6 @@
       } catch (error) { note.className = 'save-note bad'; note.textContent = 'Not saved: ' + error.message; }
     });
     for (const tab of document.querySelectorAll('.tab')) tab.addEventListener('click', () => showTab(tab.dataset.tab));
-    for (const tile of document.querySelectorAll('.tile')) tile.addEventListener('click', () => {
-      if (!S.results) return;
-      const primary = (S.results.windows || []).find((w) => w.role === 'Stimulus');
-      if (primary && S.window !== primary.key) { S.window = primary.key; $('response-window').value = S.window; updateWindow(); }
-      showGroup(Number(tile.dataset.group)); showTab('review');
-    });
     $('toggle-settings').addEventListener('click', () => { const hidden = document.body.classList.toggle('no-side'); $('toggle-settings').textContent = hidden ? 'Show settings' : 'Hide settings'; redraw(); });
     $('side').addEventListener('input', (event) => {
       const box = event.target;
@@ -1607,6 +1636,7 @@
     };
     $('log').addEventListener('click', () => openFile('log'));
     $('open-folder').addEventListener('click', () => openFile('folder'));
+    $('side').addEventListener('toggle', () => { if (S.state) showState(); }, true);   // a folded section that opens or closes changes where its messages can sit
     $('close-page').addEventListener('click', async () => {
       try { await api('close', {}); S.closed = true; play(false); $('lost').textContent = 'This analysis page is closed. Saved results remain in the results folder. You can close this tab.'; $('lost').classList.add('on'); showState(); }
       catch (error) { draftError(error); }
