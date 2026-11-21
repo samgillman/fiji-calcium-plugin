@@ -627,7 +627,7 @@
     status.title = state.message || '';
     // what the tick box confirms, in the user's own numbers
     { const d = collectDraft(), hz = Number(d.values.sampling_hz), first = d.protocol.windows[0], used = first ? windowFrames(expandWindow(first, d.protocol.schema_version === 1), editedTimes()) : null, st = used && used.stimulus;
-      $('confirm-text').textContent = 'Timing checked' + (d.timestamps || (isFinite(hz) && hz > 0) ? ': ' + (d.timestamps ? 'recorded timestamps' : fmt(+hz.toPrecision(4)) + (hz === 1 ? ' frame/s' : ' frames/s')) + (st ? ', stimulus ' + (st.before >= 1 && st.before < used.n ? 'after frame ' + st.before : 'outside the recording') : '') : '');
+      $('confirm-text').textContent = 'Timing checked' + (d.timestamps || (isFinite(hz) && hz > 0) ? ': ' + (d.timestamps ? 'recorded timestamps' : fmt(+hz.toPrecision(4)) + (fmt(+hz.toPrecision(4)) === '1' ? ' frame/s' : ' frames/s')) + (st ? ', stimulus ' + (st.before >= 1 && st.before < used.n ? 'after frame ' + st.before : 'outside the recording') : '') : '');
       // the recording's own frame rate, when a different one is typed
       const own = Number(S.info.recordedHz), note = $('rate-note'), differs = !d.timestamps && isFinite(own) && own > 0 && isFinite(hz) && hz > 0 && Math.abs(hz - own) > 1e-9 * own, text = differs ? 'The file says ' + fmt(+own.toPrecision(6)) + ' (' + fmt(+(1 / own).toPrecision(6)) + ' s per frame). ' : '';
       if (note.dataset.shown !== text) { note.dataset.shown = text; note.hidden = !differs; note.replaceChildren(text);

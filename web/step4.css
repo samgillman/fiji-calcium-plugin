@@ -258,7 +258,7 @@ body:not(.has-results) #resize-split { display: none; }
 }
 
 /* More room for the movie and the plot, less for the page's own furniture. */
-.split { min-height: max(350px, 54vh); }
+.split { min-height: max(420px, 62vh); }   /* the playback bar is inside the picture's card now, so the cards are that much taller */
 .workspace-heading h1 { font-size: 17px; margin: 0; }
 .tiles { display: flex; gap: 10px; flex-wrap: wrap; }
 .tile { flex: 1 1 0; min-width: 120px; padding: 7px 12px; } .tile.big { flex: 3 1 0; border-left: 4px solid var(--blue); }
@@ -423,3 +423,5 @@ p + .field-warning, p + .field-error { justify-content: flex-start; text-align: 
 #plot-card .caption > .help { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #plot-card .caption > .grow { display: none; }
 #plot-card .caption > .save-note { flex: 0 1 auto; min-width: 0; }
+/* In a short window the pictures have a fixed height and the page scrolls. The picture still fills its card when the plot card beside it is taller. */
+@media (max-height: 850px) and (min-width: 801px) { #picture-card .stage { height: auto; min-height: 260px; flex: 1 1 auto; } }

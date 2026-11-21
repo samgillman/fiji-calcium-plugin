@@ -70,6 +70,10 @@ try {
         assert hooks.hoverAt(24, 30).contains('Your cell 1') && hooks.trace.vals == null && !hooks.responseSeen() : 'No trace while choosing blind'
         assert hooks.basisFor(hooks.cellRois()) == 'Before the response, blind (frames 1-' + offered + ')'
         assert hooks.nextLine.text.contains('Add cells that respond') && hooks.nextLine.text.contains('Continue to measure') && hooks.addRespondersBtn.enabled : 'With blind cells chosen, the next step is offered: ' + hooks.nextLine.text
+        // this recording has a response, so cells that only show when they respond have no outline yet: adding them is the next step
+        assert hooks.nextLine.text.contains('have no outline yet') && hooks.nextLine.text.indexOf('Add cells that respond') < hooks.nextLine.text.indexOf('Continue to measure') : hooks.nextLine.text
+        assert hooks.addRespondersBtn.getUI().primary && !hooks.continueBtn.getUI().primary : 'Add cells that respond is the one blue button, not Continue to measure'
+        assert !hooks.addMissedBtn.visible : 'nothing is measured yet'
         // the legend switches kinds off and on: a click hides or shows one kind, a double-click shows only that kind
         int drawnAll = picture.getOverlay().size()
         hooks.legendClicked('cells', false); int withoutCells = picture.getOverlay().size()

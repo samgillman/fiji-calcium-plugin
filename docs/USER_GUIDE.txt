@@ -215,7 +215,12 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        four. The cost is 25-55 % more suggestions to review.
   Order in Step 2      The blue "Next:" line at the top of Step 2 always names the one thing to do:
                        Suggest cells, Accept likely, click the dashed outlines that are cells, then
-                       Add cells that respond… (blind only) or Continue to measure.
+                       Add cells that respond… and Continue to measure. In a recording with a response,
+                       Add cells that respond… is the highlighted step after the blind cells: blind
+                       selection alone leaves cells that only show when they respond without an outline
+                       (P2 Run1 ATP: 65 blind cells, 92 more with the response shown). Continue to
+                       measure with blind cells only asks once whether to add them first, and after a
+                       blind-only measurement Step 3 has the same button beside Back to cells.
   Blind, then magenta  Blind and response-assisted choosing can be used together: choose cells blind, then
                        press Add cells that respond… (the same as switching Picture to Response
                        (magenta)); the plugin then looks for the cells that are only visible when
