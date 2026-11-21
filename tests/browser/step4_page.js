@@ -325,6 +325,20 @@ const assert = require('assert/strict');
     assert.equal(sent.input_mode, 'background_corrected_fluorescence');
     assert.match(await text('#tile-responding'), /67%.*2 of 3 evaluable/);
     assert.equal((await text('#tile-registered')).replace(/\D/g, ''), '6');
+    // All cells lead the headline; the quiet cells follow on a line of their own; every figure comes from the tally worked out in Fiji.
+    assert.match(await page.locator('#tile-responding > b').textContent(), /^67%$/);
+    assert.match(await page.locator('#tile-responding .tile-line').last().textContent(), /^Quiet enough to detect a 30 % rise: \d+% \(\d+ of \d+\)$/);
+    // The cell that went below zero stays counted until the switch leaves it out; then every figure follows, and comes back.
+    const counted = await text('#tile-responding'), tally = await page.evaluate(() => window.calciumStep4.S.results.tally);
+    assert.deepEqual(tally.belowZero, ['Cell005']); assert.equal(await text('#below-zero-text'), 'Leave out 1 cell below zero'); assert.ok(await page.isVisible('#below-zero-label') && !(await page.isChecked('#below-zero')));
+    const allRow = tally.rows.find((row) => row.key === 'all'); assert.deepEqual(allRow.counted.slice(0, 2), [2, 3]);
+    await page.check('#below-zero');
+    assert.match(await text('#tile-responding'), new RegExp('Capsaicin: ' + allRow.without[0] + ' of ' + allRow.without[1] + ' evaluable cells · 1 below zero left out'));
+    assert.equal(await page.locator('#tile-responding > b').textContent(), Math.round(100 * allRow.without[0] / allRow.without[1]) + '%');
+    await page.uncheck('#below-zero'); assert.equal(await text('#tile-responding'), counted);
+    // The rule line says what is applied: samples in a row, also for a length typed in seconds.
+    assert.match(await text('#rule-summary-0'), /for 2 samples in a row$/);
+    assert.deepEqual(await page.evaluate(() => { const f = window.calciumStep4.samplesFor, at = (step) => Array.from({ length: 20 }, (_, i) => i * step); return [f(1, at(1)), f(1, at(0.999946296215057)), f(1, at(0.5)), f(1, at(0.19999999999999996)), f(0.4, at(0.5)), f(1, null), f(0, at(1))]; }), [2, 3, 3, 6, 2, null, null]);
     assert.equal(await page.inputValue('#view'), 'raw', 'analysis preserves the selected movie view');
     await page.selectOption('#cell', 'Cell001'); assert.match(await text('#verdict'), /Cell001: Responded/);
     // The duration notice is set on every cell by the engine but belongs to the recording: it is shown once and flags no cell.
@@ -358,6 +372,7 @@ const assert = require('assert/strict');
     assert.match(await text('#verdict'), /Cell001: Did not respond/);
     assert.ok(await page.evaluate(() => Math.abs(window.calciumStep4.referenceLevels().find((r) => r.name === 'required rise').value - 1.1) < 1e-12), 'local .4 threshold on baseline .5 belongs at global 1.1');
     assert.match(await text('#tile-responding'), /Ionomycin \(control\): 1 of 3 evaluable/);
+    assert.ok(await page.isHidden('#below-zero-label'), 'the switch belongs to the primary stimulus');
     await page.selectOption('#group', '1');
     assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value).filter(Boolean)), ['Cell002']);
     await page.selectOption('#response-window', 'Stimulus::Capsaicin');
@@ -500,6 +515,9 @@ const assert = require('assert/strict');
     assert.ok(await page.locator('#table-calls tbody .cell-column').first().evaluate((e) => {const a=e.getBoundingClientRect(),b=e.closest('.scroller').getBoundingClientRect();return a.left>=b.left-1&&a.left<b.left+5;}));
     await page.uncheck('#all-call-columns');
     await page.screenshot({ path: path.join(out, 'page-calls.png') });
+    await page.click('.tab[data-tab=counts]');
+    assert.deepEqual(await page.evaluate(() => { const t = document.getElementById('table-tally'); return { head: [...t.tHead.rows[0].cells].slice(0, 4).map((c) => c.textContent), first: [...t.tBodies[0].rows[0].cells].slice(0, 4).map((c) => c.textContent), rows: t.tBodies[0].rows.length }; }),
+      { head: ['Cells', '% responding', 'Responded', 'Evaluable'], first: ['All cells', '66.7', '2', '3'], rows: 2 }, 'the same tally on the Responder counts tab');
     await page.click('.tab[data-tab=metrics]');
     // The summary: each metric once, with its unit and where it is measured; saved columns with the same numbers share a row;
     // the timing and shape of a response are given only for cells that responded.

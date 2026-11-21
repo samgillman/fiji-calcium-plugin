@@ -74,7 +74,12 @@ select { border: 1px solid #C5CED8; border-radius: var(--radius); height: var(--
 .tiles { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; flex: none; }
 .tile { display: flex; align-items: baseline; gap: 7px; min-width: 0; border: 1px solid var(--gray-100); border-radius: var(--radius); background: #fff; cursor: default; }
 .tile b { font-weight: 700; } .tile span { font-size: 12.5px; color: var(--gray-600); }
-.tile.big { flex: 1 1 100%; padding: 5px 11px; box-shadow: var(--shadow-1); } .tile.big b { font-size: 21px; line-height: 1.15; color: var(--blue); } .tile.big span { line-height: 1.35; }
+.tile.big { flex: 1 1 100%; flex-wrap: wrap; padding: 5px 11px; box-shadow: var(--shadow-1); } .tile.big b { font-size: 21px; line-height: 1.15; color: var(--blue); } .tile.big span { line-height: 1.35; }
+/* under the leading figure: the same percentage for parts of the cells, one line each */
+.tile.big .tile-line { flex: 1 1 100%; }
+/* the switch that leaves the cells below zero out of the percentages; and the same tally as a table on its tab */
+.tiles .check { align-items: center; min-height: var(--control-h); font-size: 13px; } .tiles .check input { margin: 0; }
+.tally-box { flex: none; overflow-x: auto; background: #fff; border: 1px solid var(--gray-100); border-radius: var(--radius); box-shadow: var(--shadow-1); }
 .tile:not(.big) { flex: none; height: var(--control-h); padding: 0 10px; } .tile:not(.big) b { font-size: 15px; }
 .tile:not(.big) b, .tile:not(.big) span { line-height: calc(var(--control-h) - 2px); }
 .tile.zero b { color: var(--gray-600); font-weight: 600; }
