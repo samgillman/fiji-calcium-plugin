@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.11.21.5
+
+The line on the Step 4 plot that marks the picture's frame is shown only while the frame moves. No measurement, response call or saved table changes.
+
+- **Nothing is drawn on the traces while nothing moves.** The solid vertical line used to stay at the frame the picture shows.
+- **While the frame moves, the line shows where the picture is, with that frame's numbers:** a drag in the plot, the slider or the step buttons under the picture, the arrow keys, Play. About a second and a half after the frame stops, the line goes.
+- With the pointer over the plot, the dashed line and the numbers under the pointer show as before.
+
 ## 2026.11.21.4
 
 The numbers on the Step 4 plot follow the pointer. No measurement, response call or saved table changes.

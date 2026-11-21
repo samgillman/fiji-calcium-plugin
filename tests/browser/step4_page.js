@@ -410,25 +410,29 @@ const assert = require('assert/strict');
       return { start: { x: x(S.results.time[12]), y: box.top + g.T + (g.hi - S.results.traces.Cell001[12]) / (g.hi - g.lo) * g.H },
         end: { x: x(S.results.time[21]), y: box.top + g.T + g.H / 2 } };
     });
-    // The numbers on the plot follow the pointer; nothing is written on the traces while nobody is reading it.
+    // The numbers on the plot follow the pointer; nothing is drawn on the traces while nobody is reading it.
+    const plotAtRest = () => page.waitForFunction(() => { const P = window.calciumStep4.Plot; return !P.line && P.readout === null; }, null, { timeout: 6000 });
     const readout = () => page.evaluate(() => window.calciumStep4.Plot.readout), secondsAt = (sample) => page.evaluate((i) => window.calciumStep4.S.results.time[i].toFixed(1) + ' s', sample);
     const from = await secondsAt(12), to = await secondsAt(21);
-    await page.mouse.move(5, 5); assert.equal(await readout(), null, 'no box sits on the plot while the pointer is elsewhere');
+    await page.mouse.move(5, 5); await plotAtRest();   // no line and no box while nothing moves and the pointer is elsewhere
+    const woke = await page.evaluate(() => { const f = window.calciumStep4, was = f.S.frame; f.setFrame(was === 10 ? 11 : 10, true); const seen = { line: f.Plot.line, readout: f.Plot.readout, frame: f.S.frame }; f.setFrame(was, true); return seen; });
+    assert.ok(woke.line && woke.readout.startsWith(await secondsAt(woke.frame - 1)), 'moving the frame from anywhere shows where the picture is, with that frame\'s numbers');
+    await plotAtRest();   // and a moment after it stops, they go
     await page.mouse.move(points.start.x, points.start.y);
-    assert.ok((await readout()).startsWith(from + ' · '), 'over the plot the numbers are those under the pointer'); assert.equal(await page.evaluate(() => window.calciumStep4.Plot.at), 12);
+    assert.ok((await readout()).startsWith(from + ' · '), 'over the plot the numbers are those under the pointer'); assert.equal(await page.evaluate(() => window.calciumStep4.Plot.line), false, 'the pointer brings its own dashed line, not the frame\'s'); assert.equal(await page.evaluate(() => window.calciumStep4.Plot.at), 12);
     await page.mouse.move(points.end.x, points.end.y); assert.ok((await readout()).startsWith(to + ' · '), 'and move with it');
     assert.notEqual(await page.evaluate(() => window.calciumStep4.S.frame), 22, 'looking does not move the recording');
     await page.mouse.move(5, 5); assert.equal(await readout(), null, 'and go when the pointer leaves');
     await page.mouse.move(points.start.x, points.start.y); await page.mouse.down();
     assert.equal(await page.evaluate(() => window.calciumStep4.S.cell), 'Cell001');
     assert.ok(await page.evaluate(() => window.calciumStep4.Plot.scrubbing));
-    assert.ok((await readout()).startsWith(from + ' · Cell001 '), 'while dragging the numbers are the frame\'s');
+    assert.ok((await readout()).startsWith(from + ' · Cell001 '), 'while dragging the numbers are the frame\'s'); assert.ok(await page.evaluate(() => window.calciumStep4.Plot.line), 'and the solid line is at the frame');
     await page.mouse.move(points.end.x, points.end.y, { steps: 6 }); assert.ok((await readout()).startsWith(to + ' · Cell001 '));
     await page.mouse.up();
     await waitFrame(22);
     assert.equal(await page.evaluate(() => window.calciumStep4.Plot.scrubbing), false);
     assert.ok((await readout()).startsWith(to + ' · Cell001 '), 'after the drag the numbers stay under the pointer');
-    await page.mouse.move(5, 5); assert.equal(await readout(), null, 'a click elsewhere leaves no box behind: the line alone marks the frame');
+    await page.mouse.move(5, 5); await plotAtRest();   // a click elsewhere leaves nothing behind on the plot
     await page.mouse.move(points.end.x, points.end.y);
     assert.match(await text('#time-label'), /15\.50 s.*Frame 22 \/ 30/);
 
