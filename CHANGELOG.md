@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.11.21.7
+
+Step 2 of the plugin's window: the four actions no longer move down when the "Next:" sentence gets longer. No measurement, response call or saved table changes.
+
+- **The Next line and the line under Picture each keep room for two lines.** In 2026.11.21.6 the block of four actions sat 17 or 34 pixels lower whenever the Next sentence took two or three lines instead of one. It now stays where it is in every state.
+- **The two Next sentences that took three lines are shorter:** "click the dashed outlines that are real cells (43 left), Add cells that respond… (no outline yet), then Continue to measure." and "these 177 cells are measured. Add cells that respond… (no outline yet) and measure again, or go on to Analyze responses."
+- **"Hidden on the picture now: …" is under the Show switches,** where things are hidden and shown, not at the end of the Next sentence. It takes no room while everything is shown.
+- In a window made narrower than usual a sentence can still need a third line; it gets it, and what is under it moves down by that line.
+
 ## 2026.11.21.6
 
 The plugin's window in Fiji, polished: Step 2 "Choose the cells" most of all. No measurement, response call or saved table changes; what is recorded about how cells were chosen is unchanged.

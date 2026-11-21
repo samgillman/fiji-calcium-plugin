@@ -118,8 +118,14 @@ try {
                 int inner = ui.choose.body.width - ui.choose.body.insets.left - ui.choose.body.insets.right
                 assert ui.info.width == inner && ui.status.width == inner && ui.nextLine.width == inner : 'Text is as wide as its card'
                 assert [ui.add, ui.suggest, ui.responders, ui.tick, ui.status, ui.nextLine].collect { left(it) }.unique() == [ui.choose.body.insets.left] : 'One left edge'
+                // The Next line keeps room for two lines: the actions under it do not move between a short and a longer sentence.
+                int line = ui.nextLine.getFontMetrics(ui.nextLine.font).height
+                ui.nextLine.setText('<html><b>Next:</b> press <b>Accept likely (95)</b>.</html>'); ui.frame.validate(); int shortTop = left(ui.suggest) * 0 + SwingUtilities.convertPoint(ui.suggest.parent, ui.suggest.location, ui.choose.body).y
+                assert ui.nextLine.height == 2 * line : 'One line of words, room for two'
+                ui.nextLine.setText('<html><b>Next:</b> ' + ('word ' * 22) + '</html>'); ui.frame.validate()
+                assert ui.nextLine.height == 2 * line && SwingUtilities.convertPoint(ui.suggest.parent, ui.suggest.location, ui.choose.body).y == shortTop : 'Two lines of words: nothing under them moved'
                 ui.nextLine.setText('<html>' + ('several words that have to wrap ' * 12) + '</html>'); ui.frame.validate()
-                int wide = ui.nextLine.height; assert wide > ui.status.height : 'A long sentence takes the lines it needs'
+                int wide = ui.nextLine.height; assert wide > 2 * line : 'A sentence that needs more than two lines still gets them'
                 // The four actions keep their places and sizes whatever they say and whichever is the blue one.
                 def places = { [ui.suggest, ui.accept, ui.responders, ui.next].collect { SwingUtilities.convertRectangle(it.parent, it.bounds, ui.choose.body) } }
                 def before = places()
