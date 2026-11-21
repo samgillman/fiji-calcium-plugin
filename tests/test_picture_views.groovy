@@ -83,9 +83,10 @@ try {
         int drawnAll = picture.getOverlay().size()
         hooks.legendClicked('cells', false); int withoutCells = picture.getOverlay().size()
         assert withoutCells < drawnAll && hooks.hiddenKinds == ['cells'] as Set : 'Your cells can be hidden'
-        assert !hooks.showSwitches.cells.part.on && hooks.showSwitches.background.part.on && hooks.nextLine.text.contains('Tick them under Show') : 'The switch shows what is hidden, and the Next line says where to bring it back'
+        assert !hooks.showSwitches.cells.part.on && hooks.showSwitches.background.part.on && hooks.hiddenLine.text.contains('Hidden on the picture now: your cells.') && !hooks.nextLine.text.contains('Hidden') : 'The switch shows what is hidden, and a line under the switches says so'
         hooks.showSwitches.cells.part.clicked(false)   // a click on the switch itself
         assert picture.getOverlay().size() == drawnAll && hooks.hiddenKinds.isEmpty() && hooks.showSwitches.cells.part.on
+        assert !hooks.hiddenLine.text.contains('Hidden') && hooks.hiddenLine.preferredSize.height == 0 : 'With everything shown that line takes no room'
         hooks.legendClicked('background', false); hooks.legendClicked('background', true)
         assert hooks.hiddenKinds == ['cells', 'g0', 'g1', 'g2', 'g3'] as Set && picture.getOverlay().size() <= withoutCells : 'Double-click: only the background'
         hooks.legendClicked('background', false); hooks.legendClicked('background', true)
