@@ -23,6 +23,9 @@ const assert = require('assert/strict');
     });
     page.on('pageerror', (error) => problems.push('page error: ' + error.message));
     const text = (selector) => page.textContent(selector);
+    // The Cell box takes typing: a name and Enter opens that cell, an empty box is no cell.
+    const openCell = async (name) => { await page.fill('#cell', name); await page.press('#cell', 'Enter'); };
+    const cellsOffered = () => page.locator('#cell-names option').evaluateAll((options) => options.map((o) => o.value));
     const waitFrame = (frame) => page.waitForFunction((wanted) => {
       const app = window.calciumStep4;
       return app.S.frame === wanted && app.Pic.shownFrame === wanted && !app.Pic.loading && document.getElementById('movie-message').hidden;
@@ -76,7 +79,8 @@ const assert = require('assert/strict');
     assert.equal(await page.inputValue('#view'), 'raw');
     assert.ok(await page.isEnabled('#play') && await page.isEnabled('#time'), 'movie controls work before an analysis');
     assert.ok(await page.isHidden('#result-tiles') && await page.isHidden('#plot-card'), 'preview has no empty result dashboard');
-    assert.deepEqual(await page.locator('#cell option').evaluateAll((o) => o.map((x) => x.textContent)), ['None', 'Cell001', 'Cell002', 'Cell003', 'Cell004', 'Cell005', 'Cell006'], 'cells can be selected before analysis, and none is a choice');
+    assert.deepEqual(await cellsOffered(), ['Cell001', 'Cell002', 'Cell003', 'Cell004', 'Cell005', 'Cell006'], 'cells can be selected before analysis');
+    assert.equal(await page.getAttribute('#cell', 'placeholder'), 'None', 'and none is a choice: an empty box');
     assert.equal(await page.inputValue('#cell'), '', 'the page opens with no cell selected'); assert.ok(await page.isDisabled('#zoom-cell'));
     assert.ok(await page.locator('#windows-editor details').evaluateAll((details) => details.every((d) => !d.open)), 'advanced response rules start collapsed');
     assert.ok(await page.evaluate(() => {
@@ -340,20 +344,31 @@ const assert = require('assert/strict');
     assert.match(await text('#rule-summary-0'), /for 2 samples in a row$/);
     assert.deepEqual(await page.evaluate(() => { const f = window.calciumStep4.samplesFor, at = (step) => Array.from({ length: 20 }, (_, i) => i * step); return [f(1, at(1)), f(1, at(0.999946296215057)), f(1, at(0.5)), f(1, at(0.19999999999999996)), f(0.4, at(0.5)), f(1, null), f(0, at(1))]; }), [2, 3, 3, 6, 2, null, null]);
     assert.equal(await page.inputValue('#view'), 'raw', 'analysis preserves the selected movie view');
-    await page.selectOption('#cell', 'Cell001'); assert.match(await text('#verdict'), /Cell001: Responded/);
+    await openCell('Cell001'); assert.match(await text('#verdict'), /Cell001: Responded/);
     // The duration notice is set on every cell by the engine but belongs to the recording: it is shown once and flags no cell.
     assert.deepEqual(await page.locator('#group option').allTextContents(), ['All cells (6)', 'Responded (2)', 'Did not respond (1)', 'Excluded (2)', 'Unscorable (1)', 'Needs quality review (1)']);
     assert.equal(await text('#quality-summary'), '1 cell flagged'); assert.ok(await page.isHidden('#quality-list'), 'the chip does not push the data down');
-    await page.selectOption('#cell', 'Cell005'); assert.match(await text('#cell-quality'), /Low F₀/);
+    await openCell('Cell005'); assert.match(await text('#cell-quality'), /Low F₀/);
     await page.locator('#quality-review summary').click(); assert.match(await text('#quality-list'), /Applies to the whole recording: Minimum response duration is shorter than one frame interval/);
     assert.equal(await text('#quality-lead'), '1 cell flagged, including 1 responder.');
     assert.ok(await page.evaluate(() => { const tabs = document.querySelector('.tabs').getBoundingClientRect(), row = document.getElementById('result-tiles').getBoundingClientRect(); return tabs.top - row.bottom < 40; }), 'the open list lies over the page');
+    // Every flagged cell is on a row of its own, with its call and what it is flagged for; under the rows, each flag once.
+    assert.deepEqual(await page.locator('#table-flagged tbody tr').evaluateAll((rows) => rows.map((r) => [...r.cells].map((c) => c.textContent))), [['Cell005', 'Responded', 'Low F₀ · Below zero']]);
+    assert.ok(await page.locator('#table-flagged tbody tr.on').count() === 1, 'the open cell is marked in the list');
+    assert.deepEqual(await page.locator('#quality-list .flag-filter').allTextContents(), ['Low F₀: 1 cell, 1 responder', 'Below zero: 1 cell, 1 responder']);
+    assert.match(await page.locator('#quality-list .flag-what').first().textContent(), /^Low F₀ relative to baseline noise/);
+    assert.equal(await page.locator('#quality-filter').count(), 0, 'the Show list is the one place to show the flagged cells');
     await page.locator('#quality-list .flag-filter').first().click();
-    assert.equal(await page.inputValue('#group'), '5'); assert.deepEqual(await page.locator('#cell option').evaluateAll((o) => o.map((x) => x.value).filter(Boolean)), ['Cell005']);
+    assert.equal(await page.inputValue('#group'), '5'); assert.deepEqual(await cellsOffered(), ['Cell005']);
     await page.locator('#quality-list .flag-filter').first().click(); assert.equal(await page.evaluate(() => window.calciumStep4.S.qualityFlag), null);
+    // A click on a flagged cell's row opens that cell: Show goes to the flagged cells, so the arrows step through them, and the list closes.
+    await page.selectOption('#group', '0'); await openCell(''); await page.locator('#quality-review summary').click(); await page.locator('#quality-review summary').click();
+    await page.locator('#table-flagged tbody tr').first().click();
+    assert.deepEqual(await page.evaluate(() => { const a = window.calciumStep4; return { cell: a.S.cell, group: document.getElementById('group').value, open: document.getElementById('quality-review').open, box: document.getElementById('cell').value }; }), { cell: 'Cell005', group: '5', open: false, box: 'Cell005' });
+    assert.equal(await text('.tab.on'), 'Cells and traces'); await page.locator('#quality-review summary').click();
     await page.selectOption('#group', '0');
     await page.locator('#quality-review summary').click();
-    await page.selectOption('#cell', 'Cell001');
+    await openCell('Cell001');
     await screenshots('after');
     // Low windows and the connection banner must remain scrollable without hiding the caption.
     await page.setViewportSize({width:1440,height:739});
@@ -376,15 +391,15 @@ const assert = require('assert/strict');
     assert.match(await text('#tile-responding'), /Ionomycin \(control\): 1 of 3 evaluable/);
     assert.ok(await page.isHidden('#below-zero-label'), 'the switch belongs to the primary stimulus');
     await page.selectOption('#group', '1');
-    assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value).filter(Boolean)), ['Cell002']);
+    assert.deepEqual(await cellsOffered(), ['Cell002']);
     await page.selectOption('#response-window', 'Stimulus::Capsaicin');
     assert.match(await text('#tile-responding'), /Capsaicin: 2 of 3 evaluable/);
-    assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value).filter(Boolean)), ['Cell001', 'Cell005']);
+    assert.deepEqual(await cellsOffered(), ['Cell001', 'Cell005']);
     await page.selectOption('#group', '3');
-    assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value).filter(Boolean)), ['Cell003', 'Cell004']);
+    assert.deepEqual(await cellsOffered(), ['Cell003', 'Cell004']);
     await page.selectOption('#group', '4');
-    assert.deepEqual(await page.locator('#cell option').evaluateAll((options) => options.map((o) => o.value).filter(Boolean)), ['Cell006']);
-    await page.selectOption('#group', '0'); await page.selectOption('#cell', 'Cell002');
+    assert.deepEqual(await cellsOffered(), ['Cell006']);
+    await page.selectOption('#group', '0'); await openCell('Cell002');
 
     // Dragging begins on another cell's trace; pointer capture keeps it scrubbing.
     await page.locator('#plot').scrollIntoViewIfNeeded();
@@ -405,16 +420,21 @@ const assert = require('assert/strict');
 
     // No cell selected is a state of its own (the page opens that way), and the plot follows the selection.
     const app = (what) => page.evaluate((key) => { const a = window.calciumStep4; return key === 'cell' ? a.S.cell : key === 'plot' ? a.S.plotMode : a.Pic.zoom; }, what);
-    await page.selectOption('#cell', '');
+    await openCell('');
     assert.equal(await app('cell'), null); assert.equal(await text('#verdict'), 'No cell selected.'); assert.ok(await page.isDisabled('#zoom-cell'));
     assert.equal(await app('plot'), 'mean', 'with no cell the plot shows the average');
-    await page.selectOption('#cell', 'Cell002');
+    await openCell('Cell002');
     assert.equal(await app('plot'), 'cell', 'choosing a cell shows that cell over the average');
+    // The Cell box: a number alone and Enter opens that cell; text that names no cell is put back to the open one.
+    await openCell('1'); assert.equal(await app('cell'), 'Cell001'); assert.equal(await page.inputValue('#cell'), 'Cell001');
+    await openCell('no such cell'); assert.equal(await app('cell'), 'Cell001'); assert.equal(await page.inputValue('#cell'), 'Cell001');
+    assert.deepEqual(await page.evaluate(() => { const f = window.calciumStep4.cellTyped; return [f('cell002'), f(' 2 ', true), f('2', false) === undefined, f('', true), f('77', true) === undefined]; }), ['Cell002', 'Cell002', true, null, true], 'a name in any case, a number on Enter only, nothing for an empty box, no match otherwise');
+    await openCell('Cell002');
     await page.evaluate(() => document.activeElement && document.activeElement.blur()); await page.keyboard.press('Escape');
     assert.equal(await app('cell'), null, 'Escape leaves no cell selected'); assert.equal(await app('plot'), 'mean');
     await page.keyboard.press('ArrowRight'); assert.equal(await app('cell'), 'Cell001', 'the arrows start from the first cell');
-    await page.click('[data-plot=calls]'); await page.selectOption('#cell', 'Cell002'); assert.equal(await app('plot'), 'calls', 'a plot type chosen by hand stays');
-    await page.click('[data-plot=cell]'); await page.selectOption('#cell', 'Cell001');
+    await page.click('[data-plot=calls]'); await openCell('Cell002'); assert.equal(await app('plot'), 'calls', 'a plot type chosen by hand stays');
+    await page.click('[data-plot=cell]'); await openCell('Cell001');
     // GFP: the recording in green, the green of "Response in magenta" without the magenta.
     await page.selectOption('#view', 'green'); await waitFrame(22);
     assert.match(await text('#view-key'), /cells, background removed/);

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.11.21.2
+
+Reviewing flagged cells on the Step 4 page. No measurement, response call or saved table changes.
+
+- **The flag list names every flagged cell.** One row per cell, with its call and what it is flagged for in two or three words: "Below zero", "Low F₀", "Noisy baseline". Before, the list gave only a total per flag, and those overlap (on P2 Run1: 8 + 4 + 4 for 9 cells).
+- **A click on a row opens that cell.** Show goes to the flagged cells, the list closes, and the ← and → keys step through them.
+- Under the rows each flag is explained once; a click on one still shows only its cells. The bullets that sat on the last line of each sentence are gone. So is "Show cells needing review": the Show list does that.
+- **The Cell box takes typing.** Type a cell's name or pick it from the list; a number alone and Enter opens that cell ("12" opens Cell 12). An empty box is no cell. It replaces a list with an entry for every cell (177 on P2 Run1).
+
 ## 2026.11.21.1
 
 **This build changes results.** Four choices on how responses are counted and shown, each made after it was measured on the P2 Run1 and P3 Run2 analyses.

@@ -494,6 +494,9 @@
     let best = ''; for (const [reason, n] of seen) if (!best || n > seen.get(best)) best = reason; return best;
   }
   const flagText = (flag) => FLAG_TEXT[flag] || flag.replace(/_/g, ' ');
+  /** Each flag in two or three words, for the list of flagged cells; FLAG_TEXT has the full sentence. */
+  const FLAG_SHORT = { BASELINE_SD_AT_LEAST_ONE_THIRD_LOCAL_F0: 'Noisy baseline', reference_below_3_baseline_sd_review: 'Low F₀', TRACE_BELOW_MINUS_ONE: 'Below zero', RISE_START_BELOW_BASELINE_SD: 'Rise starts in the noise' };
+  const flagShort = (flag) => FLAG_SHORT[flag] || flagText(flag);
   function showQuality() {
     if (!S.results) return;
     const summary = $('quality-summary'), list = $('quality-list'), counts = new Map(); let affected = 0, responders = 0;
@@ -509,16 +512,27 @@
     $('quality-review').hidden = !affected && !notices.length;
     summary.textContent = affected ? plural(affected, 'cell') + ' flagged' : 'Timing note';
     $('quality-lead').textContent = affected ? plural(affected, 'cell') + ' flagged' + (called() ? ', including ' + plural(responders, 'responder') : '') + '.' : 'Review the applied timing.';
+    // Every flagged cell, with its call and what it is flagged for. A click opens the cell; the arrows then step through
+    // the flagged cells. With one flag picked below, only its cells are listed.
+    const flagged = S.info.names.filter((name) => { const flags = qualityFor(name); return flags.length && (!S.qualityFlag || flags.includes(S.qualityFlag)); });
+    const cells = $('table-flagged'); cells.replaceChildren(); $('quality-cells').hidden = !flagged.length;
+    if (flagged.length) {
+      const head = cells.createTHead().insertRow(); for (const title of ['Cell', 'Call', 'Flagged for']) { const th = document.createElement('th'); th.textContent = title; head.appendChild(th); }
+      const body = cells.createTBody();
+      for (const name of flagged) { const tr = body.insertRow(), call = callOf(name) || ''; tr.dataset.cell = name; tr.classList.toggle('on', name === S.cell); tr.title = 'Open ' + shortName(name);
+        tr.insertCell().textContent = shortName(name); tr.insertCell().innerHTML = '<span class="dot" style="background:' + CALL[kind(call)] + '"></span>' + escape(call); tr.insertCell().textContent = qualityFor(name).map(flagShort).join(' · '); }
+    }
     list.replaceChildren();
     for (const [flag, count] of counts) {
       // each flag is a filter of its own, so a small group (for example the cells whose ΔF/F₀ falls below −1) can be isolated
       const li = document.createElement('li'), link = document.createElement('button'); link.type = 'button'; link.className = 'flag-filter' + (S.qualityFlag === flag ? ' on' : '');
-      link.textContent = plural(count.total, 'cell') + ' (' + plural(count.responders, 'responder') + '): ' + flagText(flag) + '.'; link.title = S.qualityFlag === flag ? 'Show all flagged cells again' : 'Show only these cells';
+      link.textContent = flagShort(flag) + ': ' + plural(count.total, 'cell') + (called() ? ', ' + plural(count.responders, 'responder') : ''); link.title = S.qualityFlag === flag ? 'Show all flagged cells again' : 'Show only these cells';
       link.addEventListener('click', () => { S.qualityFlag = S.qualityFlag === flag ? null : flag; S.group = 5; $('group').value = 5; showQuality(); listCells(); showTab('review'); });
-      li.appendChild(link); list.appendChild(li);
+      li.appendChild(link);
+      if (flagShort(flag) !== flagText(flag)) { const what = document.createElement('span'); what.className = 'flag-what'; what.textContent = flagText(flag) + '.'; li.appendChild(what); }
+      list.appendChild(li);
     }
     for (const message of new Set(notices)) { const li = document.createElement('li'); li.textContent = message; list.appendChild(li); }
-    $('quality-filter').disabled = !affected;
   }
   /** What each saved metric column is: [column, name, unit, where it is measured or counted from, response].
    *  response: the column describes the timing or shape of a response, so it is summarised only over cells that responded
@@ -787,9 +801,8 @@
   function listCells() {
     const names = S.info.names;
     S.listed = S.results ? names.filter((n) => inGroup(callOf(n), S.group, n)) : names.slice();
-    const select = $('cell'); select.innerHTML = '';
-    const none = document.createElement('option'); none.value = ''; none.textContent = 'None'; select.appendChild(none);
-    for (const name of S.listed) { const o = document.createElement('option'); o.value = name; o.textContent = shortName(name); o.title = name; select.appendChild(o); }
+    const offered = $('cell-names'); offered.replaceChildren();
+    for (const name of S.listed) { const o = document.createElement('option'); o.value = shortName(name); offered.appendChild(o); }
     $('previous').disabled = $('next').disabled = S.listed.length < 1;
     pick(S.listed.includes(S.cell) ? S.cell : null);   // the selection never changes by itself: a cell that is not listed is no longer selected
   }
@@ -797,7 +810,7 @@
   /** Selects a cell everywhere: the list, the picture, the plot, the heatmap and the tables. */
   function pick(name) {
     if (name && S.results && !S.listed.includes(name)) { S.group = 0; $('group').value = 0; S.cell = name; listCells(); return; }
-    S.cell = name || null; $('cell').value = name || '';
+    S.cell = name || null; $('cell').value = name ? shortName(name) : '';
     const verdict = $('verdict'), row = name && S.results ? calls()[name] : null;
     if (!name) verdict.textContent = !S.results ? '' : S.listed.length ? 'No cell selected.' : 'No cells in this group.';
     else if (!row) verdict.innerHTML = S.results ? '<b>' + escape(shortName(name)) + '</b> · no response call was saved for this cell' : '';
@@ -827,6 +840,14 @@
   function chooseCell(name) {
     pick(name || null);
     if (S.results && S.cell && S.plotMode === 'mean') setPlotMode('cell'); else if (S.results && !S.cell && S.plotMode === 'cell') setPlotMode('mean');
+  }
+  /** The cell meant by what was typed in the Cell box: its shown name ("Cell 12"), its saved name, or its number alone.
+   *  null for an empty box (no cell); undefined when nothing in the Show list matches. */
+  function cellTyped(text, numberToo) {
+    const typed = String(text || '').trim().toLowerCase(); if (!typed) return null;
+    let hit = S.listed.find((n) => shortName(n).toLowerCase() === typed || n.toLowerCase() === typed);
+    if (!hit && numberToo && /^\d+$/.test(typed)) hit = S.listed.find((n) => { const m = shortName(n).match(/(\d+)\s*$/); return !!m && Number(m[1]) === Number(typed); });
+    return hit;
   }
   function stepCell(by) { if (!S.listed.length) return; const i = S.listed.indexOf(S.cell), next = i < 0 ? (by > 0 ? 0 : S.listed.length - 1) : ((i + by) % S.listed.length + S.listed.length) % S.listed.length; chooseCell(S.listed[next]); }
 
@@ -1753,14 +1774,23 @@
       catch (error) { draftError(error); }
     });
     $('discard').addEventListener('click', () => { S.note = null; S.unlinked.clear(); S.protocolDrafts = {}; fillDraft((S.results && S.results.appliedDraft) || S.initialDraft); $('confirmed').checked = !!(S.results && S.results.appliedDraft); for (const key of FILES) $(key + '-file').value = ''; draftChanged(); });
-    $('quality-filter').addEventListener('click', () => { S.qualityFlag = null; S.group = -1; showGroup(5); showQuality(); showTab('review'); });
+    // a flagged cell is opened from its row: the Show list goes to the flagged cells, so the arrows step through them
+    $('table-flagged').addEventListener('click', (event) => { const tr = event.target.closest('tr'); if (!tr || !tr.dataset.cell) return;
+      const name = tr.dataset.cell; if (S.group !== 5) showGroup(5); chooseCell(name); showTab('review'); $('quality-review').open = false; });
     $('group').addEventListener('change', () => { if (Number($('group').value) !== 5 && S.qualityFlag) { S.qualityFlag = null; showQuality(); } });
     $('all-call-columns').addEventListener('change', () => table('table-calls', S.results.tables.calls));
     $('response-window').addEventListener('change', () => { S.window = $('response-window').value; updateWindow(); });
     $('metrics-table').addEventListener('change', showMetricTable);
     $('below-zero').addEventListener('change', () => { S.withoutBelowZero = $('below-zero').checked; showTiles(); });
     $('group').addEventListener('change', () => { S.group = Number($('group').value); listCells(); });
-    $('cell').addEventListener('change', () => chooseCell($('cell').value || null));
+    // The Cell box. A full name, typed or picked from its list, opens that cell at once; a number alone opens it on Enter.
+    // An empty box is no cell. Text that names no cell in the Show list is put back to the cell that is open.
+    { const box = $('cell'), settle = (numberToo, leave) => { const hit = cellTyped(box.value, numberToo);
+        if (hit !== undefined) { if (hit !== S.cell) chooseCell(hit); if (leave) box.blur(); } else if (leave) box.value = S.cell ? shortName(S.cell) : ''; };
+      box.addEventListener('input', () => settle(false, false));
+      box.addEventListener('change', () => settle(true, true));
+      box.addEventListener('keydown', (event) => { if (event.key === 'Enter') { settle(true, true); event.preventDefault(); } else if (event.key === 'Escape') { box.value = S.cell ? shortName(S.cell) : ''; box.blur(); } });
+      box.addEventListener('focus', () => box.select()); }
     $('previous').addEventListener('click', () => stepCell(-1)); $('next').addEventListener('click', () => stepCell(1));
     $('every').addEventListener('change', () => { S.every = $('every').checked; Plot.dirty = true; drawPlot(); legend(); });
     $('view').addEventListener('change', () => { play(false); S.view = $('view').value; S.viewChosen = true; updateTransport(); requestFrame(); });
@@ -1822,5 +1852,5 @@
 
   wire();
   start().catch((problem) => { $('lost').classList.add('on'); $('status').textContent = problem.message; });
-  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, rateText, samplesFor, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, exportMetadata, heatmapAt };   // for the browser test
+  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, rateText, samplesFor, cellTyped, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, exportMetadata, heatmapAt };   // for the browser test
 })();
