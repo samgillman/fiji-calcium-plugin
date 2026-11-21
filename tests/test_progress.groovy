@@ -241,6 +241,36 @@ new File(picDirs[1], 'fail-all').delete()
 binding.setVariable('steps', stepStub)
 println 'PASS: blind reuse of both pictures; a failure on picture 2 is named and keeps the earlier suggestions'
 
+// With a graphics chip a third picture (0-4 gray levels) is run as well, and its outlines are added by the same rule against
+// the outlines kept so far. Without one (every test above) there are two pictures, as before.
+System.clearProperty('calcium.steps.pretend_no_gpu'); System.setProperty('calcium.steps.pretend_gpu', 'true')
+try {
+    def third = new File(blindDir, 'picture_3_shown_0_to_4_gray_levels')
+    def m3 = new File(third, 'cellpose'); m3.mkdirs(); new File(m3, '__init__.py').text = ''
+    // the stand-in Cellpose says which device it used, as the real one does
+    (picDirs + [third]).each { d -> new File(new File(d, 'cellpose'), '__main__.py').text = new File(module, '__main__.py').text.replace('using CPU', 'using GPU') }
+    // picture 3: one on cell 2 again (shares most of it), one on its own
+    writeFixture(new File(third, 'fixture.zip'), [new Roi(21, 11, 15, 15), new Roi(80, 20, 15, 15)])
+    binding.setVariable('steps', blindStub); binding.setVariable('forceFresh', true); said.clear(); events.clear()
+    def threeTask = Task.newInstance(progress: { p,s,d -> events << [p,s,d] })
+    def threeMessage = suggest(threeTask)
+    assert threeMessage ==~ /6 suggestions from three pictures; Cellpose took \d+ s, \d+ s and \d+ s \(GPU\)/ : threeMessage
+    assert threeTask.succeeded && threeTask.snapshot().context.contains('Three pictures of the frames before the response (0-2, 0-8 and 0-4 gray levels)')
+    assert events.findAll { it[1] == 'Finishing Cellpose' }.collect { it[0] }.unique() == [28, 56, 84] : 'three pictures share the bar: ' + events.findAll { it[1] == 'Finishing Cellpose' }.collect { it[0] }.unique()
+    def note3 = new File(blindDir, 'detection_picture.txt').text
+    assert note3.contains('2 of 3 from picture 2 (0-8 gray levels) added') && note3.contains('1 of 2 from picture 3 (0-4 gray levels) added by the same rule against the outlines kept so far') : note3
+    assert note3.contains('picture_3_shown_0_to_4_gray_levels') && note3.contains('a third picture, from 0 to 4 gray levels')
+    assert proposals.size() == 6 && proposals.count { it.picture == '0 to 4' } == 1 && proposals.count { it.picture == '0 to 8' } == 2
+    assert said.any { it.startsWith('Automatic outlines are blind: Cellpose got three pictures of frames 1-113 only') }
+    // a graphics chip that does not work (Cellpose reports the CPU on the first pictures) does not get a third slow run
+    picDirs.each { d -> new File(new File(d, 'cellpose'), '__main__.py').text = new File(module, '__main__.py').text }
+    def fallbackTask = Task.newInstance(progress: { p,s,d -> })
+    def fallbackMessage = suggest(fallbackTask)
+    assert fallbackMessage ==~ /5 suggestions from two pictures; Cellpose took \d+ s and \d+ s \(CPU\)/ && fallbackTask.succeeded : fallbackMessage
+    assert !new File(blindDir, 'detection_picture.txt').text.contains('picture 3')
+    println 'PASS: with a graphics chip a third blind picture (0-4 gray levels) is run and merged by the same rule; not when Cellpose ran on the CPU'
+} finally { System.clearProperty('calcium.steps.pretend_gpu'); System.setProperty('calcium.steps.pretend_no_gpu', 'true'); binding.setVariable('steps', stepStub) }
+
 def panel
 SwingUtilities.invokeAndWait {
     panel = Panel.newInstance(); def pt = panel.begin()

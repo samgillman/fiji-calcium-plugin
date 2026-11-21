@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.20.19.
+A plugin for Fiji / ImageJ.  Version 2026.11.20.20.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -117,7 +117,7 @@ HOW TO USE IT
          take"), then click once inside each outline that is a real cell. (If the window says Cellpose is not installed,
          press "Set up Cellpose (one time)" first; you can draw cells by hand while it installs.) The outlines are graded by what was measured:
              thick cyan    responds on its own after the stimulus
-             thin cyan     likely a cell (dim, smooth, brighter than its surroundings)
+             thin cyan     likely a cell (not bright on average, brighter than its surroundings)
              grey dashes   unsure
              red           very bright: probably precipitate
          Move the mouse over an outline to read the measurements behind its grade and to see its
@@ -202,8 +202,14 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        outline from the 0-8 picture is added when it shares less than 10 % of the
                        smaller outline's area with every 0-2 outline. Suggestions are graded on the
                        pre-stimulus picture (size, brightness, contrast).
+                       With a graphics chip Cellpose also gets a third picture, shown 0-4 gray
+                       levels; its outlines are added by the same rule against the outlines kept so
+                       far (four audited recordings: 567 of 837 audited cells get an outline instead
+                       of 547, for 6 % more outlines and about 18 s). Without a graphics chip it is
+                       not run.
                        Saved in automatic_outlines_blind/: one folder per picture
-                       (picture_1_shown_0_to_2_gray_levels, picture_2_shown_0_to_8_gray_levels) with
+                       (picture_1_shown_0_to_2_gray_levels, picture_2_shown_0_to_8_gray_levels and,
+                       with a graphics chip, picture_3_shown_0_to_4_gray_levels) with
                        the picture, Cellpose's outlines and messages; detection_picture.txt (how many
                        outlines came from each picture); ..._suggestions_rois.zip (all suggestions,
                        named as in the table); and the table, whose last column says which picture
@@ -279,7 +285,14 @@ Every suggested outline is measured: its size, its mean brightness, the share of
 in it, how much brighter it is than a ring around it, and how much it rises after the stimulus
 compared with that ring. Very bright outlines are graded "probably precipitate". Dim outlines that
 rise more than their surroundings are graded "responds". Dim, smooth outlines that stand out from
-their surroundings are graded "likely a cell". The rest are "unsure".
+their surroundings are graded "likely a cell". So is, since 2026.11.20.20, a cell-sized outline
+(500 pixels or more) that stands out by more than 0.3 gray levels, is not brighter than 8 gray
+levels on average and has less than 60 % very bright pixels: a cell with a bright dot or bright
+patches inside. The rest are "unsure".
+On the blind suggestions of four audited recordings (837 audited cells) "Accept likely" took the
+outlines of 232 audited cells before this rule and 360 with it; 73 % of the outlines it accepted
+were on audited cells before, 71 % now. So about three in ten accepted outlines are still not
+audited cells: look through them and remove the wrong ones.
 On four recordings whose outlines had been reviewed one by one (1396 outlines), the share that
 reviewers accepted as cells was: responds 83 %, likely 80 %, unsure 41 %, probably precipitate 12 %.
 So the grades help, but about one in five cyan outlines is still not a cell. You decide.
