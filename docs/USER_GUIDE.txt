@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.21.5.
+A plugin for Fiji / ImageJ.  Version 2026.11.21.6.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -68,7 +68,8 @@ from the raw file to a table of gray values per cell:
        - All frames: the average of all frames, which includes the frames after the stimulus.
        - All frames with the response in magenta: dim cells are then found only if they respond,
          which raises % responding. Use it for the size or timing of responses, not for % responding.
-     In Step 2, Picture switches between All frames, Before response (blind)… and Response (magenta).
+     In Step 2, Picture switches between All frames, Before response (blind; it asks which frames)
+     and Response (the response in magenta). The line under the switch says which is on.
      The way cells were chosen is recorded with every measurement. "Before the response, blind" is recorded
      only if nothing of the response (magenta, a trace, Step 4) was shown before the outlines were
      final; outlines changed after that are recorded as not blind.
@@ -242,8 +243,11 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        1.25 times its surroundings, and 5 % of its own brightness), also when part of it
                        is very bright; likely = dim, even, clearly brighter than its surroundings;
                        precipitate? = very bright and no rise of its own; unsure = the rest.
-  Legend               Click a legend entry to hide or show that kind on the picture; double-click to see
-                       only that kind (again for everything).
+  Show                 One switch per kind drawn on the picture (your cells, likely a cell, unsure,
+                       background, precipitate?, responds). Click one to hide or show that kind;
+                       double-click to see only that kind (again for everything).
+  The four actions     Suggest cells, Accept likely, Add cells that respond... and Continue to measure keep
+                       their places. The blue one is the next to press; a gray one cannot be pressed now.
   Step 4 start values  The frames confirmed for blind selection become the baseline and the stimulus is
                        taken to follow their last frame (more than 30 frames: the last 20 are the resting
                        baseline). Otherwise the frames before the rise the plugin found. The settings
