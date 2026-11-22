@@ -182,8 +182,16 @@ try {   // a Calcium Imaging folder that links to another folder (a working copy
     if (made) {
         new File(elsewhere, Release.SCRIPT).bytes = original
         def placed = Installer.newInstance(applicationDirectory:directory).settle()
-        assert placed.moved == null && !placed.aside && new File(elsewhere, Release.SCRIPT).bytes == original : 'failed: placed.moved == null && !placed.aside && new File(elsewhere, Release.SCRIPT).bytes == orig'
-        println 'PASS: a linked Calcium Imaging folder is left alone'
+        assert placed.moved == null && !placed.aside : 'a copy in a linked folder was moved: ' + placed
+        assert new File(elsewhere, Release.SCRIPT).bytes == original && !new File(directory, Release.PLACE).exists() : 'a copy in a linked folder was changed'
+        // A link at the plugin's own place is refused, not written through.
+        def place = new File(directory.canonicalFile, Release.PLACE)
+        Files.createSymbolicLink(place.toPath(), new File(elsewhere, Release.SCRIPT).toPath())
+        String refusal = null
+        try { Installer.newInstance(applicationDirectory:directory,download:download).install(release) } catch (IOException expected) { refusal = expected.message }
+        assert refusal?.contains('symbolic link') && new File(elsewhere, Release.SCRIPT).bytes == original : 'the installer wrote through a link: ' + refusal
+        place.delete()
+        println 'PASS: a linked Calcium Imaging folder is left alone; a link at the plugin place is refused'
     } else println 'SKIP: this system does not allow symbolic links here'
 } finally { new File(directory, 'scripts/Plugins/Calcium Imaging').delete(); directory.deleteDir(); elsewhere.deleteDir() }
 

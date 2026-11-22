@@ -1070,8 +1070,14 @@ class CalciumInstaller {
     static boolean nameable(File file) {
         try { file.toPath(); return true } catch (java.nio.file.InvalidPathException ignored) { return false }
     }
+    /** Inside Fiji's folder with no link on the way: what exists of the path is really where its name says. On Windows
+     *  a canonical path does not resolve links, and Files.isSymbolicLink misses junctions; a real path resolves both. */
     static boolean within(File app, File file) {
-        file.canonicalPath.startsWith(app.path + File.separator) && !java.nio.file.Files.isSymbolicLink(file.toPath())
+        def base = app.toPath().toAbsolutePath().normalize(), path = file.toPath().toAbsolutePath().normalize()
+        if (path == base || !path.startsWith(base)) return false
+        def part = path
+        while (!java.nio.file.Files.exists(part, java.nio.file.LinkOption.NOFOLLOW_LINKS)) part = part.parent
+        try { return part.toRealPath() == base.toRealPath().resolve(base.relativize(part)) } catch (IOException ignored) { return false }
     }
     static File inside(File app, File file) {
         if (!within(app, file)) throw new IOException("The plugin installation path points outside this Fiji folder or uses a symbolic link")
