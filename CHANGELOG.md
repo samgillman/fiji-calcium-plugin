@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.11.22.1
+
+Step 4 page: a cell can be unselected with the mouse. No measurement, response call or saved table changes.
+
+- **A click on empty space in the picture shows no cell**, as Esc already did. A click on a cell still opens it, and a click on the open cell still brings a zoomed view back to it. Dragging the picture to move it is not a click and keeps the cell.
+- **A double-click on empty space shows the whole picture and keeps the cell.** Its first click would otherwise have cleared it.
+- **The Cell box has a ✕** (shown on hover, beside the list's arrow) that empties it: no cell. The box looks as before.
+- Esc while typing in the box still puts back the open cell and leaves the box; the browser's own Esc, which empties a search box, is stopped so the box never shows nothing while a cell is open.
+
 ## 2026.11.21.7
 
 Step 2 of the plugin's window: the four actions no longer move down when the "Next:" sentence gets longer. No measurement, response call or saved table changes.

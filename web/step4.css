@@ -37,7 +37,7 @@ h2 { font-size: 15px; font-weight: 600; margin: 0 0 8px; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; }
 .row > span:first-child { color: var(--gray-900); white-space: nowrap; }
 .pair { display: flex; align-items: center; gap: 5px; } .pair i { font-style: normal; color: var(--gray-600); }
-input:not([type]), input[inputmode], input[type=number] { font: inherit; font-size: 13px; width: 64px; height: var(--control-h); padding: 0 7px; border: 1px solid #C5CED8; border-radius: var(--radius); background: #fff; color: inherit; }
+input:not([type]), input[inputmode], input[type=number], input[type=search] { font: inherit; font-size: 13px; width: 64px; height: var(--control-h); padding: 0 7px; border: 1px solid #C5CED8; border-radius: var(--radius); background: #fff; color: inherit; }
 input.wide { width: 130px; }
 input:focus, select:focus, button:focus-visible { outline: 2px solid rgba(0,114,178,.45); outline-offset: 1px; }
 input.changed { border-color: var(--blue); background: var(--blue-light); }
@@ -399,6 +399,7 @@ aside { gap: 8px; }
 .quality-pop ul { max-height: 170px; overflow-y: auto; list-style: none; padding: 0; margin: 0; font-size: 12.5px; align-self: stretch; }
 .quality-pop li + li { margin-top: 5px; } .quality-pop .flag-what { display: block; padding-left: 4px; color: var(--gray-600); }
 #cell { width: 104px; }
+input[type=search] { -webkit-appearance: none; appearance: none; }   /* looks like the other boxes; its ✕ stays */
 /* One Export menu per panel, in its corner. */
 details.export { position: relative; flex: none; margin-left: auto; }
 details.export > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 6px; min-height: var(--control-h); padding: 0 10px; border: 1px solid #C5CED8; border-radius: var(--radius); background: #fff; color: var(--gray-900); font-size: 13px; font-weight: 400; user-select: none; white-space: nowrap; }
