@@ -1,5 +1,5 @@
 CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.21.7.
+A plugin for Fiji / ImageJ.  Version 2026.11.22.1.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -256,8 +256,11 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        group chosen under Show, and nothing else. The buttons above it switch to
                        "One cell + average" or "Responders vs non-responders".
                        Signal: dF/F0, gray levels above background, or raw gray values (not corrected).
-                       Cell box: empty (no cell selected; the page opens that way, Esc returns to it)
-                       or a cell. Type its name, or its number and Enter, or pick it from the list.
+                       Cell box: empty (no cell selected; the page opens that way) or a cell. Type its
+                       name, or its number and Enter, or pick it from the list, or click the cell in
+                       the picture. No cell again: the box's ✕, a click on empty space in the picture,
+                       or Esc outside a box. Esc while typing in the box puts back the open cell.
+                       A double-click on the picture shows all of it and keeps the cell.
                        With a cell selected the plot shows that cell over the average.
                        View: Recording, Background removed, GFP (the same in green), Response in
                        magenta (GFP plus the rise above what the background did, averaged over

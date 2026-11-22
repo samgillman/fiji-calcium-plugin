@@ -453,6 +453,38 @@ const assert = require('assert/strict');
     await page.keyboard.press('ArrowRight'); assert.equal(await app('cell'), 'Cell001', 'the arrows start from the first cell');
     await page.click('[data-plot=calls]'); await openCell('Cell002'); assert.equal(await app('plot'), 'calls', 'a plot type chosen by hand stays');
     await page.click('[data-plot=cell]'); await openCell('Cell001');
+    // The picture: a click on a cell opens it, a click on empty space shows no cell, a drag (pan) is not a click, and a double-click
+    // on empty space shows the whole picture and keeps the cell. The Cell box: its ✕ empties it; Esc in it only undoes the typing.
+    // (a spot well inside a cell other than the open one, and a spot with no outline within 8 pixels)
+    const spots = await page.evaluate(() => { const a = window.calciumStep4, b = document.getElementById('picture').getBoundingClientRect(), at = (x, y) => a.cellAt({ clientX: x, clientY: y });
+      const inside = (x, y, i) => [[0, 0], [5, 0], [-5, 0], [0, 5], [0, -5]].every(([dx, dy]) => at(x + dx, y + dy) === i);
+      const clear = (x, y) => [-8, 0, 8].every((dx) => [-8, 0, 8].every((dy) => at(x + dx, y + dy) < 0));
+      let cell = null, empty = null;
+      for (let y = Math.round(b.top) + 12; y < b.bottom - 12 && !(cell && empty); y += 3) for (let x = Math.round(b.left) + 12; x < b.right - 12 && !(cell && empty); x += 3) {
+        const i = at(x, y); if (i >= 0 && !cell && a.S.info.names[i] !== a.S.cell && inside(x, y, i)) cell = { x, y, name: a.S.info.names[i] }; else if (i < 0 && !empty && clear(x, y)) empty = { x, y }; }
+      return { cell, empty }; });
+    assert.ok(spots.cell && spots.empty, 'the picture has a cell and empty space to click');
+    await page.mouse.click(spots.cell.x, spots.cell.y); assert.equal(await app('cell'), spots.cell.name, 'a click on a cell opens it');
+    await page.mouse.click(spots.empty.x, spots.empty.y);
+    assert.equal(await app('cell'), null, 'a click on empty space shows no cell'); assert.equal(await page.inputValue('#cell'), ''); assert.equal(await app('plot'), 'mean');
+    await page.mouse.click(spots.cell.x, spots.cell.y);
+    await page.mouse.move(spots.empty.x, spots.empty.y); await page.mouse.down(); await page.mouse.move(spots.empty.x + 30, spots.empty.y + 20, { steps: 5 }); await page.mouse.up();
+    assert.equal(await app('cell'), spots.cell.name, 'dragging the picture keeps the cell'); await page.click('#zoom-all');
+    await page.mouse.move(spots.empty.x, spots.empty.y); await page.keyboard.down('Control'); await page.mouse.wheel(0, -300); await page.keyboard.up('Control'); await settledPaint();
+    assert.ok(await app('zoom') > 1 && await page.evaluate(([x, y]) => window.calciumStep4.cellAt({ clientX: x, clientY: y }) < 0, [spots.empty.x, spots.empty.y]), 'zoomed in, still on empty space');
+    await page.mouse.dblclick(spots.empty.x, spots.empty.y); await settledPaint();
+    assert.equal(await app('zoom'), 1, 'a double-click shows the whole picture'); assert.equal(await app('cell'), spots.cell.name, 'and keeps the cell'); assert.equal(await app('plot'), 'cell', 'and the plot');
+    assert.equal(await page.inputValue('#cell'), spots.cell.name, 'the box shows the cell');
+    const boxLook = await page.evaluate(() => { const look = (e) => { const c = getComputedStyle(e); return [c.height, c.borderTopColor, c.borderRadius, c.fontSize, c.backgroundColor].join(' '); }; return [look(document.getElementById('cell')), look(document.querySelector('input[type=number]'))]; });
+    assert.equal(boxLook[0], boxLook[1], 'the Cell box looks like the other boxes');
+    // (the ✕ shows on hover, left of the list's arrow; found by clicking from the text towards the arrow)
+    const cellBox = await page.locator('#cell').boundingBox(); let crossed = false;
+    for (let dx = 46; dx >= 14 && !crossed; dx -= 2) { await page.mouse.click(cellBox.x + cellBox.width - dx, cellBox.y + cellBox.height / 2); crossed = (await page.inputValue('#cell')) === ''; }
+    assert.equal(await app('cell'), null, 'the box’s ✕ shows no cell'); assert.equal(await page.inputValue('#cell'), '');
+    await openCell(spots.cell.name); await page.click('#cell'); await page.keyboard.type('Cel'); await page.keyboard.press('Escape'); await settledPaint();
+    assert.equal(await app('cell'), spots.cell.name, 'Esc in the box keeps the cell'); assert.equal(await page.inputValue('#cell'), spots.cell.name, 'and puts its name back');
+    assert.ok(await page.evaluate(() => document.activeElement !== document.getElementById('cell')), 'and leaves the box');
+    await openCell('Cell001');
     // GFP: the recording in green, the green of "Response in magenta" without the magenta.
     await page.selectOption('#view', 'green'); await waitFrame(22);
     assert.match(await text('#view-key'), /cells, background removed/);

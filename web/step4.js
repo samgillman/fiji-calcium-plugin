@@ -15,7 +15,7 @@
     every: false, plotMode: 'mean', signal: 'dff', outlines: true, outlineWidth: 1, order: 'call', palette: 'plasma', range: 'robust', tall: false, timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false };
   const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, y: {}, hover: null, at: null, readout: null, line: false, movedAt: -1e9, rest: null, geom: null, scrubbing: false, drawn: [], series: [] };
   const LINGER = 1500;   // ms the plot keeps showing where the picture is after the frame last moved
-  const Pic = { base: null, shown: null, zoom: 1, panX: 0, panY: 0, drag: null, moved: false, shownFrame: null, error: null };
+  const Pic = { base: null, shown: null, zoom: 1, panX: 0, panY: 0, drag: null, moved: false, held: null, shownFrame: null, error: null };
   // Movie frames: compressed images are kept for the session (about 40 MB for 300 full-size frames, much less at display size),
   // decoded ones only near the playhead. Keys carry the server's frame version, which changes with the baseline behind
   // "Change from baseline" and the display range, so a stale image is never reused.
@@ -1997,12 +1997,13 @@
     $('below-zero').addEventListener('change', () => { S.withoutBelowZero = $('below-zero').checked; showTiles(); });
     $('group').addEventListener('change', () => { S.group = Number($('group').value); listCells(); });
     // The Cell box. A full name, typed or picked from its list, opens that cell at once; a number alone opens it on Enter.
-    // An empty box is no cell. Text that names no cell in the Show list is put back to the cell that is open.
+    // An empty box is no cell, and its ✕ empties it. Text that names no cell in the Show list is put back to the cell that is open.
+    // Esc in the box undoes the typing and leaves the box (the browser's own Esc, which would empty a search box, is stopped).
     { const box = $('cell'), settle = (numberToo, leave) => { const hit = cellTyped(box.value, numberToo);
         if (hit !== undefined) { if (hit !== S.cell) chooseCell(hit); if (leave) box.blur(); } else if (leave) box.value = S.cell ? shortName(S.cell) : ''; };
       box.addEventListener('input', () => settle(false, false));
       box.addEventListener('change', () => settle(true, true));
-      box.addEventListener('keydown', (event) => { if (event.key === 'Enter') { settle(true, true); event.preventDefault(); } else if (event.key === 'Escape') { box.value = S.cell ? shortName(S.cell) : ''; box.blur(); } });
+      box.addEventListener('keydown', (event) => { if (event.key === 'Enter') { settle(true, true); event.preventDefault(); } else if (event.key === 'Escape') { event.preventDefault(); box.value = S.cell ? shortName(S.cell) : ''; box.blur(); } });
       box.addEventListener('focus', () => box.select()); }
     $('previous').addEventListener('click', () => stepCell(-1)); $('next').addEventListener('click', () => stepCell(1));
     $('every').addEventListener('change', () => { S.every = $('every').checked; Plot.dirty = true; drawPlot(); legend(); });
@@ -2022,12 +2023,17 @@
     picture.addEventListener('wheel', (event) => { if (!(event.ctrlKey || event.metaKey)) return; event.preventDefault(); const box = picture.getBoundingClientRect(), mx = event.clientX - box.left, my = event.clientY - box.top, before = place(picture.clientWidth, picture.clientHeight);
       const ix = (mx - before.x) / before.z, iy = (my - before.y) / before.z; Pic.zoom = Math.max(1, Math.min(16, Pic.zoom * Math.pow(1.0015, -event.deltaY)));
       if (Pic.zoom === 1) Pic.panX = Pic.panY = 0; else { const after = place(picture.clientWidth, picture.clientHeight); Pic.panX += mx - (after.x + ix * after.z); Pic.panY += my - (after.y + iy * after.z); } drawPicture(); }, { passive: false });
-    picture.addEventListener('mousedown', (event) => { Pic.drag = { x: event.clientX, y: event.clientY }; Pic.moved = false; });
+    // What was open when a click (or the first click of a double-click) began.
+    picture.addEventListener('mousedown', (event) => { Pic.drag = { x: event.clientX, y: event.clientY }; Pic.moved = false; if (event.detail < 2) Pic.held = { cell: S.cell, mode: S.plotMode }; });
     window.addEventListener('mousemove', (event) => { if (!Pic.drag) return; if (Math.abs(event.clientX - Pic.drag.x) + Math.abs(event.clientY - Pic.drag.y) > 3) Pic.moved = true;
       if (Pic.moved) { Pic.panX += event.clientX - Pic.drag.x; Pic.panY += event.clientY - Pic.drag.y; Pic.drag = { x: event.clientX, y: event.clientY }; drawPicture(); } });
     window.addEventListener('mouseup', () => { Pic.drag = null; Plot.scrubbing = false; });
-    picture.addEventListener('click', (event) => { if (Pic.moved) return; const i = cellAt(event); if (i >= 0) chooseCell(S.info.names[i]); });
-    picture.addEventListener('dblclick', () => { Pic.zoom = 1; Pic.panX = Pic.panY = 0; drawPicture(); });
+    // A click on a cell opens it; a click on empty space shows no cell. A drag (pan) is not a click.
+    picture.addEventListener('click', (event) => { if (Pic.moved) return; const i = cellAt(event), name = i >= 0 ? S.info.names[i] : null; if (name || S.cell) chooseCell(name); });   // (the open cell clicked again: the zoomed view centres on it)
+    // A double-click shows the whole picture. On empty space it keeps the cell that was open: its first click had cleared it.
+    picture.addEventListener('dblclick', (event) => { const held = Pic.held;
+      if (held && held.cell && !S.cell && cellAt(event) < 0) { pick(held.cell); if (S.plotMode !== held.mode) setPlotMode(held.mode); }
+      Pic.zoom = 1; Pic.panX = Pic.panY = 0; drawPicture(); });
     picture.addEventListener('mousemove', (event) => { if (Pic.drag) return; const i = cellAt(event); tip(i >= 0 ? fullName(S.info.names[i]) + (callOf(S.info.names[i]) ? ' · ' + callOf(S.info.names[i]) : '') : '', event.clientX, event.clientY); });
     picture.addEventListener('mouseleave', () => tip(''));
 
@@ -2066,5 +2072,5 @@
 
   wire();
   start().catch((problem) => { $('lost').classList.add('on'); $('status').textContent = problem.message; });
-  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, FIGURE_DEFAULT, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, exportMetadata, heatmapAt };   // for the browser test
+  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, FIGURE_DEFAULT, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, exportMetadata, heatmapAt };   // for the browser test
 })();
