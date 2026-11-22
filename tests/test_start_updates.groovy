@@ -113,7 +113,22 @@ try {
     await { offline.panel.updateNote.text.contains('offline fixture') }
     onUI { assert offline.panel.updateBtn.enabled; control(offline.dialog,'Cancel').doClick() }
     offline.thread.join(5000)
-    println 'PASS: first-screen startup/manual checks, no recording required, preference, Later, offline/retry, close during lookup, install navigation guard, restart feedback and small-screen scrolling'
+
+    // The plugin's file was moved as it started: the note stays above the update messages.
+    Start.notice='<b>The plugin is now at Plugins › '+Release.NAME+'.</b> Restart Fiji before starting it from the menu again.'
+    def moved=open { panel -> panel.updateCheck.fetch={ -> [version:Release.VERSION,page:Release.REPOSITORY+'/releases',installable:true] } }
+    await { moved.panel.updateNote.text.contains('up to date') }
+    onUI {
+        assert moved.dialog.title==Release.NAME
+        assert moved.panel.placeNote.visible && moved.panel.placeNote.text.contains('Plugins › '+Release.NAME)
+        moved.dialog.validate()
+        def rendered=new java.awt.image.BufferedImage(moved.dialog.width,moved.dialog.height,java.awt.image.BufferedImage.TYPE_INT_RGB)
+        def g=rendered.createGraphics();try{moved.dialog.paint(g)}finally{g.dispose()}
+        javax.imageio.ImageIO.write(rendered,'png',new File('build/start-moved-note.png'))
+        control(moved.dialog,'Cancel').doClick()
+    }
+    moved.thread.join(5000);Start.notice=null
+    println 'PASS: first-screen startup/manual checks, no recording required, preference, Later, offline/retry, close during lookup, install navigation guard, restart feedback, small-screen scrolling and the moved-plugin note'
 } catch(Throwable failure) {failure.printStackTrace();System.exit(1)}
 finally {
     onUI { panels.each {it.close()};launched.each {it.dialog?.dispose()} }

@@ -6,6 +6,9 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = Path("scripts/Plugins/Calcium Imaging/Calcium_Cells_Step_By_Step.groovy")
+# Where the ZIP puts the plugin in Fiji's folder. ZIP names stay ASCII because some Windows unzip tools garble other
+# letters; the plugin renames this file to Ca²⁺_Imaging_(Wang_Lab).groovy when it first starts (CalciumRelease.PLAIN_PLACE).
+ZIP_PLACE = "scripts/Plugins/Ca2+_Imaging_(Wang_Lab).groovy"
 
 
 def validate():
@@ -17,6 +20,8 @@ def validate():
     source = (ROOT / PLUGIN).read_text(encoding="utf-8")
     if f'static final String VERSION = "{version}"' not in source:
         raise ValueError("CalciumRelease.VERSION does not match VERSION")
+    if f'static final String PLAIN_PLACE = "{ZIP_PLACE}"' not in source:
+        raise ValueError("CalciumRelease.PLAIN_PLACE does not match the ZIP's place for the plugin")
     # Calendar plugin versions are separate from portable protocol schema versions.
     displayed = re.findall(r"version (\d{4}[\d.-]+)", source)
     if not displayed or any(value != version for value in displayed):
@@ -35,14 +40,14 @@ def build():
     source = (ROOT / PLUGIN).read_text(encoding="utf-8")
     shared = source[source.index("class CalciumRelease {"):source.index("/** Background requests")]
     installer = dist / "Install_Calcium_Plugin.groovy"
-    installer.write_text("// Fiji Calcium Plugin installer: open in Fiji and press Run.\n" + shared +
+    installer.write_text("// Ca\u00b2\u207a Imaging (Wang Lab) installer: open in Fiji and press Run.\n" + shared +
                          (ROOT / "tools/installer_entry.groovy").read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
     contents = [PLUGIN, Path("README.md"), Path("VERSION"), Path("CHANGELOG.md"), Path("docs/USER_GUIDE.txt"), Path("docs/SIMPLECA.md")]
     archive = dist / "Calcium_Imaging_Fiji_Plugin.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zipped:
         for relative in contents:
             # Fixed metadata makes repeated builds of the same files byte-identical.
-            info = zipfile.ZipInfo(relative.as_posix(), date_time=(2026, 1, 1, 0, 0, 0))
+            info = zipfile.ZipInfo(ZIP_PLACE if relative == PLUGIN else relative.as_posix(), date_time=(2026, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o100644 << 16
             zipped.writestr(info, (ROOT / relative).read_bytes())

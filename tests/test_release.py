@@ -19,8 +19,11 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(first, archive.read_bytes())
         with zipfile.ZipFile(archive) as z:
             self.assertIsNone(z.testzip())
-            self.assertIn(build_release.PLUGIN.as_posix(), z.namelist())
-            self.assertEqual(z.read(build_release.PLUGIN.as_posix()), (build_release.ROOT / build_release.PLUGIN).read_bytes())
+            # The plugin sits where Fiji shows it as Plugins > Ca2+ Imaging (Wang Lab); every name is ASCII.
+            self.assertEqual(build_release.ZIP_PLACE, 'scripts/Plugins/Ca2+_Imaging_(Wang_Lab).groovy')
+            self.assertEqual(z.read(build_release.ZIP_PLACE), (build_release.ROOT / build_release.PLUGIN).read_bytes())
+            self.assertNotIn(build_release.PLUGIN.as_posix(), z.namelist())
+            self.assertTrue(all(name.isascii() for name in z.namelist()))
             self.assertFalse(any(name.startswith('/') or '..' in Path(name).parts for name in z.namelist()))
         for line in (archive.parent / 'SHA256SUMS.txt').read_text().splitlines():
             digest, name = line.split('  ')
