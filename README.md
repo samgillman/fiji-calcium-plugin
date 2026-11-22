@@ -1,4 +1,4 @@
-# Fiji Calcium Plugin
+# Ca²⁺ Imaging (Wang Lab)
 
 Choose cells in a calcium-imaging recording, review automatic Cellpose outlines, measure fluorescence and local background, and analyze responses with Fiji's local SimpleCa²⁺ integration.
 
@@ -8,11 +8,13 @@ Choose cells in a calcium-imaging recording, review automatic Cellpose outlines,
 
 1. **[Download the Fiji installer](https://github.com/samgillman/fiji-calcium-plugin/releases/latest/download/Install_Calcium_Plugin.groovy)**.
 2. Open that `.groovy` file in Fiji's Script Editor (or drag it onto Fiji), then press **Run**. It finds this Fiji installation and downloads, verifies and installs the latest plugin. No manual copying is needed.
-3. Save your work and restart Fiji. Open **Plugins → Calcium Imaging → Calcium Cells Step By Step**.
+3. Save your work and restart Fiji. Open **Plugins → Ca²⁺ Imaging (Wang Lab)**.
 
 The same installer upgrades versions that do not yet have an Install update button. After this one-time setup, use **Install update** inside the plugin for future releases. Installation requires a Fiji folder your account can write to.
 
-Manual installation remains available: extract the plugin ZIP, merge its `scripts` folder into the Fiji folder shown by **File → Show Folder → ImageJ**, and restart Fiji. The plugin belongs at `scripts/Plugins/Calcium Imaging/Calcium_Cells_Step_By_Step.groovy`. Keep only one copy in Fiji's scripts folders.
+Manual installation remains available: extract the plugin ZIP, merge its `scripts` folder into the Fiji folder shown by **File → Show Folder → ImageJ**, and restart Fiji. The ZIP keeps file names in plain letters, so the menu first reads **Plugins → Ca2+ Imaging (Wang Lab)**; the plugin renames its file to `scripts/Plugins/Ca²⁺_Imaging_(Wang_Lab).groovy` the first time it starts, and the menu shows ²⁺ after the next restart. Keep only one copy in Fiji's scripts folders.
+
+**Earlier versions** were at **Plugins → Calcium Imaging → Calcium Cells Step By Step**. Their Install update button still works: it puts the new version there, and the new version moves itself to **Plugins → Ca²⁺ Imaging (Wang Lab)** the first time it starts (restart Fiji once more to see it there). The old file goes to `calcium-plugin-backups`; a `cellpose_python.txt` in the old folder keeps working.
 
 Fiji includes Bio-Formats for microscope recordings. Cellpose is optional: you can draw cells by hand, or use the plugin's **Set up Cellpose** button for automatic outlines.
 

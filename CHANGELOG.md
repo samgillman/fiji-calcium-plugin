@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.11.22.2
+
+The plugin is renamed **Ca²⁺ Imaging (Wang Lab)**. No measurement, response call or saved table changes.
+
+- **Fiji's menu:** Plugins › Ca²⁺ Imaging (Wang Lab), one entry at the top of the Plugins menu, instead of Plugins › Calcium Imaging › Calcium Cells Step By Step. The windows, the installer and the Step 4 page carry the new name.
+- **The file** is `scripts/Plugins/Ca²⁺_Imaging_(Wang_Lab).groovy` in Fiji's folder. Where a system cannot store ² or ⁺ in a file name it is `Ca2+_Imaging_(Wang_Lab).groovy`, and the menu reads Ca2+ Imaging (Wang Lab).
+- **Updating from an earlier version:** its Install update button works as before and puts this version under Calcium Imaging. When this version first starts it moves itself to the new place and says so on the first screen; restart Fiji once more to start it from there. The old file goes to `calcium-plugin-backups`. An older copy left next to a newer one is put there too, so the menu shows the plugin once. A folder that is a link to elsewhere is never touched.
+- **The ZIP** keeps plain-letter names (some Windows unzip tools garble others): it holds `Ca2+_Imaging_(Wang_Lab).groovy`, which the plugin renames when it first starts. Download names are unchanged, so earlier versions keep finding updates.
+- Unchanged: the results folder (Documents › Calcium imaging results), settings, and `cellpose_python.txt`, which is still read from the Calcium Imaging folder and now also from next to the plugin.
+
 ## 2026.11.22.1
 
 Step 4 page: a cell can be unselected with the mouse. No measurement, response call or saved table changes.

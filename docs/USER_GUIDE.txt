@@ -1,5 +1,5 @@
-CALCIUM IMAGING: CELLS STEP BY STEP
-A plugin for Fiji / ImageJ.  Version 2026.11.22.1.
+Ca²⁺ IMAGING (WANG LAB)
+A plugin for Fiji / ImageJ: calcium imaging, cells step by step.  Version 2026.11.22.2.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -91,14 +91,22 @@ WHAT YOU NEED
 
 
 INSTALL (once)
-  1. Open Fiji.
-  2. Choose  File > Show Folder > ImageJ.  A folder opens: this is Fiji's own folder.
-  3. Inside it, go into  scripts  and then  Plugins.
-  4. Make a new folder there called  Calcium Imaging.
-  5. Copy  Calcium_Cells_Step_By_Step.groovy  into that folder.
-  6. Quit Fiji and start it again.
+  1. Download  Install_Calcium_Plugin.groovy  from the release page.
+  2. Drag it onto the Fiji bar and press Run in the editor window that opens. It downloads, checks
+     and installs the plugin.
+  3. Quit Fiji and start it again.
 
-The command is now at  Plugins > Calcium Imaging > Calcium Cells Step By Step.
+The plugin is now at  Plugins > Ca²⁺ Imaging (Wang Lab).  Later versions install from its
+Install update button.
+
+By hand instead: extract the plugin ZIP, copy its  scripts  folder into Fiji's own folder
+(File > Show Folder > ImageJ) and restart Fiji. The menu then reads  Plugins > Ca2+ Imaging (Wang Lab).
+The first time it starts, the plugin renames its file to the name with ² and ⁺, so after the next
+restart the menu reads  Ca²⁺ Imaging (Wang Lab).
+
+Earlier versions were at  Plugins > Calcium Imaging > Calcium Cells Step By Step.  The first time the
+new version starts it moves itself; restart Fiji once more to see it at its new place. The old file
+goes into  calcium-plugin-backups  inside Fiji's folder.
 
 To try it without installing: drag Calcium_Cells_Step_By_Step.groovy onto the Fiji bar and press Run
 in the editor window that opens.
@@ -106,7 +114,7 @@ in the editor window that opens.
 
 HOW TO USE IT
   1. Empty the ROI Manager if it holds outlines from other work (the plugin uses whatever is in it).
-  2. Choose  Plugins > Calcium Imaging > Calcium Cells Step By Step.
+  2. Choose  Plugins > Ca²⁺ Imaging (Wang Lab).
   3. In the first window pick the recording: one that is open in Fiji, or "Choose a file from disk...".
      For a file from disk, the file chooser opens as soon as you pick that entry (or press
      "Choose file…"), and the file's name is shown under the list.
@@ -398,8 +406,10 @@ LIMITS: PLEASE READ
 
 
 IF SOMETHING GOES WRONG
-  - The menu entry is missing: check the file is in  scripts > Plugins > Calcium Imaging  inside
-    Fiji's folder, and restart Fiji.
+  - The menu entry is missing: check that  Ca²⁺_Imaging_(Wang_Lab).groovy  is in  scripts > Plugins
+    inside Fiji's folder, and restart Fiji.
+  - The plugin shows twice in the menu: keep only  scripts > Plugins > Ca²⁺_Imaging_(Wang_Lab).groovy
+    and restart Fiji.
   - Cells you did not draw are counted: old outlines were in the ROI Manager. Empty it and start again.
   - Clicking does not accept a suggested outline: switch to the oval or rectangle tool. With the
     polygon tool a click starts a polygon instead.
@@ -456,7 +466,7 @@ If Cellpose is already installed somewhere else: the plugin looks in ~/cellpose-
 environments named "cellpose". Otherwise press "Suggest cells automatically" and choose "I already
 have it: show where", then pick the "python" file of the environment in which Cellpose is
 installed; the plugin remembers it. You can also write that path as one line in a text file called
-cellpose_python.txt  next to the plugin file.
+cellpose_python.txt  next to the plugin file (scripts > Plugins in Fiji's folder).
 
 
 

@@ -10,8 +10,10 @@ def Panel = loader.loadClass('CalciumOutlineProgress')
 def Release = loader.loadClass('CalciumRelease')
 def Installer = loader.loadClass('CalciumInstaller')
 def testDirectory = java.nio.file.Files.createTempDirectory('Fiji GUI install ').toFile()
-def target = new File(testDirectory,'scripts/Plugins/Calcium Imaging/'+Release.SCRIPT)
-target.parentFile.mkdirs(); target.setText(source,'UTF-8')
+// Installed by an earlier updater: this version, still under Plugins > Calcium Imaging.
+def old = new File(testDirectory,Release.OLD_PLACE)
+old.parentFile.mkdirs(); old.setText(source,'UTF-8')
+def target = new File(testDirectory,Release.PLACE)
 byte[] updateBytes = source.replace(Release.VERSION,'2099.1.1.1').getBytes('UTF-8')
 def next = [version:'2099.1.1.1',page:Release.REPOSITORY+'/releases/tag/v2099.1.1.1',installable:true,
     script:Release.REPOSITORY+'/releases/download/v2099.1.1.1/'+Release.SCRIPT,
@@ -130,7 +132,7 @@ try {
     while (hooks.busy.get() && System.nanoTime() < end) Thread.sleep(10)
     SwingUtilities.invokeAndWait {
         assert !hooks.busy.get() && hooks.install.enabled && hooks.note.text.contains('simulated interrupted download')
-        assert target.getText('UTF-8') == source
+        assert old.getText('UTF-8') == source && !target.exists()
         hooks.setInstaller { data, installProgress ->
             assert !SwingUtilities.isEventDispatchThread()
             def service = Installer.newInstance(applicationDirectory:testDirectory,download:{url,limit,onBytes ->
@@ -145,10 +147,11 @@ try {
     SwingUtilities.invokeAndWait {
         assert !hooks.busy.get() && !hooks.install.enabled && hooks.bar.value==100
         assert hooks.note.text.contains('restart Fiji') && target.bytes==updateBytes
-        assert new File(testDirectory,'calcium-plugin-backups').listFiles().size()==1
+        assert hooks.note.text.contains('After the restart it is at Plugins › '+Release.NAME) : 'The installed note names the new menu place'
+        assert !old.exists() && new File(testDirectory,'calcium-plugin-backups').listFiles().size()==1
         assert !hooks.button.enabled
     }
-    println 'PASS: Step 1 dialog answer, cancel and in-dialog file choice, inline Install update button, retry after error, background verified replacement, backup, restart feedback, Later and offline startup'
+    println 'PASS: Step 1 dialog answer, cancel and in-dialog file choice, inline Install update button, retry after error, background verified replacement, backup, restart feedback with the new menu place, Later and offline startup'
 } finally {
     SwingUtilities.invokeAndWait { progress?.close(); hooks?.controller?.close(); frame?.dispose() }
     testDirectory.deleteDir()

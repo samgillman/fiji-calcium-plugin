@@ -655,7 +655,7 @@
     if (prefs['step4.every']) { try { window.localStorage.setItem('step4.every', prefs['step4.every']); } catch (blocked) { } }
     if (prefs['step4.help']) { const on = prefs['step4.help'] === '1'; document.body.classList.toggle('show-help', on); $('toggle-help').textContent = on ? 'Hide explanations' : 'Show explanations'; }
     $('recording').textContent = S.info.recording; $('recording').title = S.info.recording;
-    document.title = S.info.names.length + ' cells · SimpleCa²⁺ · ' + S.info.recording + ' · ' + S.info.key.slice(0, 6); $('version').textContent = 'Calcium imaging plugin ' + S.info.pluginVersion;
+    document.title = S.info.names.length + ' cells · SimpleCa²⁺ · ' + S.info.recording + ' · ' + S.info.key.slice(0, 6); $('version').textContent = 'Ca²⁺ Imaging (Wang Lab) ' + S.info.pluginVersion;
     S.initialDraft = clone(S.info.draft);
     S.revision = Math.max(0, Number(S.info.draftRevision) || 0); fillDraft(S.info.draft); S.draftAck = JSON.stringify(collectDraft());
     $('time').max = Math.max(1, S.info.frames);

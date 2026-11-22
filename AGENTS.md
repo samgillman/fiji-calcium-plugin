@@ -1,4 +1,4 @@
-# Fiji Calcium Plugin
+# Ca²⁺ Imaging (Wang Lab): Fiji calcium plugin
 
 This repository is the working source for the plugin. Use the current GitHub `main` and inspect existing local changes before starting new edits. Do not restore an older ZIP over the working source.
 

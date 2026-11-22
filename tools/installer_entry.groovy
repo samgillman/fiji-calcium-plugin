@@ -1,7 +1,7 @@
 // Download this file, open it in Fiji's Script Editor and press Run.
 // The shared installer below handles downloads, verification, backup and replacement.
 if (binding.hasVariable("CALCIUM_INSTALL_TEST")) return CalciumInstaller
-def window = new javax.swing.JFrame("Install Fiji Calcium Plugin")
+def window = new javax.swing.JFrame("Install " + CalciumRelease.NAME)
 def label = new javax.swing.JLabel("Preparing installation...")
 def bar = new javax.swing.JProgressBar(0,100); bar.setStringPainted(true)
 def close = new javax.swing.JButton("Close")
@@ -16,7 +16,7 @@ def show = {
 }
 if (javax.swing.SwingUtilities.isEventDispatchThread()) show.call()
 else javax.swing.SwingUtilities.invokeAndWait(show as Runnable)
-Thread.start("Install Fiji Calcium Plugin") {
+Thread.start("Install calcium plugin") {
     try {
         def release = CalciumRelease.latest()
         String directory = ij.IJ.getDirectory("imagej")
@@ -26,7 +26,7 @@ Thread.start("Install Fiji Calcium Plugin") {
         javax.swing.SwingUtilities.invokeLater {
             if (window.isDisplayable()) {
                 bar.setValue(100); bar.setString("Installed " + installed.version)
-                label.setText("<html><body style='width:340px'><b>Installed " + installed.version + ".</b><br>Save your work and restart Fiji.<br>Open Plugins &gt; Calcium Imaging &gt; Calcium Cells Step By Step.<br>Future releases can be installed with the plugin's Install update button." +
+                label.setText("<html><body style='width:340px'><b>Installed " + installed.version + ".</b><br>Save your work and restart Fiji.<br>Open Plugins &gt; " + CalciumInstaller.escape(CalciumRelease.command(installed.target.path)) + ".<br>Future releases can be installed with the plugin's Install update button." +
                     (installed.backup ? "<br>Your previous file is in calcium-plugin-backups inside Fiji's folder." : "") + "</body></html>")
             }
         }

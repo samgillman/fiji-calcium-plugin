@@ -33,7 +33,7 @@ try {
     def offeredFrames = null
     Thread.start {
         Window dialog = null; long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
-        while (dialog == null && System.nanoTime() < end) { Thread.sleep(50); dialog = Window.getWindows().find { it instanceof JDialog && it.visible && it.title?.startsWith('Calcium imaging') } }
+        while (dialog == null && System.nanoTime() < end) { Thread.sleep(50); dialog = Window.getWindows().find { it instanceof JDialog && it.visible && it.title?.startsWith('Ca\u00b2\u207a Imaging') } }
         SwingUtilities.invokeLater { everything(dialog).find { it instanceof JButton && it.text == 'Next' }?.doClick() }
         GenericDialog frames = null; end = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
         while (frames == null && System.nanoTime() < end) { Thread.sleep(25); frames = Window.getWindows().find { it instanceof GenericDialog && it.visible && it.title == 'Frames before the response' } }

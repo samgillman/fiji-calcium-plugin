@@ -54,6 +54,6 @@ jobs:
             dist/Calcium_Cells_Step_By_Step.groovy \
             dist/Install_Calcium_Plugin.groovy \
             dist/VERSION.txt dist/SHA256SUMS.txt \
-            --target "$GITHUB_SHA" --title "Fiji Calcium Plugin $version" \
+            --target "$GITHUB_SHA" --title "Ca²⁺ Imaging (Wang Lab) $version" \
             --notes-file dist/release-notes.md --draft
           gh release edit "$tag" --draft=false --latest
