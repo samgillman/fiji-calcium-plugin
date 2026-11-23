@@ -109,6 +109,81 @@ Legacy **AUC** is the signed whole-recording integral and legacy **Time-to-Peak*
 
 A biological unit is the independent culture, animal or preparation. Multiple cells and fields from it are nested observations. The recording's unit and condition are exported with counts; the shared summary function pools fields within an assigned unit and reports unit percentages separately from cell-pooled percentages. Step 4 handles one recording per run, so cross-recording aggregation belongs in SimpleCa²⁺ or a subsequent analysis using the exported metadata. Blank unit IDs create an explicit unassigned record and no invented biological N. Trace SEM remains descriptive cell SEM.
 
+## Checks on the calls
+
+After the engine has finished, the plugin checks every scored cell and writes `<recording>_call_checks_<analysis folder>.csv` beside `<recording>_percent_responding_<analysis folder>.csv`. A check is a flag for review. It never changes a call, a count or a percentage, and the analysis folder itself is not written to. The same table is made from the browser page and from the Fiji window. The page receives the checks with the results; it does not show them yet.
+
+### What Measure and save records around each cell
+
+In the same pass over the frames as the cells and their backgrounds, the mean raw gray value of 25 fixed sets of pixels per cell is measured:
+
+| Zone | Pixels |
+|---|---|
+| Near ring, 8 sectors | Outside the outline, more than 0.645 µm and up to 6.45 µm from it |
+| Far ring, 8 sectors | Outside the outline, more than 6.45 µm and up to 14.19 µm from it |
+| Core | Inside the outline, deeper than the median depth |
+| Rim, 8 sectors | The other pixels inside |
+
+Sectors are 45° wide and centred on right, lower right, bottom, lower left, left, upper left, top and upper right, seen from the mean x and y of the outline's pixels. Distances are Euclidean between pixel centres: outside, to the nearest pixel of the outline; inside, to the nearest pixel that is not in the outline, with the picture's border counted as outside. Both rings leave out every pixel within 1.29 µm of another measured outline and keep bright pixels. A zone with fewer than 12 pixels is not used. The outlines' pixels are the same ImageJ masks the cell values are measured with.
+
+The widths were set as 1, 10, 22 and 2 pixels on recordings at 0.645 µm per pixel. They are kept in micrometres and turned into pixels with the recording's pixel size, to a hundredth of a pixel. A recording without a pixel size in micrometres, or with pixels that are not square, takes the pixel values as they are, and `what_was_done.txt` says so.
+
+| File | Content |
+|---|---|
+| `<recording>_ring_and_core_gray_values.csv.gz` | One row per frame. `Frame`, then for every cell 25 columns `<cell>\|near_right` … `\|near_upper_right`, `\|far_right` … `\|far_upper_right`, `\|core`, `\|rim_right` … `\|rim_upper_right`. Two decimals; empty where the zone has fewer than 12 pixels |
+| `<recording>_ring_and_core_pixels.csv` | One row per cell: `Cell`, `ROI_sha256` (as in the ROI registry), `Area_pixels`, the pixel count of each zone, `Near_ring_sectors_usable`, then `Raw_table_sha256` and `Gray_values_sha256` (the raw table and the values table of the same measurement), `Pixel_size_um` and the four widths in pixels |
+| `<recording>_field_movement.csv` | `Frame`, `Displacement_px`, `Shift_x_px`, `Shift_y_px`: how far the field is from where it sits for most of the recording, as the movement check of Step 1 measures it. The displacement is the middle value of five frames, with a jolt of one or two frames kept |
+
+`what_was_done.txt` gains one line, "Around each cell: …". No other file of Steps 1 to 3 changes.
+
+Step 4 uses these files only when they name the cells, the outlines and the raw table of the measurement being analysed. A recording measured before these files existed has none. When an analysis runs and they are missing or belong to another measurement, they are measured then with the same code and saved beside the tables, provided the recording is open in Fiji and gives the saved raw gray values on its first, middle and last frame. Otherwise the passing-object check is not made and every row says `not checked` with the reason.
+
+### The rules
+
+Only the event of the largest rise is looked at. The F0 frames are the analysis's own normalization baseline frames.
+
+- **Traces**, in gray levels: the cell is raw minus its background minus its mean over the F0 frames. A zone is its mean minus its own F0 mean minus the change of the cell's background. Both are averaged over 3 frames.
+- **Event**: the frames around the peak of the call where the averaged cell trace is at or above half its value at that peak. A dip of up to 3 frames does not end it. The cell's rise is its value at the peak.
+- **Noise of a zone**: the larger of the SD of its averaged trace over the F0 frames, and 1.4826 × the median absolute deviation of the frame-to-frame differences of its unaveraged trace over the whole recording, divided by √2 and by √3.
+- **Passes through**: a near- or far-ring sector rises in the 10 s before the event and a sector at least 90° away rises in the 10 s after it. Each rise is at least the cell's own rise and at least 5 × that sector's noise, is gone while the cell is up (its mean over the event is at most half its peak), and is at a frame where the cell is still below half its rise. Text: `possible passing object, frames 201 to 210`, the frames of the event.
+- **On the edge**: over the event the core rises less than 0.25 × the whole outline, and the near-ring sector outside the rim sector that rises most rises at least as much as that rim sector and at least 5 × its own noise. No neighbouring sector stands in for a sector that is not usable, and without a usable core the rule is not applied. Text: `rise on the lower right edge, not in the cell, frames 92 to 149`, the frames in which that ring sector is above half its mean over the event. The text never says "object": in the recordings the rule was set on, most such rises were a neighbour without an outline.
+- **Field moved**: when one of the two rules applies and `field_movement.csv` has a displacement of 8 pixels or more at any frame from 10 s before the event to 10 s after it, the row reads `field moved, frames 28 to 35` instead, with the first and last such frame, and its detail keeps what would have been written.
+- **Short separate crossings**: for a responder, the stretches of samples at or above its required rise inside the response window are counted from the engine's own columns (`Threshold_increase`, `Baseline_mean`, `Local_reference_relative`, `Start_s`, `Effective_end_s`, `Max_gap_s`) and the saved normalized trace. Three or more stretches, none longer than 2 samples, give `short separate crossings`.
+
+The 10 s span was set as 10 frames at 1 frame per second and is turned into frames with the median frame interval of the analysis. The 3-frame average and the 3-frame dip are counted in frames.
+
+### The checks table
+
+One row per measured cell: `Cell`, `Call` (the engine's status, unchanged), `Flag` (empty when none; two flags are joined with "; "), `Rule` (`passes through`, `on the edge`, `field moved`, `short separate crossings`), `Event_first_frame`, `Event_last_frame`, `Detail` (which sides and frames, or why the cell was not checked), `Near_ring_sectors_usable` (of 8), `Area_pixels`, `Ring_measured` (`yes` or `no`), `Passing_object_check` (`checked` or `not checked`), `Crossings` and `Longest_crossing_samples`.
+
+### What the check cannot see
+
+- It looks only at the event of the largest rise. In 53 of 330 responders of the nine test recordings the samples that made the call lay outside that event.
+- By eye, 14 capsaicin and KCl responders in those recordings were objects. The check flagged 9: 8 of 9 in outlines of 900 pixels or more, 1 of 5 in outlines under 700 pixels.
+- It misses most objects that cross in 2 frames, and objects that come to rest inside the outline and stay.
+- Each near-ring sector lost to a neighbouring outline lowers the chance of a flag. `Near_ring_sectors_usable` and `Area_pixels` are in the table for that reason.
+- On the edge cannot tell an object resting on the edge from a neighbour without an outline that responds beside it.
+- A flag is not proof of an object. Of 296 ATP responders in three recordings 2 were flagged and neither was an object. The thresholds were set and tested on the same nine recordings.
+
+A sentence for a Methods section: "Responder calls were checked for bright objects passing through an outline, using the fluorescence in sectors of two rings around each outline and in its core and rim; flagged cells were reviewed in the movie. The check examines only the largest rise of each cell and does not detect objects that cross within two frames or remain inside the outline."
+
+## Review marks
+
+A cell the engine scored for the primary stimulus can be marked the other way after review: `Responded` to `Did not respond` or the reverse, with a reason (`Noise`, `Movement`, `Passing object`, `Bad outline`, `Other`; `Other` needs a note of one line, at most 120 characters). A mark can be removed. Excluded and unscorable cells cannot be marked. The control window is never reviewed.
+
+| File, beside the percent table | What it holds |
+|---|---|
+| `<recording>_reviewed_calls_<analysis folder>.csv` | One row per mark: `Cell`, `Automatic_call`, `Reviewed_call`, `Reason`, `Note`, `Time` (ISO 8601 with offset), `Analysis` (the analysis folder's name), `Responder_calls_sha256` (of that folder's `responder_calls.csv`), `ROI_sha256` (the outline, from its ROI registry). Present only while there is at least one mark. |
+| `<recording>_percent_responding_<analysis folder>.csv` | With marks: the same rows and columns, then `responded_after_review`, `percent_responding_after_review`, `responded_without_them_after_review`, `percent_without_them_after_review`, `cells_reclassified`. Without marks: as before, byte for byte. |
+
+- **One place applies the marks**: `CalciumAnalysisSettings.tally`. The percent table, the finish message, the Fiji window's headline and groups, and the `tally` and `review` the Step 4 page receives all come from it. A mark moves a cell between the two calls only, so the registered and evaluable counts of every group stay as scored; `cells_reclassified` counts the cells of the row whose call a mark changed.
+- **Never rewritten**: `responder_calls.csv`, the manifest and every other file in the analysis folder. The review file is the record of the review.
+- **Checked**: a review file whose `Analysis` or `Responder_calls_sha256` does not match its analysis, or whose rows do not fit its calls, is not applied, and the answer says so. A new mark is refused until it is moved away.
+- **Carried over**: when a new analysis of the same recording finishes, the marks of the most recent earlier analysis that has usable marks are written for the new one for every cell whose automatic call and `ROI_sha256` are unchanged. The others are dropped and listed with the reason: `now scored as did not respond`, `now scored as responded`, `now excluded`, `now unscorable`, `no longer measured`, `outline changed`. A carried mark keeps its reason, note and time.
+- **Methods sentence**, built from the marks that changed a call of all cells, for example: "3 of 143 cells were reclassified after manual review: 2 from responder to non-responder (1 noise, 1 passing object) and 1 from non-responder to responder (other)."
+
+The Step 4 page sets and removes marks with `POST api/review` (`cell`, `call`, `reason`, `note`, or `cell` and `remove: true`; optional `folder`); the page's control is not built yet.
+
 ## Files and source provenance
 
 Each successful run gets a new `SimpleCa-date-time-id` folder. It contains the input and optional timestamp/ROI/diagnostic snapshots, settings, `protocol.json`, `applied_protocol.json`, normalized traces, mean trace, metrics, quality, ROI registry, cohort flow, calls/counts, window metrics, replicate/group counts, metadata, manifest and log. Optional diagnostic outputs are separate. Previous runs are not overwritten.

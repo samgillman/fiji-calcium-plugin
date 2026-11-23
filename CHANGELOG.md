@@ -17,6 +17,28 @@
 - % responding, the quiet-cells row and the finish message read both kinds of calls table.
 - The guide, the README and docs/SIMPLECA.md describe the starting rule as it is applied (2 samples in a row; they still said 1 second) and what noise is.
 
+**Checks on the calls.** Flags only: no call, count or percentage changes, and no existing file of Steps 1 to 3 changes except one added line in `what_was_done.txt`.
+
+- **Measure and save also measures around each cell**, in the same pass: the mean gray value on every frame of a near ring (0.645 to 6.45 µm outside the outline) and a far ring (6.45 to 14.19 µm), each in 8 sectors, and of the core and the rim inside it. The rings leave out pixels within 1.29 µm of another measured outline. The widths were set in pixels at 0.645 µm per pixel (1, 10, 22 and 2) and follow the recording's pixel size; a recording without a pixel size in micrometres takes the pixel values. New files beside the tables: `<recording>_ring_and_core_gray_values.csv.gz`, `<recording>_ring_and_core_pixels.csv` (the pixels of each zone, with the outline and the raw table each row belongs to) and `<recording>_field_movement.csv` (the field's displacement at every frame). `what_was_done.txt` says what was measured in one added line. On a recording of 269 cells and 300 frames this adds about 1 s to Measure.
+- **After every analysis the calls are checked** and the result is saved beside the percent table as `<recording>_call_checks_<analysis>.csv`, one row per cell, from the page and from the Fiji window alike (GitHub issue 29).
+  - `possible passing object, frames 201 to 210`: a ring sector rises just before the cell and a sector on another side just after, each at least as much as the cell and 5 × its own noise, and gone while the cell is up.
+  - `rise on the lower right edge, not in the cell, frames 92 to 149`: the core hardly rises and the ring outside the brightest part of the rim rises at least as much as that rim.
+  - `field moved, frames 28 to 35`: written instead of the two above when the field was displaced by 8 pixels or more within 10 s of the rise.
+  - `short separate crossings`: a responder that reached its required rise 3 or more separate times and never for more than 2 samples.
+- **A recording measured with an earlier version** has no ring files. They are measured when an analysis runs, with the same code, if the recording is still open in Fiji and gives the saved gray values. If not, the table says "not checked" for every cell. Ring files that name other cells, other outlines or another raw table are never used.
+- **On the nine recordings the rule was set on** the plugin flags the same responders as the tested design: C1 Run3 cells 16 and 97, P1 Run1 cell 64, P1 Run2 cell 68, P1 Run3 cells 9, 93, 187, 188 and 196, P2 Run1 cells 15 and 85; C1 Run3 cell 136 is not flagged, and none of the 68 responders of C2 Run1 ATP. Its zones have the same pixels as the design's in every one of 34,725 zones.
+- **What the check cannot see** is in the guide and in docs/SIMPLECA.md: it looks only at the largest rise, caught 9 of 14 object responders by eye (1 of 5 in outlines under 700 pixels), and misses objects that cross in 2 frames or stay inside the outline.
+- The Step 4 page receives the checks with the results (`checks`); it does not show them yet.
+
+**Review marks.** A scored cell can be marked the other way after review, with a reason; no file of the engine is rewritten and, without marks, every saved file is as before.
+
+- **A responder can be marked "did not respond" and a non-responder "responded"**, with a reason: Noise, Movement, Passing object, Bad outline or Other (Other needs a note of one line, up to 120 characters). A mark can be removed. Excluded and unscorable cells cannot be marked.
+- **The marks are kept beside the percent table** in `<recording>_reviewed_calls_<analysis>.csv` (cell, automatic call, reviewed call, reason, note, time, the analysis, the SHA-256 of its `responder_calls.csv` and the outline's hash). The file exists only while there is a mark. A file that does not match its analysis is not used, and the plugin says so.
+- **% responding is given as scored and after review** for all cells, the cells chosen blind, those added later and the quiet cells, with and without the cells below zero. The marks are applied in one place, and the percent table, the finish message, the Fiji window and the Step 4 page's results all read it. `<recording>_percent_responding_<analysis>.csv` gains five columns on the right while there are marks; without marks it is unchanged.
+- **A new analysis of the same recording carries the marks over** from the most recent earlier analysis that has marks, for every cell whose automatic call and outline are unchanged. The others are dropped and the finish message lists them ("Cell 69: now scored as did not respond", "Cell 12: no longer measured").
+- **A sentence for a Methods section** comes with the results when there are marks: "3 of 143 cells were reclassified after manual review: 2 from responder to non-responder (1 noise, 1 passing object) and 1 from non-responder to responder (other)."
+- The Step 4 page can set and remove marks through the session (`api/review`) and receives the review with the results (`review`); it has no control for them yet.
+
 ## 2026.11.22.2
 
 The plugin is renamed **Ca²⁺ Imaging (Wang Lab)**. No measurement, response call or saved table changes.

@@ -390,7 +390,9 @@ class CalciumSteps {
     }
 
     /** Pixel indices inside a ROI, clipped to the picture. */
-    int[] pixelsOf(Roi roi) {
+    int[] pixelsOf(Roi roi) { return pixelsOf(roi, w, h) }
+    /** The same for a picture of the given size: the one pixel mask of an outline, used wherever an outline is measured. */
+    static int[] pixelsOf(Roi roi, int w, int h) {
         Rectangle r = roi.getBounds(); ImageProcessor mask = roi.getMask()
         int rx = (int) r.getX(), ry = (int) r.getY(), rw = (int) r.getWidth(), rh = (int) r.getHeight()
         int x0 = Math.max(0, rx), y0 = Math.max(0, ry), x1 = Math.min(w, rx + rw), y1 = Math.min(h, ry + rh)
@@ -679,12 +681,21 @@ class CalciumSteps {
         for (int c = 0; c < nc; c++) lastBackgroundPixels[c] = bg[c].length
         double[][] raw = new double[n][nc], back = new double[n][nc]
         ImageStack st = movie.getStack()
+        // Around each cell (CalciumRingAndCore): measured in the same pass and saved beside the tables. It is a record of its
+        // own: a failure here leaves the measurement as it is and is said in the record.
+        CalciumRingAndCore rings = null; String ringProblem = null
+        try {
+            ij.measure.Calibration scale = movie.getCalibration()
+            rings = new CalciumRingAndCore(cellPx, w, h, scale.pixelWidth, scale.pixelHeight, scale.getUnit())
+            rings.open(new File(prefix + CalciumCallChecks.VALUES), names)
+        } catch (Throwable t) { ringProblem = t.toString(); if (rings != null) rings.abandon(); rings = null }
         for (int f = 0; f < n; f++) {
             ImageProcessor ip = st.getProcessor(f + 1)
             for (int c = 0; c < nc; c++) {
                 double s = 0; for (int i : cellPx[c]) s += ip.getf(i); raw[f][c] = cellPx[c].length > 0 ? s / cellPx[c].length : Double.NaN
                 s = 0; for (int i : bg[c]) s += ip.getf(i); back[f][c] = bg[c].length > 0 ? s / bg[c].length : Double.NaN
             }
+            if (rings != null) try { rings.frame(f + 1, ip) } catch (Throwable t) { ringProblem = t.toString(); rings.abandon(); rings = null }
         }
         StringBuilder a = new StringBuilder("Frame"), b = new StringBuilder("Frame"), d = new StringBuilder("Frame")
         for (String nm : names) { a.append(",").append(nm); b.append(",").append(nm); d.append(",").append(nm) }
@@ -703,6 +714,18 @@ class CalciumSteps {
         new File(prefix + "gray_values_background_corrected_for_SimpleCa.csv").text = d.toString()
         // Native analysis preserves the measured doubles. Legacy three-decimal exports remain compatible.
         new File(prefix + "gray_values_background_corrected_native.csv").setText(CalciumMeasurement.fullPrecision(raw, back, names), "UTF-8")
+        // What was measured around each cell goes beside the tables, with the raw table it belongs to named in it.
+        String ringRecord
+        try {
+            if (rings == null) throw new IOException(ringProblem)
+            rings.close()
+            CalciumCallChecks.saveBeside(prefix, Arrays.asList(names), cells, cellPx, rings, motionShifts)
+            ringRecord = CalciumCallChecks.record(rings, new File(prefix).getName(), motionShifts != null && motionShifts.length > 0)
+        } catch (Throwable t) {
+            if (rings != null) rings.abandon()
+            CalciumCallChecks.removeBeside(prefix)
+            ringRecord = "Around each cell: the rings and the core were not measured. " + (ringProblem != null ? ringProblem : t.toString()) + ". The measurement of the cells is as it would be without them."
+        }
         // Compatibility only: an arbitrary additive offset changes fractional responses and must not
         // be used to rescue a denominator or classify responses with a fractional amplitude threshold.
         double[] lift = new double[nc]; lastLifted = 0
@@ -766,6 +789,8 @@ class CalciumSteps {
         log.removeAll { String s -> s.startsWith("Cells at the picture's edge") }      // only the latest measurement's choice stays in the record
         if (edgeNote != "") say(edgeNote)
         say("Measured on the original movie: mean gray value of every cell and of its background, every frame. corrected = raw - background.")
+        log.removeAll { String s -> s.startsWith("Around each cell: ") }               // only the latest measurement's line stays in the record
+        say(ringRecord)
         say(summary)
         new File(prefix + "what_was_done.txt").setText(log.join("\n") + "\n", "UTF-8")
         return summary
@@ -2202,6 +2227,18 @@ class CalciumMotion {
         return out
     }
     static Map summary(double[][] shifts) { summary(shifts, 0, 0) }
+    /** How far the field is displaced at every frame, in pixels, counted from the place (rx, ry): the middle value of five
+     *  frames around it, so single noisy frames do not count, with a jolt of one or two frames kept. This is the size "summary"
+     *  compares with SLIGHT and MOVED. */
+    static double[] displacement(double[][] shifts, double rx, double ry) {
+        int n = shifts.length
+        double[] raw = new double[n], size = new double[n]
+        for (int f = 0; f < n; f++) raw[f] = Math.hypot(shifts[f][0] - rx, shifts[f][1] - ry)
+        for (int f = 0; f < n; f++) { int a = Math.max(0, f - 2), b = Math.min(n, f + 3); double[] part = new double[b - a]; for (int k = a; k < b; k++) part[k - a] = raw[k]; size[f] = Math.max(median(part), n < 5 ? raw[f] : 0d) }
+        // a jolt of one or two frames is kept: the middle value would hide it
+        for (int f = 0; f < n; f++) if (raw[f] >= MOVED && size[f] < MOVED) size[f] = raw[f]
+        return size
+    }
     /** What the shifts mean, counted from the frames refFirst..refLast (the frames the cells were chosen on) when given, else
      *  from where the field sits for most of the recording. "runs": frames displaced by MOVED pixels or more; "slightRuns":
      *  by SLIGHT up to MOVED. Frames are counted from 1, both ends included. A frame's displacement is the middle value of
@@ -2220,11 +2257,7 @@ class CalciumMotion {
             if (within < MOVED) { rx = cx; ry = cy }
         }
         boolean steady = !chosen || within < MOVED
-        double[] raw = new double[n], size = new double[n]
-        for (int f = 0; f < n; f++) raw[f] = Math.hypot(shifts[f][0] - rx, shifts[f][1] - ry)
-        for (int f = 0; f < n; f++) { int a = Math.max(0, f - 2), b = Math.min(n, f + 3); double[] part = new double[b - a]; for (int k = a; k < b; k++) part[k - a] = raw[k]; size[f] = Math.max(median(part), n < 5 ? raw[f] : 0d) }
-        // a jolt of one or two frames is kept: the middle value would hide it
-        for (int f = 0; f < n; f++) if (raw[f] >= MOVED && size[f] < MOVED) size[f] = raw[f]
+        double[] size = displacement(shifts, rx, ry)
         List<List<Integer>> runs = new ArrayList<List<Integer>>(), slightRuns = new ArrayList<List<Integer>>()
         double largest = 0d, slightLargest = 0d; int moved = 0, slight = 0, start = -1, slightStart = -1
         for (int f = 0; f <= n; f++) {
@@ -3089,6 +3122,10 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
     javax.swing.table.DefaultTableModel windowModel
     Map<String,double[]> traces=[:]
     Map<String,Map<String,String>> callRows=[:]   // cell -> its row of the saved Cell response calls table
+    /** The review marks of the analysis shown (CalciumReview.read): they change the call of the primary stimulus. */
+    Map reviewMarks=[:]
+    /** What the last analysis run here carried over from the review of an earlier one (CalciumReview.carry). */
+    volatile Map carried
     // the movie beside the traces
     ImagePlus movie; java.awt.image.BufferedImage snapshot, frameImage; float[] rest, work, work2; double[] rawRange; CalciumRise riseView; int[] riseShade
     int frame=1, restFirst=1, restLast=1
@@ -3362,12 +3399,12 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
                 [confirmed,kcl,preset,validation,loadProtocolButton,saveProtocolButton,loadTimesButton,clearTimesButton,sensitivityButton,diagnosticButton,clearDiagnosticsButton,templateButton,overrideButton,clearOverridesButton].each{it.enabled=true};logButton.enabled=job.logFile.isFile();savePlots.enabled=results!=null;updateDiagnosticAvailability()
                 if(failure){status.text=failure;status.foreground=CalciumTheme.INK;progress.string='Not completed';changed();return}
                 if(installing){progress.value=100;status.text='R and protocol support are ready. Check settings, then analyze.';return}
-                try{loadResults(answer);appliedFingerprint=submittedFingerprint;changed();String empty=CalciumAnalysisSettings.noEvaluableCells(answer);status.text=empty?:'Complete. Protocol, inputs and tables saved in '+answer.name+'.'+CalciumAnalysisSettings.percentResponding(answer,measurement);status.foreground=empty?CalciumTheme.WARN:CalciumTheme.INK;progress.value=100;progress.string='Complete';tabs.selectedIndex=1}catch(Throwable t){status.text='Could not display results: '+t.message;progress.string='Display error; see saved outputs'}
+                try{loadResults(answer);appliedFingerprint=submittedFingerprint;changed();String empty=CalciumAnalysisSettings.noEvaluableCells(answer);status.text=(empty?:'Complete. Protocol, inputs and tables saved in '+answer.name+'.'+CalciumAnalysisSettings.percentResponding(answer,measurement))+CalciumReview.note(carried?.folder==answer.name?carried:null);status.foreground=empty?CalciumTheme.WARN:CalciumTheme.INK;progress.value=100;progress.string='Complete';tabs.selectedIndex=1}catch(Throwable t){status.text='Could not display results: '+t.message;progress.string='Display error; see saved outputs'}
             }
         }
     }
     void beginSetup(){launch(true){task->runtime.setup(task)}}
-    void beginAnalysis(){try{Map s=settings();submittedFingerprint=fingerprint();launch(false){task->performAnalysis.call(runtime,measurement.csv,s,measurement.folder,task)}}catch(Throwable t){status.text=t.message?:t.toString()}}
+    void beginAnalysis(){try{Map s=settings();submittedFingerprint=fingerprint();launch(false){task->File made=performAnalysis.call(runtime,measurement.csv,s,measurement.folder,task) as File;CalciumCallChecks.run(made,measurement);carried=CalciumReview.carry(made,measurement);made}}catch(Throwable t){status.text=t.message?:t.toString()}}
     List<Map> table(javax.swing.JTable target,File file){
         if(!file.isFile()){target.model=new javax.swing.table.DefaultTableModel();return []}
         def rows=CalciumCsv.read(file);if(!rows)return []
@@ -3387,15 +3424,21 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         responding.show(Double.isFinite(percent)?String.format(Locale.US,'%.0f %%',percent):'–',cell('Stimulus')+': '+whole('Responded')+' of '+whole('Evaluable')+' evaluable cells')
         responding.setToolTipText('Primary stimulus summary: '+cell('Stimulus')+'. Selecting another trace window does not change this saved primary summary.')
         registered.show(whole('Registered'),'cells registered');excluded.show(whole('Excluded'),'excluded');unscorable.show(whole('Unscorable'),'unscorable')
+        // with review marks the tile gives % responding after review, with the count as scored beside it (CalciumReview)
+        Map review=CalciumReview.read(dir,measurement);reviewMarks=review.marks as Map
+        List after=CalciumReview.headline(CalciumAnalysisSettings.tally(dir,measurement,null,review),cell('Stimulus'))
+        if(after!=null){responding.show(after[0] as String,after[1] as String);responding.setToolTipText('Primary stimulus after the review marks in '+review.file+'. Selecting another trace window does not change this summary.')}
+        else if(review.problem)responding.setToolTipText(review.problem as String)
         int callRole=column(callRows,'Role'),callCell=column(callRows,'Cell'),callStatus=column(callRows,'Status');Map<String,String> found=[:]
-        if(callCell>=0&&callStatus>=0)callRows.drop(1).each{if(callRole<0||it[callRole]=='Stimulus')found[''+it[callCell]]=''+it[callStatus]}
+        if(callCell>=0&&callStatus>=0)callRows.drop(1).each{if(callRole<0||it[callRole]=='Stimulus')found[''+it[callCell]]=CalciumReview.reviewed(reviewMarks,''+it[callCell],''+it[callStatus])}
         cellPicture.calls=found;cellPicture.repaint()
     }
-    String callOf(String name){callRows[name]?.Status}
+    /** The call drawn and listed for a cell: for the primary stimulus after review, for a control window as scored. */
+    String callOf(String name){Map row=callRows[name];row==null?null:row.Role=='Control'?row.Status:CalciumReview.reviewed(reviewMarks,name,row.Status as String)}
     /** All linked views use one saved stimulus/control window, never draft settings. */
     void selectWindow(){
         callRows=responseRows.findAll{it.Stimulus==stimuli.selectedItem}.collectEntries{[(it.Cell):it]}
-        cellPicture.calls=callRows.collectEntries{k,v->[k,v.Status]}
+        cellPicture.calls=callRows.collectEntries{k,v->[k,callOf(k as String)]}
         Map first=callRows.values().find{true}?:[:];plot.stimulusStart=CalciumCsv.number(first.Start_s);plot.stimulusEnd=CalciumCsv.number(first.Effective_end_s?:first.End_s)
         listing=true;try{int keep=Math.max(0,group.selectedIndex);group.removeAllItems();CalciumCalls.GROUPS.eachWithIndex{String name,int i->group.addItem(name+' ('+(measurement.names as List<String>).count{callRows.isEmpty()||CalciumCalls.inGroup(callOf(it),i)}+')')};group.selectedIndex=callRows.isEmpty()?0:Math.min(keep,group.itemCount-1)}finally{listing=false}
         listCells();orderHeatmap();plot.changed()
@@ -3430,6 +3473,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
     }
     void loadResults(File dir){
         if(!new File(dir,'COMPLETE').isFile())throw new IOException('This analysis has no COMPLETE marker.')
+        reviewMarks=CalciumReview.read(dir,measurement).marks as Map   // read again by summarize, which also shows the tile after review
         results=dir;table(metrics,new File(dir,'metrics.csv'));table(qc,new File(dir,'cell_quality.csv'));table(registry,new File(dir,'roi_registry.csv'));responseRows=table(calls,new File(dir,'responder_calls.csv'));table(counts,new File(dir,'responder_counts.csv'));table(windowMetrics,new File(dir,'window_metrics.csv'));table(replicates,new File(dir,'replicate_counts.csv'));table(sensitivity,new File(dir,'sensitivity_counts.csv'));table(diagnostics,new File(dir,'negative_control_counts.csv'))
         def normalized=CalciumCsv.read(new File(dir,'normalized_traces.csv')),avg=CalciumCsv.read(new File(dir,'mean_trace.csv'))
         plot.time=normalized.drop(1).collect{CalciumCsv.number(it[0])} as double[]
@@ -3464,6 +3508,8 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         else {
             String colour=CalciumTheme.hex(CalciumCalls.of(row.Status));def number={String key,String format->double v=CalciumCsv.number(row[key]);Double.isFinite(v)?String.format(Locale.US,format,v):null}
             def parts=["<font color='"+colour+"'>●</font> <b>"+name+': '+CalciumOutlineProgress.escape(row.Status?:'')+'</b>',CalciumOutlineProgress.escape((row.Reason?:'').toLowerCase())]
+            Map mark=row.Role=='Control'?null:reviewMarks[name] as Map
+            if(mark!=null&&callOf(name)!=row.Status)parts<<"<font color='"+CalciumTheme.hex(CalciumCalls.of(callOf(name)))+"'>●</font> <b>after review: "+CalciumOutlineProgress.escape(callOf(name))+'</b>, '+CalciumOutlineProgress.escape((mark.reason as String).toLowerCase()+(mark.note?': '+mark.note:''))
             String rise=number('Peak_increase','%.2f'),at=number('Peak_s','%.0f'),need=number('Threshold_increase','%.2f')
             if(rise!=null)parts<<'largest rise '+rise+(at!=null?' at '+at+' s':'')+(need!=null?' (needed '+need+')':'')
             cellStatus.setText('<html>'+parts.findAll{it}.join(' · ')+'</html>')
@@ -3609,9 +3655,14 @@ class CalciumAnalysisSettings {
      *  recorded; and the quiet cells (required rise at most QUIET_RISE), where noisy cells are set aside whether they responded
      *  or not, so the row is not tilted toward responders. Each row is given twice: with every cell, and without the cells whose
      *  background-corrected fluorescence went below zero (dF/F0 under -1 at some frame).
+     *  The review marks of the analysis (CalciumReview) are applied here and nowhere else. With marks, every row also gives the
+     *  figures after review: "reviewed" holds counted and without as above and "changed", the cells of the row whose call a
+     *  mark changed; the tally then says reviewed: true and lists in "changed" the cells of all cells whose call a mark changed.
+     *  Without marks the tally is as it always was.
      *  @param traces dF/F0 by cell when already read; otherwise normalized_traces.csv is read
+     *  @param review the review marks as CalciumReview.read gives them; read from beside the tables when not given
      *  @return null when the analysis has no calls */
-    static Map tally(File dir,Map measurement,Map traces=null) {
+    static Map tally(File dir,Map measurement,Map traces=null,Map review=null) {
         try {
             def calls=CalciumCsv.read(new File(dir,'responder_calls.csv'));List h=calls[0];int cell=h.indexOf('Cell'),role=h.indexOf('Role'),status=h.indexOf('Status'),need=h.indexOf('Threshold_increase')
             if(cell<0||status<0)return null
@@ -3621,8 +3672,9 @@ class CalciumAnalysisSettings {
                 if(file.isFile()){def saved=CalciumCsv.read(file);List names=saved[0]
                     for(int c=1;c<names.size();c++){boolean negative=false;for(int r=1;r<saved.size()&&!negative;r++){double v=CalciumCsv.number(''+saved[r][c]);if(Double.isFinite(v)&&v<-1d)negative=true};if(negative)low<<(''+names[c])}}}
             Map tags=measurement?.chosenBlind instanceof Map?measurement.chosenBlind as Map:null
-            def blank={[counted:[0,0,0],without:[0,0,0]]}   // responded, evaluable, registered
-            Map rows=[all:blank(),blind:blank(),later:blank(),quiet:blank()];List under=[]
+            Map marks=((review!=null?review:CalciumReview.read(dir,measurement))?.marks?:[:]) as Map;boolean reviewing=!marks.isEmpty()
+            def blank={reviewing ? [counted:[0,0,0],without:[0,0,0],after:[0,0,0],afterWithout:[0,0,0],changed:0] : [counted:[0,0,0],without:[0,0,0]]}   // responded, evaluable, registered
+            Map rows=[all:blank(),blind:blank(),later:blank(),quiet:blank()];List under=[],changed=[]
             calls.drop(1).findAll{role<0||it[role]=='Stimulus'}.each{row->
                 String name=''+row[cell],call=''+row[status];boolean responded=call=='Responded',evaluable=responded||call=='Did not respond'
                 if(tags!=null&&!tags.containsKey(name))return   // a cell that is not in this measurement
@@ -3632,29 +3684,54 @@ class CalciumAnalysisSettings {
                 List into=['all'];if(tags!=null)into<<(tags[name]?'blind':'later');if(evaluable&&Double.isFinite(rise)&&rise<=QUIET_RISE)into<<'quiet'
                 into.each{String key->List both=[rows[key].counted];if(!below)both<<rows[key].without   // (a "?[" would read as a safe index)
                     both.each{List t->t[2]++;if(evaluable)t[1]++;if(responded)t[0]++}}
+                if(reviewing){   // the same cell after review: a mark moves it between the two calls and nowhere else
+                    String after=CalciumReview.reviewed(marks,name,call);boolean moved=after!=call
+                    if(moved)changed<<name
+                    into.each{String key->List both=[rows[key].after];if(!below)both<<rows[key].afterWithout
+                        both.each{List t->t[2]++;if(evaluable)t[1]++;if(after=='Responded')t[0]++};if(moved)rows[key].changed++}
+                }
             }
-            List out=[[key:'all',label:'All cells']+rows.all]
-            if(tags!=null)out+=[[key:'blind',label:'Chosen blind']+rows.blind,[key:'later',label:'Added after the response was shown']+rows.later]
-            if(need>=0)out<<([key:'quiet',label:'Quiet enough to detect a '+Math.round(100*QUIET_RISE)+' % rise']+rows.quiet)
-            return [quietRise:QUIET_RISE,belowZero:under,tagged:tags!=null,rows:out]
+            def shown={String key,String label->Map r=rows[key] as Map;Map row=[key:key,label:label,counted:r.counted,without:r.without];if(reviewing)row.reviewed=[counted:r.after,without:r.afterWithout,changed:r.changed];row}
+            List out=[shown('all','All cells')]
+            if(tags!=null)out+=[shown('blind','Chosen blind'),shown('later','Added after the response was shown')]
+            if(need>=0)out<<shown('quiet','Quiet enough to detect a '+Math.round(100*QUIET_RISE)+' % rise')
+            Map found=[quietRise:QUIET_RISE,belowZero:under,tagged:tags!=null,rows:out]
+            if(reviewing){found.reviewed=true;found.changed=changed}
+            return found
         }catch(Throwable ignored){return null}
     }
     static String percentOf(List t){(t[1] as int)>0?String.format(Locale.US,'%.1f',100d*(t[0] as int)/(t[1] as int)):''}
+    static final List PERCENT_COLUMNS=['cells','registered','evaluable','responded','percent_responding','cells_below_zero','evaluable_without_them','responded_without_them','percent_without_them']
+    /** Appended on the right while review marks are applied. A mark moves a cell between responded and did not respond only, so
+     *  the registered and evaluable cells of every row stay as they are. */
+    static final List REVIEW_COLUMNS=['responded_after_review','percent_responding_after_review','responded_without_them_after_review','percent_without_them_after_review','cells_reclassified']
+    /** The tally beside the measurement tables, as "<recording>_percent_responding_<analysis>.csv": with review marks the same
+     *  rows and columns, then REVIEW_COLUMNS; without them the file is as it always was. */
+    static void savePercent(File dir,Map measurement,Map found) {
+        if(found==null||!(measurement?.folder instanceof File))return
+        boolean reviewed=found.reviewed==true
+        CalciumCsv.write(new File(measurement.folder as File,measurement.recording+'_percent_responding_'+dir.name+'.csv'),[PERCENT_COLUMNS+(reviewed?REVIEW_COLUMNS:[])]+(found.rows as List).collect{Map row->
+            List t=row.counted as List,w=row.without as List;List line=[row.label,t[2],t[1],t[0],percentOf(t),(t[2] as int)-(w[2] as int),w[1],w[0],percentOf(w)]
+            if(reviewed){Map r=row.reviewed as Map;line+=[(r.counted as List)[0],percentOf(r.counted as List),(r.without as List)[0],percentOf(r.without as List),r.changed]}
+            line})
+    }
     /** Saves the tally beside the measurement tables and returns the sentence shown when the analysis finishes: all cells first,
-     *  then the two groups when cells were added after the response was shown. '' when it was not recorded how cells were chosen. */
+     *  then the two groups when cells were added after the response was shown. '' when it was not recorded how cells were chosen.
+     *  With review marks every figure is followed by the figure after review, and all cells are given in any case. */
     static String percentResponding(File dir,Map measurement) {
         try {
             Map found=tally(dir,measurement);if(found==null)return ''
             List rows=found.rows as List
-            if(measurement.folder instanceof File)CalciumCsv.write(new File(measurement.folder as File,measurement.recording+'_percent_responding_'+dir.name+'.csv'),
-                [['cells','registered','evaluable','responded','percent_responding','cells_below_zero','evaluable_without_them','responded_without_them','percent_without_them']]+rows.collect{Map row->
-                    List t=row.counted as List,w=row.without as List;[row.label,t[2],t[1],t[0],percentOf(t),(t[2] as int)-(w[2] as int),w[1],w[0],percentOf(w)]})
-            if(!found.tagged)return ''
+            savePercent(dir,measurement,found)
+            boolean reviewed=found.reviewed==true
+            if(!found.tagged&&!reviewed)return ''
             def of={String key->(rows.find{it.key==key} as Map).counted as List}
-            def line={String label,List t->label+': '+t[0]+' of '+t[1]+' responded'+((t[1] as int)>0?' ('+percentOf(t)+' %)':'')}
-            List blind=of('blind'),later=of('later'),all=of('all')
-            if((later[2] as int)==0)return ' All '+blind[2]+' cells were chosen blind: '+blind[0]+' of '+blind[1]+' responded ('+percentOf(blind)+' %).'
-            return ' '+line('All cells',all)+'. '+line('Chosen blind',blind)+'. '+line('Added after the response was shown',later)+'.'
+            def after={String key->if(!reviewed)return '';List r=((rows.find{it.key==key} as Map).reviewed as Map).counted as List;', after review '+r[0]+' of '+r[1]+((r[1] as int)>0?' ('+percentOf(r)+' %)':'')}
+            def line={String label,String key->List t=of(key);label+': '+t[0]+' of '+t[1]+' responded'+((t[1] as int)>0?' ('+percentOf(t)+' %)':'')+after(key)}
+            if(!found.tagged)return ' '+line('All cells','all')+'.'
+            List blind=of('blind'),later=of('later')
+            if((later[2] as int)==0)return ' All '+blind[2]+' cells were chosen blind: '+blind[0]+' of '+blind[1]+' responded ('+percentOf(blind)+' %)'+after('blind')+'.'
+            return ' '+line('All cells','all')+'. '+line('Chosen blind','blind')+'. '+line('Added after the response was shown','later')+'.'
         }catch(Throwable ignored){return ''}
     }
     /** How the page was last arranged (pane sizes, explanations on or off). The page's address changes every time, so the
@@ -3759,6 +3836,809 @@ class CalciumAnalysisSettings {
     }
 }
 
+/** What is measured around and inside every cell for the check that looks for a bright object passing through an outline
+ *  (CalciumCallChecks; GitHub issue 29). Each cell gets 25 zones, fixed pixel sets built once from the outlines' own pixel
+ *  masks (CalciumSteps.pixelsOf):
+ *   - a near ring and a far ring outside the outline, each in 8 sectors of 45 degrees centred on right, lower right, bottom,
+ *     lower left, left, upper left, top and upper right, seen from the mean x, y of the outline's pixels. Near ring: more than
+ *     NEAR_FROM_UM and up to NEAR_TO_UM from the outline. Far ring: beyond that, up to FAR_TO_UM. Both leave out every pixel
+ *     within OTHER_UM of another measured outline and keep bright pixels;
+ *   - core: the pixels inside that lie deeper than the median depth. Rim: the other pixels inside, by sector.
+ *  Distances are Euclidean, pixel centre to pixel centre: outside, to the nearest pixel of the outline; inside, to the nearest
+ *  pixel that is not in the outline, and the picture's border counts as outside. A zone with fewer than MIN_PIXELS pixels is
+ *  not used: its column stays empty.
+ *  The widths were set in pixels (1, 10, 22 and 2) on recordings at SET_AT_UM micrometres per pixel. They are kept in
+ *  micrometres and turned into pixels with the recording's own pixel size, to a hundredth of a pixel. A recording without a
+ *  pixel size in micrometres takes the pixel values as they are.
+ *  Measured: the mean raw gray value of every zone on every frame, in one pass, written as it goes. Nothing here enters a
+ *  cell's own measurement or its background. */
+@CompileStatic
+class CalciumRingAndCore {
+    static final double SET_AT_UM = 0.645d
+    static final double NEAR_FROM_UM = 0.645d, NEAR_TO_UM = 6.45d, FAR_TO_UM = 14.19d, OTHER_UM = 1.29d
+    static final int MIN_PIXELS = 12, ZONES = 25, CORE = 16
+    static final List<String> SIDES = ['right', 'lower right', 'bottom', 'lower left', 'left', 'upper left', 'top', 'upper right']
+    /** near_right ... near_upper_right, far_right ... far_upper_right, core, rim_right ... rim_upper_right */
+    static final List<String> NAMES = zoneNames()
+    static List<String> zoneNames() {
+        List<String> out = new ArrayList<String>()
+        for (String ring : ['near', 'far']) for (String side : SIDES) out.add(ring + '_' + side.replace(' ', '_'))
+        out.add('core')
+        for (String side : SIDES) out.add('rim_' + side.replace(' ', '_'))
+        return out
+    }
+    /** Whether a recording's pixel size can be used: a positive size in micrometres, the same both ways (the rings are round). */
+    static boolean inMicrometres(double pixelWidth, double pixelHeight, String unit) {
+        if (!(pixelWidth > 0d) || Double.isInfinite(pixelWidth) || unit == null) return false
+        if (!(Math.abs(pixelHeight - pixelWidth) <= 0.01d * pixelWidth)) return false
+        return unit.startsWith('micro') || unit == 'um' || unit == 'µm' || unit == 'μm'
+    }
+    /** Where the near ring starts, where it ends and the far ring starts, where the far ring ends, and the margin around other
+     *  outlines, in pixels. */
+    static double[] widths(double pixelWidth, double pixelHeight, String unit) {
+        double size = inMicrometres(pixelWidth, pixelHeight, unit) ? pixelWidth : SET_AT_UM
+        double[] um = [NEAR_FROM_UM, NEAR_TO_UM, FAR_TO_UM, OTHER_UM] as double[], out = new double[4]
+        for (int i = 0; i < 4; i++) out[i] = Math.rint(um[i] / size * 100d) / 100d
+        return out
+    }
+
+    final int cells
+    /** Pixel indices of every zone, cell after cell: zone z of cell c is at c * ZONES + z. */
+    final int[][] zonePx
+    final double[] width
+    final boolean micrometres
+    final double pixelSize
+    private Writer out
+    private File temp, target
+    private final StringBuilder line = new StringBuilder(1 << 16)
+
+    CalciumRingAndCore(int[][] cellPx, int w, int h, double pixelWidth, double pixelHeight, String unit) {
+        cells = cellPx.length
+        micrometres = inMicrometres(pixelWidth, pixelHeight, unit); pixelSize = micrometres ? pixelWidth : Double.NaN
+        width = widths(pixelWidth, pixelHeight, unit)
+        int[] cover = new int[w * h]                      // how many outlines hold each pixel
+        for (int[] px : cellPx) for (int i : px) cover[i]++
+        zonePx = new int[cells * ZONES][]
+        for (int c = 0; c < cells; c++) { int[][] z = zonesOf(cellPx[c], cover, w, h, width); for (int k = 0; k < ZONES; k++) zonePx[c * ZONES + k] = z[k] }
+    }
+    int pixels(int cell, int zone) { return zonePx[cell * ZONES + zone].length }
+    /** How many of the 8 near-ring sectors of a cell hold enough pixels to be used. */
+    int nearUsable(int cell) { int k = 0; for (int z = 0; z < 8; z++) if (pixels(cell, z) >= MIN_PIXELS) k++; return k }
+
+    /** Squared distance from every pixel to the nearest pixel of "feature" (exact, Meijster's two passes), or null when there is none. */
+    static int[] distances(boolean[] feature, int cw, int ch) {
+        boolean any = false
+        for (boolean b : feature) if (b) { any = true; break }
+        if (!any) return null
+        int inf = cw + ch
+        int[] g = new int[cw * ch]
+        for (int x = 0; x < cw; x++) {
+            g[x] = feature[x] ? 0 : inf
+            for (int y = 1; y < ch; y++) { int i = y * cw + x; g[i] = feature[i] ? 0 : Math.min(inf, g[i - cw] + 1) }
+            for (int y = ch - 2; y >= 0; y--) { int i = y * cw + x; if (g[i + cw] + 1 < g[i]) g[i] = g[i + cw] + 1 }
+        }
+        int[] d = new int[cw * ch], s = new int[cw], t = new int[cw]
+        for (int y = 0; y < ch; y++) {
+            int row = y * cw, q = 0
+            s[0] = 0; t[0] = 0
+            for (int u = 1; u < cw; u++) {
+                long gu = g[row + u]
+                while (q >= 0) {
+                    long gi = g[row + s[q]], a = t[q] - s[q], b = t[q] - u
+                    if (a * a + gi * gi > b * b + gu * gu) q--; else break
+                }
+                if (q < 0) { q = 0; s[0] = u }
+                else {
+                    long i = s[q], gi = g[row + s[q]]
+                    long at = Math.floorDiv((long) u * u - i * i + gu * gu - gi * gi, 2L * (u - i)) + 1L
+                    if (at < cw) { q++; s[q] = u; t[q] = (int) at }
+                }
+            }
+            for (int u = cw - 1; u >= 0; u--) {
+                long a = u - s[q], gi = g[row + s[q]]
+                d[row + u] = (int) Math.min((long) Integer.MAX_VALUE, a * a + gi * gi)
+                if (u == t[q]) q--
+            }
+        }
+        return d
+    }
+    /** The sector (0 = right, then clockwise on the screen: lower right, bottom ...) of a pixel dy below and dx right of the centre. */
+    static int sector(double dy, double dx) { return Math.floorMod((int) Math.rint(Math.toDegrees(Math.atan2(dy, dx)) / 45d), 8) }
+
+    /** The 25 zones of one cell as pixel indices. "cover" counts the outlines that hold each pixel of the picture. */
+    static int[][] zonesOf(int[] px, int[] cover, int w, int h, double[] width) {
+        int[][] zones = new int[ZONES][]
+        if (px.length == 0) { for (int z = 0; z < ZONES; z++) zones[z] = new int[0]; return zones }
+        int xmin = w, xmax = -1, ymin = h, ymax = -1
+        long sx = 0L, sy = 0L
+        for (int i : px) {
+            int y = Math.floorDiv(i, w), x = i - y * w
+            if (x < xmin) xmin = x
+            if (x > xmax) xmax = x
+            if (y < ymin) ymin = y
+            if (y > ymax) ymax = y
+            sx += x; sy += y
+        }
+        int pad = (int) Math.ceil(width[2] + width[3] + 2d)
+        int x0 = Math.max(0, xmin - pad), x1 = Math.min(w, xmax + pad + 1), y0 = Math.max(0, ymin - pad), y1 = Math.min(h, ymax + pad + 1)
+        int cw = x1 - x0, ch = y1 - y0, pw = cw + 2
+        boolean[] inside = new boolean[cw * ch], other = new boolean[cw * ch], outside = new boolean[pw * (ch + 2)]
+        for (int i : px) { int y = Math.floorDiv(i, w); inside[(y - y0) * cw + (i - y * w) - x0] = true }
+        Arrays.fill(outside, true)                        // one more pixel all round counts as outside
+        for (int yy = 0; yy < ch; yy++) for (int xx = 0; xx < cw; xx++) {
+            int k = yy * cw + xx
+            if (inside[k]) outside[(yy + 1) * pw + xx + 1] = false
+            if (cover[(y0 + yy) * w + x0 + xx] - (inside[k] ? 1 : 0) > 0) other[k] = true
+        }
+        int[] toOutline = distances(inside, cw, ch), depth = distances(outside, pw, ch + 2), toOther = distances(other, cw, ch)
+        double cy = ((double) sy) / px.length - y0, cx = ((double) sx) / px.length - x0
+        double[] depths = new double[px.length]
+        int n = 0
+        for (int yy = 0; yy < ch; yy++) for (int xx = 0; xx < cw; xx++) if (inside[yy * cw + xx]) depths[n++] = Math.sqrt((double) depth[(yy + 1) * pw + xx + 1])
+        Arrays.sort(depths)
+        double middle = (n & 1) == 1 ? depths[n >> 1] : (depths[(n >> 1) - 1] + depths[n >> 1]) / 2d
+        int[] zoneOf = new int[cw * ch], count = new int[ZONES]
+        for (int yy = 0; yy < ch; yy++) for (int xx = 0; xx < cw; xx++) {
+            int k = yy * cw + xx, z = -1
+            if (inside[k]) z = Math.sqrt((double) depth[(yy + 1) * pw + xx + 1]) > middle ? CORE : CORE + 1 + sector(yy - cy, xx - cx)
+            else if (toOther == null || Math.sqrt((double) toOther[k]) > width[3]) {
+                double far = Math.sqrt((double) toOutline[k])
+                if (far > width[0] && far <= width[1]) z = sector(yy - cy, xx - cx)
+                else if (far > width[1] && far <= width[2]) z = 8 + sector(yy - cy, xx - cx)
+            }
+            zoneOf[k] = z
+            if (z >= 0) count[z]++
+        }
+        for (int z = 0; z < ZONES; z++) { zones[z] = new int[count[z]]; count[z] = 0 }
+        for (int yy = 0; yy < ch; yy++) for (int xx = 0; xx < cw; xx++) { int z = zoneOf[yy * cw + xx]; if (z >= 0) zones[z][count[z]++] = (y0 + yy) * w + x0 + xx }
+        return zones
+    }
+
+    /** Starts the table (gzip, one row per frame): Frame, then the 25 zones of every cell as "cell|zone". It is written beside
+     *  its final name and moved there by close(). */
+    void open(File file, String[] names) {
+        target = file; temp = new File(file.getPath() + '.part')
+        out = new BufferedWriter(new OutputStreamWriter(new java.util.zip.GZIPOutputStream(new FileOutputStream(temp), 1 << 16), 'UTF-8'), 1 << 16)
+        StringBuilder head = new StringBuilder('Frame')
+        for (String name : names) for (String zone : NAMES) head.append(',').append(name).append('|').append(zone)
+        out.write(head.append('\n').toString())
+    }
+    /** One frame: the mean raw gray value of every zone, two decimals; empty where the zone has too few pixels. */
+    void frame(int number, ImageProcessor ip) {
+        StringBuilder sb = line
+        sb.setLength(0); sb.append(number)
+        Object pixels = ip.getPixels()
+        short[] s16 = pixels instanceof short[] ? (short[]) pixels : null
+        float[] f32 = pixels instanceof float[] ? (float[]) pixels : null
+        for (int z = 0; z < zonePx.length; z++) {
+            int[] px = zonePx[z]
+            sb.append(',')
+            if (px.length < MIN_PIXELS) continue
+            double sum = 0d
+            if (s16 != null) { long total = 0L; for (int i : px) total += (s16[i] & 0xffff); sum = (double) total }
+            else if (f32 != null) for (int i : px) sum += f32[i]
+            else for (int i : px) sum += ip.getf(i)
+            twoDecimals(sb, sum / px.length)
+        }
+        sb.append('\n')
+        out.append(sb)
+    }
+    static void twoDecimals(StringBuilder sb, double v) {
+        if (Double.isNaN(v) || Double.isInfinite(v)) return
+        long cents = Math.round(Math.abs(v) * 100d)
+        if (v < 0d && cents != 0L) sb.append('-')
+        int rest = (int) Math.floorMod(cents, 100L)
+        sb.append(Math.floorDiv(cents, 100L)).append('.').append((char) (48 + Math.floorDiv(rest, 10))).append((char) (48 + Math.floorMod(rest, 10)))
+    }
+    void close() {
+        out.close(); out = null
+        java.nio.file.Files.move(temp.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+    }
+    /** Gives up a table that could not be finished; nothing is left behind. */
+    void abandon() { try { if (out != null) out.close() } catch (Throwable ignored) { }; out = null; if (temp != null) temp.delete() }
+    /** The whole table in one pass over the frames. */
+    void measure(ImageStack stack, int frames, File file, String[] names) {
+        open(file, names)
+        try { for (int f = 1; f <= frames; f++) frame(f, stack.getProcessor(f)); close() } catch (Throwable t) { abandon(); throw t }
+    }
+    /** The table read back: [column][frame], NaN where a value is empty. The header must be the one open() writes for these names. */
+    static float[][] read(File file, List<String> names, int frames) {
+        ByteArrayOutputStream all = new ByteArrayOutputStream(1 << 20)
+        InputStream input = new java.util.zip.GZIPInputStream(new FileInputStream(file), 1 << 16)
+        try { byte[] buffer = new byte[1 << 16]; int got; while ((got = input.read(buffer)) > 0) all.write(buffer, 0, got) } finally { input.close() }
+        byte[] data = all.toByteArray()
+        StringBuilder head = new StringBuilder('Frame')
+        for (String name : names) for (String zone : NAMES) head.append(',').append(name).append('|').append(zone)
+        byte[] expected = head.append('\n').toString().getBytes('UTF-8')
+        if (data.length < expected.length) throw new IOException('The ring and core table is for other cells.')
+        for (int i = 0; i < expected.length; i++) if (data[i] != expected[i]) throw new IOException('The ring and core table is for other cells.')
+        int columns = names.size() * ZONES, at = expected.length
+        float[][] values = new float[columns][frames]
+        for (int f = 0; f < frames; f++) {
+            long frame = 0L
+            while (at < data.length && data[at] != (byte) 44) { frame = frame * 10L + (data[at] - 48); at++ }
+            if (frame != f + 1) throw new IOException('The ring and core table does not hold frame ' + (f + 1) + '.')
+            for (int c = 0; c < columns; c++) {
+                if (at >= data.length || data[at] != (byte) 44) throw new IOException('The ring and core table has too few columns.')
+                at++
+                boolean negative = false, digits = false
+                long whole = 0L; double part = 0d, scale = 0.1d
+                if (at < data.length && data[at] == (byte) 45) { negative = true; at++ }
+                while (at < data.length && data[at] >= (byte) 48 && data[at] <= (byte) 57) { whole = whole * 10L + (data[at] - 48); at++; digits = true }
+                if (at < data.length && data[at] == (byte) 46) { at++; while (at < data.length && data[at] >= (byte) 48 && data[at] <= (byte) 57) { part += (data[at] - 48) * scale; scale *= 0.1d; at++; digits = true } }
+                double v = digits ? whole + part : Double.NaN
+                values[c][f] = (float) (negative ? -v : v)
+            }
+            if (at < data.length && data[at] == (byte) 13) at++
+            if (at >= data.length || data[at] != (byte) 10) throw new IOException('The ring and core table has too many columns.')
+            at++
+        }
+        if (at != data.length) throw new IOException('The ring and core table holds more frames than the recording.')
+        return values
+    }
+}
+
+/** The check on one cell's call: was the rise a bright object passing through the outline, or a rise on its edge that is not
+ *  in the cell? It only flags; no call changes. The rule and its numbers were set and checked on nine recordings (GitHub
+ *  issue 29) and are kept as they were tested.
+ *  Traces, in gray levels: the cell is raw minus its background minus its mean over the F0 frames; a zone is its mean minus
+ *  its own F0 mean minus the change of the cell's background. Both are averaged over AVERAGE frames (centred; the ends use the
+ *  frames that exist). The event is the stretch around the peak of the largest rise where the cell stays at or above HALF its
+ *  peak; a dip of up to DIP frames does not end it. The cell's rise is its value at the peak.
+ *  A zone's noise is the larger of the SD of its averaged trace over the F0 frames and 1.4826 x the median absolute deviation
+ *  of the frame-to-frame differences of its unaveraged trace over the whole recording, divided by root 2 and by root AVERAGE.
+ *  Passes through: a near- or far-ring sector rises in the "span" frames before the event and a sector at least APART sectors
+ *  (90 degrees) away rises in the span frames after it. Each rise is at least CELL_RISE x the cell's own rise and NOISE x that
+ *  sector's noise, gone while the cell is up (its mean over the event at most HALF its peak), and at a frame where the cell
+ *  is still below HALF its rise.
+ *  On the edge: over the event the core rises less than CORE_SHARE x the whole outline, and the near-ring sector outside the
+ *  rim sector that rises most rises at least as much as that rim sector and at least NOISE x its own noise.
+ *  The span was set as 10 frames at 1 frame per second (SPAN_S seconds). */
+@CompileStatic
+class CalciumPassingObject {
+    static final int AVERAGE = 3, DIP = 3, APART = 2
+    static final double SPAN_S = 10d, HALF = 0.5d, CELL_RISE = 1d, NOISE = 5d, CORE_SHARE = 0.25d
+    static double[] averaged(double[] x) {
+        int n = x.length, k = AVERAGE >> 1
+        double[] out = new double[n]
+        for (int i = 0; i < n; i++) { int a = Math.max(0, i - k), b = Math.min(n, i + k + 1); double s = 0d; for (int j = a; j < b; j++) s += x[j]; out[i] = s / (b - a) }
+        return out
+    }
+    static double mean(double[] x, int first, int last) { double s = 0d; for (int i = first; i <= last; i++) s += x[i]; return s / (last - first + 1) }
+    /** The largest value among the frames from..to where the cell is below "half": [value, frame], or null when there is no such frame. */
+    private static double[] highest(double[] zone, double[] cell, double half, int from, int to) {
+        int at = -1
+        for (int f = from; f <= to; f++) if (cell[f] < half && (at < 0 || zone[f] > zone[at])) at = f
+        return at < 0 ? null : [zone[at], at] as double[]
+    }
+    /** @param raw the cell's raw gray values, @param background its background, both one per frame
+     *  @param zone the 25 zone traces (CalciumRingAndCore.NAMES); null where a zone is not usable; the whole array null when
+     *         nothing was measured around the cell, which still gives the event
+     *  @param firstF0, lastF0 the F0 frames and @param peak the frame of the call's peak, all counted from 0
+     *  @param span frames searched before and after the event
+     *  @return null when the cell does not rise at the peak; else first and last (the event's frames, counted from 1), rule
+     *          ('passes through', 'on the edge' or ''), text, detail, and where the rule is 'on the edge' edgeFirst, edgeLast */
+    static Map<String, Object> check(double[] raw, double[] background, float[][] zone, int firstF0, int lastF0, int peak, int span) {
+        int n = raw.length
+        double[] cell = new double[n], change = new double[n]
+        for (int f = 0; f < n; f++) cell[f] = raw[f] - background[f]
+        double own = mean(cell, firstF0, lastF0), ground = mean(background, firstF0, lastF0)
+        for (int f = 0; f < n; f++) { cell[f] = cell[f] - own; change[f] = background[f] - ground }
+        cell = averaged(cell)
+        double rise = cell[peak]
+        if (!(rise > 0d) || Double.isInfinite(rise)) return null
+        double half = HALF * rise
+        int a = peak, b = peak
+        while (a > 0 && cell[a - 1] >= half) a--
+        while (b < n - 1 && cell[b + 1] >= half) b++
+        boolean moved = true
+        while (moved) {
+            moved = false
+            for (int d = 2; d <= DIP + 1; d++) if (a - d >= 0 && cell[a - d] >= half) { a -= d; moved = true; while (a > 0 && cell[a - 1] >= half) a--; break }
+            for (int d = 2; d <= DIP + 1; d++) if (b + d < n && cell[b + d] >= half) { b += d; moved = true; while (b < n - 1 && cell[b + 1] >= half) b++; break }
+        }
+        Map<String, Object> out = new LinkedHashMap<String, Object>()
+        out.put('first', a + 1); out.put('last', b + 1); out.put('rule', ''); out.put('text', ''); out.put('detail', '')
+        if (zone == null) return out
+        double[][] trace = new double[CalciumRingAndCore.ZONES][]
+        double[] noise = new double[CalciumRingAndCore.ZONES]
+        for (int z = 0; z < CalciumRingAndCore.ZONES; z++) {
+            if (zone[z] == null) continue
+            double[] plain = new double[n]
+            double base = 0d
+            for (int f = firstF0; f <= lastF0; f++) base += zone[z][f]
+            base /= (lastF0 - firstF0 + 1)
+            for (int f = 0; f < n; f++) plain[f] = zone[z][f] - base - change[f]
+            trace[z] = averaged(plain)
+            double sd = Double.NaN
+            if (lastF0 > firstF0) { double m = mean(trace[z], firstF0, lastF0), ss = 0d; for (int f = firstF0; f <= lastF0; f++) ss += (trace[z][f] - m) * (trace[z][f] - m); sd = Math.sqrt(ss / (lastF0 - firstF0)) }
+            double steps = Double.NaN
+            if (n > 1) {
+                double[] d = new double[n - 1]
+                for (int f = 1; f < n; f++) d[f - 1] = plain[f] - plain[f - 1]
+                double m = CalciumMotion.median(d)
+                for (int f = 0; f < n - 1; f++) d[f] = Math.abs(d[f] - m)
+                steps = 1.4826d * CalciumMotion.median(d) / Math.sqrt(2d) / Math.sqrt((double) AVERAGE)
+            }
+            noise[z] = Double.isNaN(sd) ? steps : Double.isNaN(steps) ? sd : Math.max(sd, steps)
+        }
+        // passes through: seen outside on one side before the event and on another side after it
+        List<double[]> before = new ArrayList<double[]>(), after = new ArrayList<double[]>()
+        for (int z = 0; z < 16; z++) {
+            if (trace[z] == null) continue
+            for (int side = 0; side < 2; side++) {
+                int from = side == 0 ? Math.max(0, a - span) : b + 1, to = side == 0 ? a - 1 : Math.min(n, b + 1 + span) - 1
+                if (to < from) continue
+                double[] top = highest(trace[z], cell, half, from, to)
+                if (top == null) continue
+                double v = top[0]
+                if (v < CELL_RISE * rise || v < NOISE * noise[z] || mean(trace[z], a, b) > HALF * v) continue
+                (side == 0 ? before : after).add([z, v, top[1]] as double[])
+            }
+        }
+        double[] entering = null, leaving = null
+        double strength = 0d
+        for (double[] x : before) for (double[] y : after) {
+            int apart = Math.abs(((int) x[0]) % 8 - ((int) y[0]) % 8)
+            apart = Math.min(apart, 8 - apart)
+            if (apart < APART) continue
+            double s = Math.min(x[1], y[1]) / rise
+            if (entering == null || s > strength) { entering = x; leaving = y; strength = s }
+        }
+        if (entering != null) {
+            out.put('rule', 'passes through')
+            out.put('text', 'possible passing object, frames ' + (a + 1) + ' to ' + (b + 1))
+            out.put('detail', 'seen outside at the ' + CalciumRingAndCore.SIDES[((int) entering[0]) % 8] + ' at frame ' + (((int) entering[2]) + 1) + ', ' + String.format(Locale.US, '%.1f', entering[1] / rise) + " x the cell's rise, and at the " +
+                CalciumRingAndCore.SIDES[((int) leaving[0]) % 8] + ' at frame ' + (((int) leaving[2]) + 1) + ', ' + String.format(Locale.US, '%.1f', leaving[1] / rise) + ' x')
+        }
+        // on the edge: the rise is in the ring outside the rim sector that rises most, and not in the core
+        double whole = mean(cell, a, b)
+        double core = trace[CalciumRingAndCore.CORE] == null ? Double.NaN : mean(trace[CalciumRingAndCore.CORE], a, b)
+        int hot = -1
+        double most = Double.NEGATIVE_INFINITY
+        for (int s = 0; s < 8; s++) { if (trace[CalciumRingAndCore.CORE + 1 + s] == null) continue; double v = mean(trace[CalciumRingAndCore.CORE + 1 + s], a, b); if (hot < 0 || v > most) { hot = s; most = v } }
+        if (hot >= 0 && whole > 0d && trace[hot] != null) {
+            double ring = mean(trace[hot], a, b)
+            if (core < CORE_SHARE * whole && ring >= most && ring >= NOISE * noise[hot]) {
+                int first = a, last = b
+                while (first > 0 && trace[hot][first - 1] > HALF * ring) first--
+                while (last < n - 1 && trace[hot][last + 1] > HALF * ring) last++
+                String seen = 'core rises ' + String.format(Locale.US, '%.2f', core / whole) + ' x the whole outline, ring ' + String.format(Locale.US, '%.1f', ring / most) + ' x the rim'
+                if (entering == null) {
+                    out.put('rule', 'on the edge')
+                    out.put('text', 'rise on the ' + CalciumRingAndCore.SIDES[hot] + ' edge, not in the cell, frames ' + (first + 1) + ' to ' + (last + 1))
+                    out.put('detail', seen)
+                } else out.put('detail', ((String) out.get('detail')) + '; also on the ' + CalciumRingAndCore.SIDES[hot] + ' edge: ' + seen)
+            }
+        }
+        return out
+    }
+    /** Stretches of samples at or above the rise a cell needs, inside its response window, as the engine counts them: a sample
+     *  below, a missing value or a gap in time longer than maxGap ends a stretch. @return how many, and the longest in samples */
+    static int[] crossings(double[] time, double[] value, double base, double reference, double need, double start, double end, double maxGap) {
+        double tol = 8d * Math.ulp(1d) * Math.max(1d, Math.max(Math.abs(start), Math.max(Math.abs(end), Math.abs(time[time.length - 1]))))
+        int runs = 0, longest = 0, current = 0, last = -1
+        for (int i = 0; i < time.length; i++) {
+            if (time[i] < start - tol || time[i] > end + tol) continue
+            double rise = (value[i] - base) / reference
+            boolean above = !Double.isNaN(rise) && !Double.isInfinite(rise) && rise >= need
+            if (!above) { current = 0; last = -1; continue }
+            if (current > 0 && last >= 0 && !Double.isNaN(maxGap) && time[i] - time[last] > maxGap + tol) current = 0
+            if (current == 0) runs++
+            current++; last = i
+            if (current > longest) longest = current
+        }
+        return [runs, longest] as int[]
+    }
+}
+
+/** Checks on the calls of a finished analysis, saved beside its percent table as <recording>_call_checks_<analysis>.csv, one
+ *  row per cell. A check only flags: no call, count or percentage changes.
+ *   - "possible passing object, frames a to b" and "rise on the <side> edge, not in the cell, frames a to b"
+ *     (CalciumPassingObject), from what was measured around each cell (CalciumRingAndCore). When the field was displaced by
+ *     CalciumMotion.MOVED pixels or more within the span before or after the event, the row says "field moved, frames a to b"
+ *     instead: a field that moves gives the same picture as an object.
+ *   - "short separate crossings": a responder whose rise reached what it needs CROSSINGS or more separate times in the
+ *     response window and never for more than SHORT samples, counted from the engine's own columns.
+ *  Only the event of the largest rise is looked at. The F0 frames are the analysis's own baseline frames.
+ *  It is plugin code in Groovy and not in the R adapter because it needs the outlines' pixels when a recording was measured
+ *  before the ring and core existed, and because its table lies beside the percent table, which Groovy writes; the analysis
+ *  folder is a finished snapshot and is not written to. */
+class CalciumCallChecks {
+    /** File names after "<recording>_". */
+    static final String VALUES='ring_and_core_gray_values.csv.gz',PIXELS='ring_and_core_pixels.csv',MOVEMENT='field_movement.csv'
+    static final int CROSSINGS=3,SHORT=2
+    static final List HEADER=['Cell','Call','Flag','Rule','Event_first_frame','Event_last_frame','Detail','Near_ring_sectors_usable','Area_pixels','Ring_measured','Passing_object_check','Crossings','Longest_crossing_samples']
+    /** One row per cell: its outline, its pixels and the pixels of each zone, then what the row belongs to (the raw table and
+     *  the values table of the same measurement) and the widths the zones were built with. */
+    static final List PIXEL_HEADER=['Cell','ROI_sha256','Area_pixels']+CalciumRingAndCore.NAMES+['Near_ring_sectors_usable','Raw_table_sha256','Gray_values_sha256','Pixel_size_um','Near_ring_from_px','Near_ring_to_px','Far_ring_to_px','Other_outlines_px']
+    /** The outline as the ROI registry identifies it (ROI_sha256). */
+    static String outlineHash(Roi roi,String id){Roi canonical=(Roi)roi.clone();canonical.setName(id);canonical.setPosition(0);CalciumInstaller.digest(RoiEncoder.saveAsByteArray(canonical))}
+    /** The line for what_was_done.txt. @param base the files' names up to and with "<recording>_"
+     *  @param movement whether the field's displacement was saved too (it is not when the movement check of Step 1 failed) */
+    static String record(CalciumRingAndCore rings,String base,boolean movement=true) {
+        def n={double v->CalciumTheme.shortNumber(v)}
+        double[] w=rings.width
+        String where=rings.micrometres?'a near ring '+n(CalciumRingAndCore.NEAR_FROM_UM)+' to '+n(CalciumRingAndCore.NEAR_TO_UM)+' \u00B5m and a far ring '+n(CalciumRingAndCore.NEAR_TO_UM)+' to '+n(CalciumRingAndCore.FAR_TO_UM)+' \u00B5m outside the outline, here '+n(w[0])+' to '+n(w[1])+' and '+n(w[1])+' to '+n(w[2])+' pixels. The rings leave out pixels within '+n(CalciumRingAndCore.OTHER_UM)+' \u00B5m of another outline.':
+            'a near ring '+n(w[0])+' to '+n(w[1])+' pixels and a far ring '+n(w[1])+' to '+n(w[2])+' pixels outside the outline. The recording has no pixel size in micrometres, so the widths are the pixel values as they are. The rings leave out pixels within '+n(w[3])+' pixels of another outline.'
+        'Around each cell: mean gray value on every frame of '+where+' Each ring is in 8 sectors. Inside the outline: the core, which is the deeper half, and the rim in 8 sectors. A zone under '+CalciumRingAndCore.MIN_PIXELS+' pixels is left empty. Files: '+(movement?base+VALUES+', '+base+PIXELS+' and '+base+MOVEMENT+', which holds the displacement of the field at every frame.':base+VALUES+' and '+base+PIXELS+'. The movement of the field was not measured.')+' Step 4 uses them to flag a possible passing object. No measurement and no call changes.'
+    }
+    /** Beside the tables, once the values table and the raw table are written: the pixels of each zone, and the field's
+     *  displacement at every frame, counted from where the field sits for most of the recording. */
+    static void saveBeside(String prefix,List names,Roi[] rois,int[][] cellPx,CalciumRingAndCore rings,double[][] shifts) {
+        saveMovement(new File(prefix+MOVEMENT),shifts)
+        String raw=CalciumInstaller.digest(new File(prefix+'gray_values_raw.csv').bytes),values=CalciumInstaller.digest(new File(prefix+VALUES).bytes)
+        List rows=[PIXEL_HEADER]
+        names.eachWithIndex{name,int c->rows<<([name,outlineHash(rois[c],''+name),cellPx[c].length]+(0..<CalciumRingAndCore.ZONES).collect{int z->rings.pixels(c,z)}+
+            [rings.nearUsable(c),raw,values,rings.micrometres?rings.pixelSize:'',rings.width[0],rings.width[1],rings.width[2],rings.width[3]])}
+        CalciumCsv.write(new File(prefix+PIXELS),rows)
+    }
+    /** Takes away what an earlier measurement left when this one could not measure around the cells. */
+    static void removeBeside(String prefix){[VALUES,VALUES+'.part',PIXELS].each{String name->try{new File(prefix+name).delete()}catch(Throwable ignored){}}}
+    static void saveMovement(File file,double[][] shifts) {
+        if(shifts==null||shifts.length==0){file.delete();return}
+        double[] size=CalciumMotion.displacement(shifts,0d,0d)
+        def text=new StringBuilder('Frame,Displacement_px,Shift_x_px,Shift_y_px\n')
+        for(int f=0;f<shifts.length;f++)text.append(f+1).append(',').append(String.format(Locale.US,'%.2f,%.2f,%.2f',size[f],shifts[f][0],shifts[f][1])).append('\n')
+        file.setText(text.toString(),'UTF-8')
+    }
+    /** The saved files, when they belong to these cells, these outlines and this raw table. @return values, counts, area and near, or why not */
+    static Map savedAround(String prefix,List names,Roi[] rois,String rawHash,int frames) {
+        File pixels=new File(prefix+PIXELS),values=new File(prefix+VALUES)
+        if(!pixels.isFile()||!values.isFile())return [why:'ring and core were not measured']
+        try {
+            def rows=CalciumCsv.read(pixels)
+            if(rows.isEmpty()||rows[0]!=PIXEL_HEADER)return [why:'the ring and core files have another layout']
+            List body=rows.drop(1)
+            if(body.collect{it[0]}!=names)return [why:'the ring and core files are for other cells']
+            if(rois!=null&&(0..<names.size()).any{int c->body[c][1]!=outlineHash(rois[c],names[c] as String)})return [why:'the ring and core files are for other outlines']
+            int rawAt=PIXEL_HEADER.indexOf('Raw_table_sha256'),valuesAt=PIXEL_HEADER.indexOf('Gray_values_sha256'),nearAt=PIXEL_HEADER.indexOf('Near_ring_sectors_usable')
+            if(body.any{it[rawAt]!=rawHash})return [why:'the ring and core files are for another raw table']
+            String valuesHash=CalciumInstaller.digest(values.bytes)
+            if(body.any{it[valuesAt]!=valuesHash})return [why:'the ring and core tables do not belong together']
+            return [values:CalciumRingAndCore.read(values,names.collect{''+it},frames),counts:body.collect{List row->(3..<3+CalciumRingAndCore.ZONES).collect{row[it] as int}},area:body.collect{it[2] as int},near:body.collect{it[nearAt] as int}]
+        }catch(Throwable problem){return [why:'the ring and core files cannot be read']}
+    }
+    /** Whether a recording gives the saved raw gray values: every cell on the first, the middle and the last frame. */
+    static boolean sameRecording(ImageStack stack,int[][] cellPx,List raw,int frames) {
+        for(int f in [1,(frames+1).intdiv(2),frames].unique()) {
+            def ip=stack.getProcessor(f)
+            for(int c=0;c<cellPx.length;c++){if(cellPx[c].length==0)continue
+                double sum=0d;for(int i:cellPx[c])sum+=ip.getf(i)
+                double saved=CalciumCsv.number(''+raw[f][c+1])
+                if(!(Math.abs(sum/cellPx[c].length-saved)<=0.00051d))return false}
+        }
+        true
+    }
+    /** What was measured around the cells of this measurement: read when the files beside the tables belong to it; otherwise
+     *  measured now with the same code when the recording and the outlines are at hand, and saved beside the tables (new files
+     *  only). @return values, counts, area, near and measuredNow, or why not */
+    static Map around(Map measurement,int frames) {
+        if(!(measurement?.folder instanceof File))return [why:'this measurement has no folder']
+        String prefix=new File(measurement.folder as File,measurement.recording+'_').path
+        List names=((measurement.names?:[]) as List).collect{''+it}
+        File raw=new File(prefix+'gray_values_raw.csv')
+        if(!raw.isFile())return [why:'the raw gray values are not beside the analysis']
+        Roi[] rois=measurement.rois instanceof Roi[]&&(measurement.rois as Roi[]).length==names.size()?measurement.rois as Roi[]:null
+        Map saved=savedAround(prefix,names,rois,CalciumInstaller.digest(raw.bytes),frames)
+        ImagePlus movie=measurement.movie instanceof ImagePlus?measurement.movie as ImagePlus:null
+        boolean open=movie!=null&&movie.getStackSize()>=frames
+        if(saved.values!=null) {
+            // the field's displacement alone can be missing: it is worked out again when the recording is open
+            File movement=new File(prefix+MOVEMENT)
+            if(!movement.isFile()&&open)try{saveMovement(movement,CalciumMotion.shifts(movie.getStack(),frames))}catch(Throwable ignored){}
+            return saved
+        }
+        if(rois==null)return [why:saved.why+' and the outlines are not at hand']
+        if(!open)return [why:saved.why+' and the recording is not open']
+        try {
+            int w=movie.getWidth(),h=movie.getHeight()
+            int[][] cellPx=rois.collect{Roi roi->CalciumSteps.pixelsOf(roi,w,h)} as int[][]
+            def table=CalciumCsv.read(raw)
+            if(table.size()!=frames+1||table[0].drop(1).collect{''+it}!=names)return [why:saved.why+' and the raw gray values are for other cells or frames']
+            if(!sameRecording(movie.getStack(),cellPx,table,frames))return [why:saved.why+' and the open recording does not give the saved gray values']
+            def scale=movie.getCalibration()
+            def rings=new CalciumRingAndCore(cellPx,w,h,scale.pixelWidth,scale.pixelHeight,scale.getUnit())
+            rings.measure(movie.getStack(),frames,new File(prefix+VALUES),names as String[])
+            double[][] shifts=null;try{shifts=CalciumMotion.shifts(movie.getStack(),frames)}catch(Throwable ignored){}
+            saveBeside(prefix,names,rois,cellPx,rings,shifts)
+            Map now=savedAround(prefix,names,rois,CalciumInstaller.digest(raw.bytes),frames);now.measuredNow=true
+            return now
+        }catch(Throwable problem){return [why:saved.why+' and could not be measured now: '+(problem.message?:problem.toString())]}
+    }
+    /** The saved displacement of the field at every frame, in pixels; null when it was not saved for these frames. */
+    static double[] displacement(String prefix,int frames) {
+        try {
+            File file=new File(prefix+MOVEMENT);if(!file.isFile())return null
+            def rows=CalciumCsv.read(file);int at=rows[0].indexOf('Displacement_px')
+            if(at<0||rows.size()!=frames+1)return null
+            return rows.drop(1).collect{CalciumCsv.number(''+it[at])} as double[]
+        }catch(Throwable ignored){return null}
+    }
+    /** The measurement's raw and background tables by cell, when they are the ones the analysis was run on. */
+    static Map tables(Map measurement,List names,int frames,Map manifest) {
+        if(!(measurement?.folder instanceof File))return [why:'this measurement has no folder']
+        File folder=measurement.folder as File;String base=''+measurement.recording
+        File raw=new File(folder,base+'_gray_values_raw.csv'),background=new File(folder,base+'_background_next_to_each_cell.csv'),corrected=new File(folder,base+'_gray_values_background_corrected_native.csv')
+        if(!raw.isFile()||!background.isFile())return [why:'the raw gray values and backgrounds are not beside the analysis']
+        String analysed=manifest.measurement_input_sha256?:manifest.expected_input_sha256?:''
+        if(analysed&&corrected.isFile()&&CalciumInstaller.digest(corrected.bytes)!=analysed)return [why:'the tables beside the analysis are from another measurement']
+        Map out=[:]
+        for(entry in [raw:raw,background:background]) {
+            def rows=CalciumCsv.read(entry.value)
+            if(rows.size()!=frames+1||rows[0].drop(1).collect{''+it}!=names)return [why:'the tables beside the analysis are for other cells or frames']
+            Map columns=[:];List body=rows.drop(1)
+            names.eachWithIndex{name,int c->double[] v=new double[frames];for(int f=0;f<frames;f++)v[f]=CalciumCsv.number(''+body[f][c+1]);columns[name]=v}
+            out[entry.key]=columns
+        }
+        out
+    }
+    static File file(Map measurement,File dir){measurement?.folder instanceof File?new File(measurement.folder as File,measurement.recording+'_call_checks_'+dir.name+'.csv'):null}
+    /** Checks the calls of a finished analysis and saves them beside its percent table. Never stops an analysis: when the
+     *  checks cannot be made the answer says why. @return rows, file, ringMeasured, note */
+    static Map run(File dir,Map measurement) {
+        try {
+            Map found=rows(dir,measurement)
+            File target=file(measurement,dir)
+            if(target!=null){CalciumCsv.write(target,[HEADER]+(found.rows as List).collect{Map row->HEADER.collect{row[it]}});found.file=target.name}
+            return found
+        }catch(Throwable problem){return [rows:[],ringMeasured:false,note:'The calls were not checked: '+(problem.message?:problem.toString())]}
+    }
+    static Map rows(File dir,Map measurement) {
+        def calls=CalciumCsv.read(new File(dir,'responder_calls.csv'));List h=calls[0]
+        int cellAt=h.indexOf('Cell'),roleAt=h.indexOf('Role'),statusAt=h.indexOf('Status')
+        if(cellAt<0||statusAt<0)throw new IOException('the calls table has no Cell or Status column')
+        Map byCell=[:];calls.drop(1).each{List row->if((roleAt<0||row[roleAt]=='Stimulus')&&!byCell.containsKey(''+row[cellAt]))byCell[''+row[cellAt]]=row}
+        def number={List row,String name->int i=h.indexOf(name);i<0||row==null?Double.NaN:CalciumCsv.number(''+row[i])}
+        def normalized=CalciumCsv.read(new File(dir,'normalized_traces.csv'));List samples=normalized.drop(1)
+        double[] time=samples.collect{CalciumCsv.number(''+it[0])} as double[];int frames=time.length
+        if(frames<3||time.any{!Double.isFinite(it)})throw new IOException('the saved traces have no usable times')
+        Map traceAt=[:];normalized[0].drop(1).eachWithIndex{name,int i->traceAt[''+name]=i+1}
+        Map manifest=CalciumCsv.read(new File(dir,'analysis_manifest.csv')).drop(1).collectEntries{[it[0],it[1]]}
+        double from=CalciumCsv.number(''+manifest.baseline_start),to=CalciumCsv.number(''+manifest.baseline_end)
+        if(!(from>=1&&to>=from&&to<=frames))throw new IOException('the saved baseline frames do not match the recording')
+        int first=(from as int)-1,last=(to as int)-1
+        List names=measurement?.names?(measurement.names as List).collect{''+it}:(byCell.keySet() as List)
+        double[] steps=new double[frames-1];for(int f=1;f<frames;f++)steps[f-1]=time[f]-time[f-1]
+        int span=Math.max(1,Math.round(CalciumPassingObject.SPAN_S/CalciumMotion.median(steps)) as int)
+        Map measured=tables(measurement,names,frames,manifest)
+        Map ring=measured.why ? [why:measured.why] : around(measurement,frames)
+        double[] moved=ring.values!=null?displacement(new File(measurement.folder as File,measurement.recording+'_').path,frames):null
+        String unchecked=ring.values!=null?'':(''+(ring.why?:'ring and core were not measured'))   // why no cell is checked for a passing object
+        List out=[]
+        names.eachWithIndex{String name,int c->
+            List call=byCell[name] as List;String status=call==null?'':''+call[statusAt]
+            Map row=[Cell:name,Call:status,Flag:'',Rule:'',Event_first_frame:'',Event_last_frame:'',Detail:'',Near_ring_sectors_usable:'',Area_pixels:'',Ring_measured:ring.values!=null?'yes':'no',Passing_object_check:'not checked',Crossings:'',Longest_crossing_samples:'']
+            if(ring.values!=null){row.Near_ring_sectors_usable=ring.near[c];row.Area_pixels=ring.area[c]}
+            List flags=[],notes=[]   // a flag is [text, rule, detail]
+            double peakAt=number(call,'Peak_s')
+            if(!(status=='Responded'||status=='Did not respond')||!Double.isFinite(peakAt))notes<<'no call'
+            else {
+                if(measured.why)notes<<unchecked
+                else {
+                    int peak=0;for(int f=1;f<frames;f++)if(Math.abs(time[f]-peakAt)<Math.abs(time[peak]-peakAt))peak=f
+                    float[][] zone=null
+                    if(ring.values!=null){zone=new float[CalciumRingAndCore.ZONES][];for(int z=0;z<CalciumRingAndCore.ZONES;z++)if((ring.counts[c][z] as int)>=CalciumRingAndCore.MIN_PIXELS)zone[z]=(ring.values as float[][])[c*CalciumRingAndCore.ZONES+z]}
+                    Map event=CalciumPassingObject.check(measured.raw[name] as double[],measured.background[name] as double[],zone,first,last,peak,span)
+                    if(event==null)notes<<'no rise at the peak'
+                    else {
+                        row.Event_first_frame=event.first;row.Event_last_frame=event.last
+                        if(zone==null)notes<<unchecked
+                        else {
+                            row.Passing_object_check='checked'
+                            if(event.rule) {
+                                List off=moved==null ? [] : (Math.max(1,(event.first as int)-span)..Math.min(frames,(event.last as int)+span)).findAll{int f->moved[f-1]>=CalciumMotion.MOVED}
+                                if(off)flags<<['field moved, frames '+off.first()+' to '+off.last(),'field moved','displaced up to '+String.format(Locale.US,'%.1f',off.collect{int f->moved[f-1]}.max())+' px; otherwise '+event.text+': '+event.detail]
+                                else flags<<[event.text,event.rule,event.detail]
+                            }
+                        }
+                    }
+                }
+                // separate crossings of the rise the cell needs, from the engine's own columns
+                double need=number(call,'Threshold_increase'),base=number(call,'Baseline_mean'),reference=number(call,'Local_reference_relative')
+                if(!Double.isFinite(reference))reference=number(call,'Local_F0_relative')
+                if(!Double.isFinite(reference))reference=1d+base
+                double start=number(call,'Start_s'),end=number(call,'Effective_end_s');if(!Double.isFinite(end))end=number(call,'End_s')
+                if(traceAt[name]!=null&&[need,base,reference,start,end].every{Double.isFinite(it as double)}&&need>0d&&reference>0d) {
+                    int at=traceAt[name] as int;double[] y=samples.collect{CalciumCsv.number(''+it[at])} as double[]
+                    int[] crossed=CalciumPassingObject.crossings(time,y,base,reference,need,start,end,number(call,'Max_gap_s'))
+                    row.Crossings=crossed[0];row.Longest_crossing_samples=crossed[1]
+                    if(status=='Responded'&&crossed[0]>=CROSSINGS&&crossed[1]<=SHORT)flags<<['short separate crossings','short separate crossings',crossed[0]+' crossings, the longest '+crossed[1]+' samples']
+                }
+            }
+            row.Flag=flags.collect{it[0]}.join('; ');row.Rule=flags.collect{it[1]}.join('; ');row.Detail=(notes+flags.collect{it[2]}).join('; ')
+            out<<row
+        }
+        String why=ring.values!=null?(moved==null?'The movement of the field was not saved, so a moving field is not told from an object.':''):'Not checked for a passing object: '+unchecked+'.'
+        [rows:out,ringMeasured:ring.values!=null,measuredNow:ring.measuredNow==true,note:why,span:span]
+    }
+    /** The checks as the Step 4 page is given them: for every cell the flag's text, its rule and the first frame of the event.
+     *  A cell with two flags has both in text and in rule, joined with "; ", and one by one in flags. */
+    static Map answer(Map found) {
+        if(found==null)return null
+        def whole={v->String s=v==null?'':''+v;s==~/-?\d+/?(s as int):null}
+        def each={Map row->String text=''+(row.Flag?:''),rule=''+(row.Rule?:'');text.isEmpty() ? [] : [text.split('; ') as List,rule.split('; ') as List].transpose().collect{[text:it[0],rule:it[1]]}}
+        [file:found.file,ringMeasured:found.ringMeasured==true,note:found.note?:'',cells:((found.rows?:[]) as List).collectEntries{Map row->
+            [''+row.Cell,[text:''+(row.Flag?:''),rule:''+(row.Rule?:''),flags:each(row),firstFrame:whole(row.Event_first_frame),lastFrame:whole(row.Event_last_frame),detail:''+(row.Detail?:''),checked:row.Passing_object_check=='checked',
+                ringMeasured:row.Ring_measured=='yes',nearSectors:whole(row.Near_ring_sectors_usable),area:whole(row.Area_pixels),crossings:whole(row.Crossings),longestCrossing:whole(row.Longest_crossing_samples)]]}]
+    }
+    /** The checks saved for an analysis; null when there are none. */
+    static Map saved(File dir,Map measurement) {
+        try {
+            File source=file(measurement,dir);if(source==null||!source.isFile())return null
+            def rows=CalciumCsv.read(source);if(rows.isEmpty()||rows[0]!=HEADER)return null
+            List body=rows.drop(1).collect{List line->[HEADER,line].transpose().collectEntries{it}}
+            boolean ring=body.any{it.Ring_measured=='yes'}
+            return [rows:body,file:source.name,ringMeasured:ring,note:ring?'':'Not checked for a passing object.']
+        }catch(Throwable ignored){return null}
+    }
+}
+
+/** The manual review of the calls of one analysis. A cell the engine scored can be marked the other way: a responder as not
+ *  responding, a non-responder as responding, each with a reason (REASONS); Other needs a short note. A mark can be removed.
+ *  The marks are kept beside the percent table, in "<recording>_reviewed_calls_<analysis>.csv", one row per marked cell; the
+ *  file exists only while there is at least one mark. The engine's responder_calls.csv and the analysis folder are never
+ *  written to. Every row names the analysis and the SHA-256 of the responder_calls.csv the mark was made on, and a file that
+ *  does not match its analysis is not applied: the answer says so instead.
+ *  The marks are applied in one place, CalciumAnalysisSettings.tally (with reviewed() here), and everything that counts
+ *  responders reads that tally: the percent table, the finish sentence, the Step 4 page and the Fiji window.
+ *  When a new analysis of the same recording finishes, the marks of the most recent earlier analysis that has any are carried
+ *  over for the cells whose automatic call and outline are unchanged (carry); the others are dropped and listed. */
+class CalciumReview {
+    static final List HEADER=['Cell','Automatic_call','Reviewed_call','Reason','Note','Time','Analysis','Responder_calls_sha256','ROI_sha256']
+    static final List REASONS=['Noise','Movement','Passing object','Bad outline','Other']
+    static final List CALLS=['Responded','Did not respond']
+    static final int NOTE_MAX=120
+    /** A note is one line: no line break and no other control character. */
+    static final java.util.regex.Pattern NOT_ONE_LINE=java.util.regex.Pattern.compile('[\\x00-\\x1F\\x7F\\x85\\u2028\\u2029]')
+    static File file(Map measurement,File dir){measurement?.folder instanceof File?new File(measurement.folder as File,measurement.recording+'_reviewed_calls_'+dir.name+'.csv'):null}
+    /** The call of a cell after review: the mark's when there is one for the call the engine made, else the engine's own. */
+    static String reviewed(Map marks,String cell,String call){Map mark=marks?.get(cell) as Map;mark!=null&&mark.automatic==call&&call in CALLS?mark.reviewed as String:call}
+    /** The engine's call of every cell for the primary stimulus, in the table's order. */
+    static Map scored(File dir) {
+        Map out=new LinkedHashMap();File source=new File(dir,'responder_calls.csv');if(!source.isFile())return out
+        def calls=CalciumCsv.read(source);List h=calls[0];int cell=h.indexOf('Cell'),role=h.indexOf('Role'),status=h.indexOf('Status')
+        if(cell<0||status<0)return out
+        calls.drop(1).each{List row->if((role<0||row[role]=='Stimulus')&&!out.containsKey(''+row[cell]))out[''+row[cell]]=''+row[status]}
+        out
+    }
+    /** The outline of every cell measured for an analysis, as its ROI registry names it (ROI_sha256); empty without a registry. */
+    static Map outlines(File dir) {
+        Map out=new LinkedHashMap();File source=new File(dir,'roi_registry.csv');if(!source.isFile())return out
+        try{def rows=CalciumCsv.read(source);List h=rows[0];int cell=h.indexOf('Cell'),roi=h.indexOf('ROI_sha256'),measured=h.indexOf('Included_in_measurement')
+            if(cell>=0&&roi>=0)rows.drop(1).each{List row->if(measured<0||row[measured]=='true')out[''+row[cell]]=''+row[roi]}}catch(Throwable ignored){}
+        out
+    }
+    /** The cells in the order the page numbers them: the measurement's own, else the analysis's. */
+    static List order(File dir,Map measurement){measurement?.names?(measurement.names as List).collect{''+it}:(outlines(dir).keySet() as List)?:(scored(dir).keySet() as List)}
+    /** A cell as the page shows it: "Cell 12" for a long ID, counted from 1 in the measurement's order, else the name itself. */
+    static String shown(List names,String cell){int at=names==null?-1:names.indexOf(cell);cell.length()>14&&at>=0?'Cell '+(at+1):cell}
+    static String digest(File dir){CalciumInstaller.digest(new File(dir,'responder_calls.csv').bytes)}
+    /** Why a mark cannot be kept for this cell, or null. @param calls the engine's calls (scored) */
+    static String refused(String cell,Object call,Object reason,Object note,Map calls,String name) {
+        String automatic=calls[cell] as String
+        if(!(automatic in CALLS))return name+' has no call to review: it is '+(automatic?:'not scored').toLowerCase()+'.'
+        if(!(call instanceof String)||!(call in CALLS))return 'Give the reviewed call: Responded or Did not respond.'
+        if(call==automatic)return name+' was scored as '+automatic.toLowerCase()+'. The reviewed call must be the other one.'
+        if(!(reason instanceof String)||!(reason in REASONS))return 'Choose a reason: Noise, Movement, Passing object, Bad outline or Other.'
+        if(note!=null&&!(note instanceof String))return 'The note must be text.'
+        String text=note==null?'':note as String
+        if(NOT_ONE_LINE.matcher(text).find())return 'The note must be one line.'
+        if(text.length()>NOTE_MAX)return 'Keep the note to '+NOTE_MAX+' characters or fewer.'
+        if(reason=='Other'&&text.isEmpty())return 'Other needs a short note.'
+        null
+    }
+    /** The marks saved for an analysis. @return file (its name, or null when there is none), marks (cell to automatic,
+     *  reviewed, reason, note, time, roi) and problem: '' or why the file is not applied, in which case marks is empty */
+    static Map read(File dir,Map measurement) {
+        File source=file(measurement,dir);Map none=[file:null,marks:[:],problem:'']
+        if(source==null||!source.isFile())return none
+        String unused='The review file '+source.name
+        try {
+            def rows=CalciumCsv.read(source)
+            if(rows.isEmpty()||rows[0]!=HEADER)return none+[file:source.name,problem:unused+' cannot be read, so its marks are not used.']
+            Map calls=scored(dir);String hash=digest(dir);Map marks=new LinkedHashMap()
+            for(List line in rows.drop(1)) {
+                Map row=[HEADER,line].transpose().collectEntries{it}
+                if(row.Analysis!=dir.name)return none+[file:source.name,problem:unused+' is for another analysis, so its marks are not used.']
+                if(row.Responder_calls_sha256!=hash||marks.containsKey(row.Cell)||row.Automatic_call!=calls[row.Cell]||refused(row.Cell as String,row.Reviewed_call,row.Reason,row.Note,calls,row.Cell as String)!=null)
+                    return none+[file:source.name,problem:unused+' does not match the calls of this analysis, so its marks are not used.']
+                marks[row.Cell]=[automatic:row.Automatic_call,reviewed:row.Reviewed_call,reason:row.Reason,note:row.Note,time:row.Time,roi:row.ROI_sha256]
+            }
+            return [file:source.name,marks:marks,problem:'']
+        }catch(Throwable problem){return none+[file:source.name,problem:unused+' cannot be read, so its marks are not used.']}
+    }
+    /** Writes the marks (an empty set removes the file), then the percent table again from the tally they give. */
+    static void write(File dir,Map measurement,Map marks) {
+        File target=file(measurement,dir);if(target==null)throw new IllegalStateException('This measurement has no folder to keep the review in.')
+        if(marks.isEmpty()){if(target.exists()&&!target.delete())throw new IOException('Could not remove '+target.name+'.')}
+        else {
+            String hash=digest(dir);Map roi=outlines(dir);List cells=scored(dir).keySet() as List
+            List rows=[HEADER]+(marks.keySet() as List).sort{cells.indexOf(it)}.collect{String cell->Map m=marks[cell] as Map;[cell,m.automatic,m.reviewed,m.reason,m.note?:'',m.time,dir.name,hash,roi[cell]?:'']}
+            File part=new File(target.path+'.part');CalciumCsv.write(part,rows)
+            java.nio.file.Files.move(part.toPath(),target.toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        }
+        CalciumAnalysisSettings.savePercent(dir,measurement,CalciumAnalysisSettings.tally(dir,measurement))
+    }
+    static String now(){java.time.OffsetDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString()}
+    /** Sets or removes one mark. body: cell, and either call, reason and note, or remove: true. Refuses with a plain message. */
+    static void change(File dir,Map measurement,Map body) {
+        if(!(body?.cell instanceof String)||!(body.cell as String))throw new IllegalArgumentException('Say which cell to mark.')
+        String cell=body.cell as String;Map calls=scored(dir);List names=order(dir,measurement);String name=shown(names,cell)
+        if(!calls.containsKey(cell)||(measurement?.names&&!names.contains(cell)))throw new IllegalArgumentException('There is no cell '+cell+' in this analysis.')
+        Map saved=read(dir,measurement)
+        if(saved.problem)throw new IllegalStateException((saved.problem as String)+' Move it out of the folder to review this analysis again.')
+        Map marks=new LinkedHashMap(saved.marks as Map)
+        if(body.remove==true){if(!marks.containsKey(cell))throw new IllegalArgumentException(name+' has no review mark.');marks.remove(cell)}
+        else if(body.remove!=null&&body.remove!=false)throw new IllegalArgumentException('Remove must be true or false.')
+        else {
+            Object note=body.note instanceof String?(body.note as String).trim():body.note
+            String why=refused(cell,body.call,body.reason,note,calls,name);if(why)throw new IllegalArgumentException(why)
+            marks[cell]=[automatic:calls[cell],reviewed:body.call,reason:body.reason,note:(note?:'') as String,time:now()]
+        }
+        write(dir,measurement,marks)
+    }
+    /** "3 of 143 cells were reclassified after manual review: 2 from responder to non-responder (1 noise, 1 passing object) and
+     *  1 from non-responder to responder (other)." From the marks that changed a call of all cells; '' when none did. */
+    static String methods(Map tally,Map review) {
+        List changed=(tally?.changed?:[]) as List;if(changed.isEmpty())return ''
+        int total=(((tally.rows as List).find{it.key=='all'} as Map).counted as List)[1] as int
+        List marks=changed.collect{(review.marks as Map)[it] as Map}
+        def part={List group,String from,String to->
+            Map count=group.countBy{it.reason};List reasons=(count.keySet() as List).sort{a,b->(count[b] as int)<=>(count[a] as int)?:REASONS.indexOf(a)<=>REASONS.indexOf(b)}
+            group.size()+' from '+from+' to '+to+' ('+(reasons.size()==1?(reasons[0] as String).toLowerCase():reasons.collect{count[it]+' '+(it as String).toLowerCase()}.join(', '))+')'}
+        List down=marks.findAll{it.automatic=='Responded'},up=marks.findAll{it.automatic!='Responded'},parts=[]
+        if(down)parts<<part(down,'responder','non-responder');if(up)parts<<part(up,'non-responder','responder')
+        changed.size()+' of '+total+' cells '+(changed.size()==1?'was':'were')+' reclassified after manual review: '+parts.join(' and ')+'.'
+    }
+    /** What the Step 4 page is given about the review of the analysis shown. @param carried what carry gave when this analysis was run */
+    static Map state(File dir,Map measurement,Map review,Map tally,Map carried=null) {
+        List names=order(dir,measurement)
+        [folder:dir.name,file:review.file,problem:review.problem?:'',
+         marks:(review.marks as Map).collectEntries{cell,m->[cell,[name:shown(names,cell as String),automatic:m.automatic,reviewed:m.reviewed,reason:m.reason,note:m.note?:'',time:m.time]]},
+         changed:((tally?.changed?:[]) as List).size(),methods:methods(tally,review),carried:carried!=null&&carried.folder==dir.name?carried.findAll{it.key!='folder'}:null,
+         reasons:REASONS,calls:CALLS,noteMax:NOTE_MAX]
+    }
+    /** When "yyyyMMdd-HHmmss" an analysis was made: from its folder's name, else from when its review file was written. */
+    static String made(String analysis,File source){def m=analysis=~/^SimpleCa-(\d{8}-\d{6})-/;m.find()?m.group(1):new java.text.SimpleDateFormat('yyyyMMdd-HHmmss').format(new Date(source.lastModified()))}
+    /** At the end of a new analysis: the marks of the most recent earlier analysis of this recording that has marks it can use
+     *  are kept for every cell whose automatic call and outline are as they were, and written for the new analysis; the others
+     *  are dropped. @return null when no earlier analysis has marks; else folder (the new analysis), from, kept, dropped (cell,
+     *  name, why, text) and text, the sentence for the finish message without its leading space */
+    static Map carry(File dir,Map measurement) {
+        try {
+            if(!(measurement?.folder instanceof File))return null
+            File folder=measurement.folder as File;String start=measurement.recording+'_reviewed_calls_',own=file(measurement,dir).name
+            List earlier=(folder.listFiles()?:new File[0]).findAll{File f->f.isFile()&&f.name.startsWith(start)&&f.name.endsWith('.csv')&&f.name!=own}.collect{File f->
+                String analysis=f.name.substring(start.length(),f.name.length()-4);[analysis:analysis,when:made(analysis,f)]}.sort{a,b->b.when<=>a.when?:b.analysis<=>a.analysis}
+            Map from=null,marks=null
+            for(Map candidate in earlier){File other=new File(folder,candidate.analysis as String);if(!new File(other,'responder_calls.csv').isFile())continue
+                Map got=read(other,measurement);if(got.problem||(got.marks as Map).isEmpty())continue
+                from=candidate+[dir:other];marks=got.marks as Map;break}
+            if(from==null)return null
+            Map calls=scored(dir),roi=outlines(dir),keep=new LinkedHashMap();List names=order(dir,measurement),before=order(from.dir as File,null),dropped=[]
+            marks.each{String cell,Map mark->
+                String now=calls[cell]?:'',why=null
+                if(now==mark.automatic&&mark.roi&&roi[cell]&&mark.roi!=roi[cell])why='outline changed'
+                else if(now==mark.automatic)keep[cell]=mark.findAll{it.key!='roi'}
+                else why=now in CALLS?'now scored as '+now.toLowerCase():now?'now '+now.toLowerCase():'no longer measured'
+                if(why){String name=shown(calls.containsKey(cell)?names:before,cell);dropped<<[cell:cell,name:name,why:why,text:name+': '+why]}
+            }
+            if(!keep.isEmpty())write(dir,measurement,keep)
+            String text='Review marks from '+from.analysis+': '+(keep.isEmpty()?'none':keep.size())+' carried over, '+dropped.size()+' dropped.'+dropped.collect{' '+it.text+'.'}.join('')
+            return [folder:dir.name,from:from.analysis,kept:keep.size(),dropped:dropped,text:text]
+        }catch(Throwable problem){return [folder:dir.name,from:'',kept:0,dropped:[],text:'The review marks of earlier analyses were not carried over: '+(problem.message?:problem.toString())]}
+    }
+    /** The finish message's part about the carried marks: '' when nothing was carried. */
+    static String note(Map carried){carried?.text?' '+carried.text:''}
+    /** The responding tile of the Fiji window after review: [value, caption], or null without marks. */
+    static List headline(Map tally,String stimulus) {
+        if(tally?.reviewed!=true)return null
+        Map all=(tally.rows as List).find{it.key=='all'} as Map;List t=all.counted as List,r=(all.reviewed as Map).counted as List
+        [(r[1] as int)>0?String.format(Locale.US,'%.0f %%',100d*(r[0] as int)/(r[1] as int)):'–',stimulus+': '+r[0]+' of '+r[1]+' evaluable cells after review; '+t[0]+' as scored']
+    }
+}
+
 /** One measurement and its immutable completed-run display, shared with the local browser. */
 class CalciumAnalysisSession {
     Map measurement
@@ -3773,6 +4653,10 @@ class CalciumAnalysisSession {
     volatile long started=0L
     volatile File results
     volatile String resultsJson='{}',appliedFingerprint='',submittedFingerprint=''
+    /** What resultsJson was made from, so a review mark changes only the review and the tally in it. */
+    Map resultsMap
+    /** What the last analysis run here carried over from the review of an earlier one (CalciumReview.carry). */
+    volatile Map carried
     Map draft;long draftRevision=-1L
     String validationFingerprint='';Map draftValidation=[:]
     double[] appliedTime=new double[0]
@@ -3868,8 +4752,8 @@ class CalciumAnalysisSession {
         Thread.startDaemon('SimpleCa analysis for the Step 4 page') {
             try {File output=action.call(mine) as File
                 if(setup){percent=100;message='R is ready. Check the settings, then run analysis.';tone='good'}
-                else {load(output,fingerprint,submitted);percent=100;String empty=CalciumAnalysisSettings.noEvaluableCells(output)
-                    if(empty){message=empty;tone='warn'} else {message='Complete. Protocol, input snapshots and tables saved in '+output.name+'.'+CalciumAnalysisSettings.percentResponding(output,measurement)+CalciumResponseProtocol.noiseNote(submitted?.protocol);tone='good'}}
+                else {stage='Checking the calls';Map checked=CalciumCallChecks.run(output,measurement);carried=CalciumReview.carry(output,measurement);load(output,fingerprint,submitted,checked);percent=100;String empty=CalciumAnalysisSettings.noEvaluableCells(output)
+                    if(empty){message=empty+CalciumReview.note(carried);tone='warn'} else {message='Complete. Protocol, input snapshots and tables saved in '+output.name+'.'+CalciumAnalysisSettings.percentResponding(output,measurement)+CalciumResponseProtocol.noiseNote(submitted?.protocol)+CalciumReview.note(carried);tone='good'}}
             }catch(java.util.concurrent.CancellationException ignored){message='Cancelled. Completed analyses are kept; partial output is not used.';tone='plain';stage='';percent=0}
             catch(Throwable t){message=t.message?:t.toString();tone='bad'}
             finally{busy=false}
@@ -3924,8 +4808,9 @@ class CalciumAnalysisSession {
     void cancel(){job?.cancel();if(busy)stage='Cancelling...'}
     static Map table(File dir,String name){File file=new File(dir,name);if(!file.isFile())return [header:[],rows:[]];def rows=CalciumCsv.read(file);[header:rows?rows[0]:[],rows:rows?rows.drop(1):[]]}
     static List<Map> records(Map table){(table.rows as List).collect{line->table.header.withIndex().collectEntries{h,i->[h,i<line.size()?line[i]:'']}}}
-    /** Draw only completed files. No response classifications or scientific metrics are recomputed in Java. */
-    void load(File dir,String fingerprint=null,Map submitted=null) {
+    /** Draw only completed files. No response classifications or scientific metrics are recomputed in Java.
+     *  @param checked the checks on the calls just made (CalciumCallChecks.run); without them the ones saved for this analysis are read */
+    void load(File dir,String fingerprint=null,Map submitted=null,Map checked=null) {
         if(!new File(dir,'COMPLETE').isFile())throw new IOException('This analysis has no COMPLETE marker.')
         def normalized=CalciumCsv.read(new File(dir,'normalized_traces.csv')),average=CalciumCsv.read(new File(dir,'mean_trace.csv'))
         def numbers={List rows,int column->rows.drop(1).collect{CalciumCsv.number(it[column])}}
@@ -3953,13 +4838,26 @@ class CalciumAnalysisSession {
                 if(rows.size()==time.size()+1&&(rows[0].drop(1).collect{''+it} as Set).containsAll(traces.keySet())&&(rows[0].drop(1).collect{''+it} as Set)==((measurement.names?:[]).collect{''+it} as Set))rows[0].drop(1).eachWithIndex{name,i->out[''+name]=numbers(rows,i+1)}}}catch(Throwable ignored){out=[:]}
             out}
         File tableFolder=measurement.folder instanceof File?measurement.folder as File:null
+        Map review=CalciumReview.read(dir,measurement),tally=CalciumAnalysisSettings.tally(dir,measurement,traces,review)
         Map corrected=grayTable(measurement.csv instanceof File?measurement.csv as File:null)
         Map raw=grayTable(tableFolder==null?null:new File(tableFolder,measurement.recording+'_gray_values_raw.csv'))
         Map loaded=[folder:dir.name,time:time,frameTimes:time,timeSource:manifest.time_source?:'constant_fps',timingProvisional:false,mean:mean,sem:numbers(average,2),traces:traces,calls:calls,counts:counts,windows:windows,callsByWindow:callsByWindow,countsByWindow:countsByWindow,
             baseline:[time[first-1],time[last-1]],baselineFrames:[first,last],stimulus:[CalciumCsv.number(firstCall.Start_s?:manifest.stimulus_start),CalciumCsv.number(firstCall.Effective_end_s?:firstCall.End_s?:manifest.stimulus_end)],
-            corrected:corrected,raw:raw,chosenBlind:(measurement.chosenBlind instanceof Map?measurement.chosenBlind:null),tally:CalciumAnalysisSettings.tally(dir,measurement,traces),appliedDraft:submitted==null?null:CalciumAnalysisSettings.copy(submitted),protocol:protocol('protocol.json'),appliedProtocol:protocol('applied_protocol.json'),manifest:manifest,appliedFingerprint:applied,tables:tables]
+            corrected:corrected,raw:raw,chosenBlind:(measurement.chosenBlind instanceof Map?measurement.chosenBlind:null),tally:tally,review:CalciumReview.state(dir,measurement,review,tally,carried),checks:CalciumCallChecks.answer(checked?:CalciumCallChecks.saved(dir,measurement)),appliedDraft:submitted==null?null:CalciumAnalysisSettings.copy(submitted),protocol:protocol('protocol.json'),appliedProtocol:protocol('applied_protocol.json'),manifest:manifest,appliedFingerprint:applied,tables:tables]
         String text=json(loaded)
-        synchronized(this){meanTrace=mean as double[];restFirst=first;restLast=last;rest=null;frameEpoch++;appliedTime=time as double[];appliedTimeSource=loaded.timeSource;appliedFingerprint=applied;results=dir;resultsJson=text;version++}
+        synchronized(this){meanTrace=mean as double[];restFirst=first;restLast=last;rest=null;frameEpoch++;appliedTime=time as double[];appliedTimeSource=loaded.timeSource;appliedFingerprint=applied;results=dir;resultsMap=loaded;resultsJson=text;version++}
+    }
+    /** Sets or removes one review mark (CalciumReview.change) on the analysis shown, and answers with the review and the tally
+     *  after it. The saved results the page reads change with it: their review and tally, nothing else.
+     *  @param body cell, and call, reason and note, or remove: true; folder, when given, must be the analysis shown */
+    synchronized Map review(Map body) {
+        if(busy)throw new IllegalStateException('Wait for the analysis to finish.')
+        if(results==null||resultsMap==null)throw new IllegalStateException('Run an analysis first.')
+        if(body?.folder!=null&&body.folder!=results.name)throw new IllegalArgumentException('This mark is for another analysis. Reload the page.')
+        CalciumReview.change(results,measurement,body)
+        Map read=CalciumReview.read(results,measurement),tally=CalciumAnalysisSettings.tally(results,measurement,resultsMap.traces as Map,read),state=CalciumReview.state(results,measurement,read,tally,carried)
+        resultsMap.tally=tally;resultsMap.review=state;resultsJson=json(resultsMap);version++
+        [folder:results.name,version:version,review:state,tally:tally]
     }
     /** One frame of the recording as a JPEG: as recorded, or minus the mean of the baseline frames and lightly smoothed. Display only.
      *  A width below the recording's gives a smaller copy for playback; it is painted at full size first, so it looks the same. */
@@ -4109,6 +5007,7 @@ class CalciumWebServer {
                     case 'api/setup':now.setup();replyJson(exchange,200,now.state());return
                     case 'api/cancel':now.cancel();replyJson(exchange,200,now.state());return
                     case 'api/export':replyJson(exchange,200,now.export(body));return
+                    case 'api/review':replyJson(exchange,200,now.review(body));return
                     case 'api/prefs':replyJson(exchange,200,CalciumAnalysisSettings.setPagePref(body.key,body.value));return
                     case 'api/convert':   // the same file as Save writes, handed back for the browser's own download
                         if(!(body.png instanceof String))throw new IllegalArgumentException('There is no picture to convert.')
