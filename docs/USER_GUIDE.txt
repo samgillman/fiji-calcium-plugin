@@ -26,9 +26,22 @@ The primary stimulus and optional named control can have different thresholds an
 Detailed response rules, protocol files and experiment/diagnostic settings expand when needed;
 the current timing and rule summary remain visible. Browser percentage fields use 10 for 10%,
 which is stored as the fraction 0.10 in the shared protocol.
-The provisional 0.10 / 3 baseline SD / 1-second rule is a starting point to validate on your controls.
-At 2 Hz, a one-second span needs three qualifying samples. The actual historical consecutive-
-sample rule remains available as a legacy protocol; it retains its original endpoint handling.
+The starting rule is a rise of at least 10 % and at least 3 times the cell's noise, held for
+2 samples in a row. Validate it on your controls. Noise is the larger of two estimates: the SD of
+the baseline frames, and the whole-trace noise (1.4826 x the median absolute deviation of the
+differences between consecutive frames, divided by the square root of 2). A baseline of a few frames
+can come out quieter than the cell is; the second estimate keeps such a cell from being called on
+two chance samples. A recording opened again has its last timing and thresholds filled in and takes
+noise the same new way; the status line then says "Noise is now the larger of baseline SD and
+whole-trace noise." Imported protocols and saved analyses keep the noise they were saved with (the
+baseline SD alone). The Fiji window shows the noise in use under the protocol name. The page does
+not show it yet; when remembered settings on the baseline SD are filled in, its status line ends
+"Noise: baseline SD, as saved." Each analysis records which noise was used: sd_estimator in
+settings.tsv and analysis_manifest.csv, noise_rule in the manifest and, with the whole-trace
+estimate, Noise_source for every scored cell in responder_calls.csv.
+A length given in seconds is the last qualifying timestamp minus the first: at 2 Hz, one second
+needs three samples. The actual historical consecutive-sample rule remains available as a legacy
+protocol; it retains its original endpoint handling.
 
 Step 4 uses full-precision UNLIFTED background-corrected fluorescence. Invalid normalization,
 missing data and incomplete stimulus coverage remain visible as exclusions or unscorable calls.
