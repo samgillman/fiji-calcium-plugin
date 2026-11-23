@@ -12,10 +12,15 @@
   const inGroup = (call, group, name) => group === 0 || (group === 1 && call === 'Responded') || (group === 2 && call === 'Did not respond') ||
     (group === 3 && call === 'Excluded') || (group === 4 && call === 'Unscorable') || (group === 5 && qualityFor(name).length > 0 && (!S.qualityFlag || qualityFor(name).includes(S.qualityFlag)));
   const S = { unlinked: new Set(), validationShown: null, imported: null, info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'raw', viewChosen: false,
-    every: false, plotMode: 'mean', signal: 'dff', outlines: true, outlineWidth: 1, order: 'call', palette: 'plasma', range: 'robust', tall: false, timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false };
+    every: false, thresholds: false, plotMode: 'mean', signal: 'dff', outlines: true, outlineWidth: 1, outlineColours: 'call', numberCells: false, saveArea: 'whole', timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false };
   const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, y: {}, hover: null, at: null, readout: null, line: false, movedAt: -1e9, rest: null, geom: null, scrubbing: false, drawn: [], series: [] };
   const LINGER = 1500;   // ms the plot keeps showing where the picture is after the frame last moved
-  const Pic = { base: null, shown: null, zoom: 1, panX: 0, panY: 0, drag: null, moved: false, held: null, shownFrame: null, error: null };
+  const HINT_TIMES = 3, HINT_READ = 1000;   // how often the line that says how to zoom and move is shown, over all sessions; a showing counts once it has been up this long (ms)
+  // The picture. Its view: zoom (1 is the whole picture) and the point of the recording in the middle (cx, cy; see setView). What the
+  // pointer is doing: drag (a press that may become a move or a rectangle), moved, held, region ("Zoom to region" is on), band (the
+  // rectangle being drawn), over and pointer (whether and where the pointer is on the picture), ctrl (the Ctrl key is held), pinch (the
+  // zoom at which a pinch sent as a gesture began), hinted (how often the hint was shown). map: the frame as the small map last drew it.
+  const Pic = { base: null, shown: null, zoom: 1, cx: null, cy: null, drag: null, moved: false, held: null, shownFrame: null, error: null, region: false, band: null, over: false, pointer: null, ctrl: false, pinch: null, hinted: 0, map: null };
   // Movie frames: compressed images are kept for the session (about 40 MB for 300 full-size frames, much less at display size),
   // decoded ones only near the playhead. Keys carry the server's frame version, which changes with the baseline behind
   // "Change from baseline" and the display range, so a stale image is never reused.
@@ -24,7 +29,7 @@
   Object.defineProperty(Pic, 'loading', { get: () => Buf.inflight.size > 0 || Buf.decoding.size > 0 });
   // The playback clock runs in recording seconds; frames are shown when the playhead reaches their timestamps.
   const Clock = { t: 0, last: 0, step: 1, times: [], real: false, waitingSince: 0 };
-  const Heat = { geom: null, names: [] };
+  const Heat = { geom: null };
 
   async function api(path, body) {
     const options = body === undefined ? { cache: 'no-store' } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
@@ -38,6 +43,9 @@
   const callRow = (name) => calls()[name] || {};
   const callOf = (name) => callRow(name).Status;
   const number = (text) => { const v = parseFloat(text); return isFinite(v) ? v : NaN; };
+  /** A number as somebody types it into a box: digits with at most one decimal mark (a point or a comma) and a sign before
+   *  them. null: the box is empty. NaN: anything else, also "1e1" and "0x10", which a program reads as numbers and a person does not. */
+  function typedNumber(text) { const t = String(text).trim().replace(',', '.').replace('−', '-'); return t === '' ? null : /^[-+]?(\d+\.?\d*|\.\d+)$/.test(t) ? Number(t) : NaN; }
 
   /** Sets a canvas to the size it is shown at (sharp on high-density screens) and returns a context in CSS pixels. */
   function fit(canvas) {
@@ -54,7 +62,8 @@
     for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-9; v += step) values.push(Math.abs(v) < step * 1e-9 ? 0 : v);
     return { values, step };
   }
-  const tickText = (v, step) => v.toFixed(step >= 1 ? 0 : Math.min(6, Math.ceil(-Math.log10(step) - 1e-9)));
+  /** A tick's number, with as many decimals as its spacing needs and a true minus sign (−, not a hyphen). */
+  const tickText = (v, step) => v.toFixed(step >= 1 ? 0 : Math.min(6, Math.ceil(-Math.log10(step) - 1e-9))).replace('-', '−');
   /** The value below which this share of the finite numbers lies. */
   function share(rows, part, absolute) {
     const all = [];
@@ -473,9 +482,12 @@
     if (!S.results || !name) return [];
     const q = S.quality[name] || {}, row = callRow(name), flags = new Set();
     for (const text of [q.QC_flags, row.QC_flags]) for (const flag of String(text || '').split(/[;|,]/)) if (flag.trim() && !RECORDING_FLAGS.has(flag.trim())) flags.add(flag.trim());
-    if ((S.results.traces[name] || []).some((v) => finite(v) && v < -1)) flags.add('TRACE_BELOW_MINUS_ONE');
+    if (belowZero(name)) flags.add('TRACE_BELOW_MINUS_ONE');
     return Array.from(flags);
   }
+  /** A cell whose ΔF/F₀ falls below −1: its corrected fluorescence goes below zero, the mark of an F₀ near zero. Flagged
+   *  "Below zero"; such a cell is still drawn, but no automatic axis is taken from it (plotCells). */
+  const belowZero = (name) => (S.results.traces[name] || []).some((v) => finite(v) && v < -1);
   // Set on every cell by the engine whenever the window has the matching Window_warning: a property of the protocol and frame
   // rate, shown once as a notice for the recording instead of flagging every cell.
   const RECORDING_FLAGS = new Set(['DURATION_BELOW_SAMPLE_INTERVAL']);
@@ -649,9 +661,13 @@
     S.info = await api('session');
     $('save-picture-folder').disabled = $('save-picture').disabled = !(S.info.hasPicture || S.info.hasMovie); $('save-frames').disabled = !S.info.hasMovie;
     const prefs = S.info.prefs || {}; for (const key of Object.keys(Layout.apply)) if (prefs[key]) Layout.apply[key](prefs[key]);
-    for (const key of ['format', 'size', 'compression']) if (prefs['step4.' + key]) Save[key] = prefs['step4.' + key]; if (prefs['step4.dpi']) Save.dpi = Number(prefs['step4.dpi']);
+    // How pictures were last saved. The page's lists show it from the start, so that the figure editor, which shows those lists, never reads a format that is not the one in use.
+    for (const key of Object.keys(Save)) { const kept = prefs['step4.' + key]; if (kept && kept !== String(Save[key])) Fig.earlier.save[key] = Save[key] = key === 'dpi' ? Number(kept) : kept; }
+    showSaveOptions();
     for (const kind of ['plot', 'heatmap']) if (prefs['step4.figure.' + kind]) figureRestore(kind, prefs['step4.figure.' + kind]);
     if (prefs['step4.outline']) { S.outlineWidth = Number(prefs['step4.outline']) || 1; $('outline-width').value = prefs['step4.outline']; }
+    if (prefs['step4.plain'] === '1') { S.outlineColours = 'plain'; $('outline-colours').value = 'plain'; } if (prefs['step4.numbers'] === '1') { S.numberCells = true; $('number-cells').checked = true; }
+    if (prefs['step4.viewhint']) Pic.hinted = Number(prefs['step4.viewhint']) || 0;
     if (prefs['step4.every']) { try { window.localStorage.setItem('step4.every', prefs['step4.every']); } catch (blocked) { } }
     if (prefs['step4.help']) { const on = prefs['step4.help'] === '1'; document.body.classList.toggle('show-help', on); $('toggle-help').textContent = on ? 'Hide explanations' : 'Show explanations'; }
     $('recording').textContent = S.info.recording; $('recording').title = S.info.recording;
@@ -664,6 +680,10 @@
     S.view = S.info.hasMovie ? 'raw' : 'picture'; $('view').value = S.view;
     S.paths = S.info.rois.map((points) => { const p = new Path2D(); points.forEach((q, i) => i ? p.lineTo(q[0], q[1]) : p.moveTo(q[0], q[1])); p.closePath(); return p; });
     S.bounds = S.info.rois.map((points) => { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const q of points) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); } return { x0, y0, x1, y1 }; });
+    // for the cells' numbers: the middle of each outline (the centre of its area; of its bounds when it has none) and how wide a typical cell is
+    S.centres = S.info.rois.map((points, i) => { let area = 0, x = 0, y = 0; points.forEach((p, k) => { const q = points[(k + 1) % points.length], cross = p[0] * q[1] - q[0] * p[1]; area += cross; x += (p[0] + q[0]) * cross; y += (p[1] + q[1]) * cross; });
+      const b = S.bounds[i]; return Math.abs(area) > 1e-9 ? [x / (3 * area), y / (3 * area)] : [(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2]; });
+    { const sizes = S.bounds.map((b) => Math.sqrt((b.x1 - b.x0) * (b.y1 - b.y0))).filter((size) => finite(size) && size > 0).sort((a, b) => a - b); S.cellSize = sizes.length ? sizes[sizes.length >> 1] : 20; }
     if (S.info.hasPicture) { const image = new Image(); image.onload = () => { Pic.base = image; if (S.view === 'picture') { Pic.shown = image; movieMessage(''); } drawPicture(); }; image.onerror = () => movieMessage('The static overview could not be loaded. Choose Recording to view the movie.', true); image.src = 'api/picture'; }
     $('picture-card').hidden = !(S.info.hasPicture || S.info.hasMovie);
     listCells(); setFrame(1); await poll(); setInterval(poll, 600);
@@ -735,7 +755,7 @@
     for (const w of windows) { const o = document.createElement('option'); o.value = w.key; o.textContent = w.stimulus + (w.role === 'Control' ? ' · control' : ' · primary'); selector.appendChild(o); }
     if (!windows.some((w) => w.key === S.window)) S.window = windows[0].key; selector.value = S.window;
     document.body.classList.add('has-results');
-    for (const id of ['result-tiles', 'plot-card', 'group-label', 'window-select-label', 'every-label', 'call-legend']) $(id).hidden = false;
+    for (const id of ['result-tiles', 'plot-card', 'group-label', 'window-select-label', 'every-label', 'thresholds-label']) $(id).hidden = false;
     $('window-select-label').hidden = !(S.results.windows && S.results.windows.length > 1);
     for (const tab of document.querySelectorAll('.tab')) tab.disabled = false;
     const tables = $('metrics-table'); tables.innerHTML = '';
@@ -818,8 +838,8 @@
     else if (!row) verdict.innerHTML = S.results ? '<b>' + escape(shortName(name)) + '</b> · no response call was saved for this cell' : '';
     else {
       const parts = ['<span class="dot" style="background:' + CALL[kind(row.Status)] + '"></span><b>' + escape(shortName(name)) + ': ' + escape(row.Status || '') + '</b>', escape((row.Reason || '').toLowerCase())];
-      const rise = number(row.Peak_increase), at = number(row.Peak_s), need = number(row.Threshold_increase);
-      if (isFinite(rise)) parts.push('largest rise ' + (100 * rise).toFixed(1) + '%' + (isFinite(at) ? ' at ' + at.toFixed(1) + ' s' : '') + (isFinite(need) ? ' (needed ' + (100 * need).toFixed(1) + '%)' : ''));
+      const rise = number(row.Peak_increase), at = number(row.Peak_s), need = number(row.Threshold_increase), setBy = { noise: ', set by its noise', floor: ', the minimum rise' }[requiredBy(row)] || '';
+      if (isFinite(rise)) parts.push('largest rise ' + (100 * rise).toFixed(1) + '%' + (isFinite(at) ? ' at ' + at.toFixed(1) + ' s' : '') + (isFinite(need) ? ' (needed ' + (100 * need).toFixed(1) + '%' + setBy + ')' : ''));
       verdict.innerHTML = parts.filter(Boolean).join(' · ');
       verdict.title = 'Rise and threshold are shown as percentages of local prestimulus fluorescence. The saved call table stores the corresponding fractions.';
     }
@@ -827,7 +847,7 @@
     $('zoom-cell').disabled = !name || !(S.info.hasPicture || S.info.hasMovie);
     for (const row of document.querySelectorAll('tbody tr')) row.classList.toggle('on', row.dataset.cell === name);
     if (Pic.zoom > 1 && name) centreOn(S.info.names.indexOf(name));
-    Plot.dirty = true; drawPlot(); drawPicture(); drawHeatmap(); legend();
+    Plot.dirty = true; drawPlot(); drawPicture(); drawHeatmap();
   }
   const escape = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   /** The plot opens on the average alone and stays on what was chosen: picking a cell never changes what the plot shows.
@@ -835,7 +855,7 @@
   function setPlotMode(mode) {
     S.plotMode = mode;
     for (const button of document.querySelectorAll('[data-plot]')) { const on = button.dataset.plot === mode; button.classList.toggle('on', on); button.setAttribute('aria-pressed', on ? 'true' : 'false'); }
-    Plot.dirty = true; drawPlot(); legend();
+    Plot.dirty = true; drawPlot();
   }
   /** A cell chosen by the person (list, arrows, a click on the picture, a trace, a table row or the heatmap), or none. The plot
    *  follows: with a cell it shows that cell over the average, with none the average alone. "Responders vs non-responders" stays. */
@@ -848,7 +868,7 @@
   function cellTyped(text, numberToo) {
     const typed = String(text || '').trim().toLowerCase(); if (!typed) return null;
     let hit = S.listed.find((n) => shortName(n).toLowerCase() === typed || n.toLowerCase() === typed);
-    if (!hit && numberToo && /^\d+$/.test(typed)) hit = S.listed.find((n) => { const m = shortName(n).match(/(\d+)\s*$/); return !!m && Number(m[1]) === Number(typed); });
+    if (!hit && numberToo && /^\d+$/.test(typed)) hit = S.listed.find((n) => cellNumber(n) === String(Number(typed)));
     return hit;
   }
   function stepCell(by) { if (!S.listed.length) return; const i = S.listed.indexOf(S.cell), next = i < 0 ? (by > 0 ? 0 : S.listed.length - 1) : ((i + by) % S.listed.length + S.listed.length) % S.listed.length; chooseCell(S.listed[next]); }
@@ -996,17 +1016,30 @@
       : S.view === 'magenta' ? [['#00e000', 'cells, background removed'], ['#ff40ff', 'rise above baseline' + frames]]
       : S.view === 'change' ? [['#ffffff', 'rise above baseline' + frames]] : S.view === 'flat' ? [['#ffffff', 'background removed']] : S.view === 'green' ? [['#00e000', 'cells, background removed']] : [];
   }
-  function viewKey() {
-    const box = $('view-key'), shown = viewColours().map((c) => c.join('|')).join(';'); if (!box || box.dataset.shown === shown) return;
-    box.dataset.shown = shown; box.replaceChildren();
-    for (const [colour, words] of viewColours()) { const chip = document.createElement('span'); chip.className = 'chip'; const dot = document.createElement('i'); dot.className = 'fill'; dot.style.background = colour; chip.append(dot, words); box.appendChild(chip); }
+  /** What the outlines on the picture mean, as a key: [colour, words, true, dashed]. By call: the three calls. Plain, or before
+   *  an analysis: "your cells", and the dashed outline of an excluded or unscorable cell when one is drawn. None when the
+   *  outlines are off. The one place for these words: the chips under the picture, the key of a saved picture, and the file
+   *  kept beside it. */
+  function outlineKey() {
+    if (!S.outlines) return [];
+    if (S.results && S.outlineColours === 'call') return [[ON_PICTURE.responded, 'responded', true, false], [ON_PICTURE.not, 'did not respond', true, false], [ON_PICTURE.other, 'excluded or unscorable', true, true]];
+    const dashes = S.info.names.some((name, i) => { const look = outlineLook(i); return !!look && look.dashed; });
+    return [['#ffffff', 'your cells', true, false]].concat(dashes ? [['#ffffff', 'excluded or unscorable', true, true]] : []);
+  }
+  /** Under the picture: what the colours of the view on screen mean (filled swatches) and, once there are results, what the
+   *  outlines mean (lines, dashed where the outlines are). Each row is rebuilt only when it changes. */
+  function pictureChips() {
+    const fill = (box, entries) => { const shown = JSON.stringify(entries); if (box.dataset.shown === shown) return; box.dataset.shown = shown; box.replaceChildren();
+      for (const [colour, words, line, dashed] of entries) { const chip = document.createElement('span'), mark = document.createElement('i'); chip.className = 'chip';
+        if (dashed) { mark.className = 'dash'; mark.style.borderTopColor = colour; } else { if (!line) mark.className = 'fill'; mark.style.background = colour; }
+        chip.append(mark, words); box.appendChild(chip); } };
+    fill($('view-key'), viewColours()); fill($('call-legend'), S.results ? outlineKey() : []); $('call-legend').hidden = !$('call-legend').firstChild;
   }
   function frameNote() {
     if (still() || !S.info.hasMovie || !Pic.shownFrame || Pic.error) return;
     const f = Pic.shownFrame, rest = S.results ? S.results.baselineFrames : (S.state && S.state.rest), ordinal = (n) => n + (n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : n % 10 === 1 && n % 100 !== 11 ? 'st' : 'th');
     const frames = rest ? rest[0] + '–' + rest[1] : '(preview)';
     $('picture-note').textContent = 'Frame ' + f + (isMoved(f) ? ' · the field is displaced in this frame (' + movedText() + ' moved)' : '') + (S.timer && Clock.step > 1 ? ' · playing every ' + ordinal(Clock.step) + ' frame' : '') + (S.timer && Clock.waitingSince && performance.now() - Clock.waitingSince > 250 ? ' · buffering' : '');
-    viewKey();
   }
   function showFrame(f, mode, bitmap) {
     if (S.view !== mode || S.frame !== f) return;
@@ -1022,7 +1055,7 @@
     if (!(S.info.hasPicture || S.info.hasMovie)) return;
     if (still() || !S.info.hasMovie) {
       const image = S.view === 'background' ? Pic.background : Pic.base; Pic.shown = image || Pic.base; Pic.shownFrame = null;
-      $('picture-note').textContent = ''; viewKey(); movieMessage(image ? '' : 'Loading the picture…'); drawPicture(); return;
+      $('picture-note').textContent = ''; movieMessage(image ? '' : 'Loading the picture…'); drawPicture(); return;
     }
     const f = S.frame, mode = S.view, ready = bitmapFor(f, mode);
     if (ready) showFrame(f, mode, ready);
@@ -1034,50 +1067,204 @@
     }
     pumpFrames();
   }
+  // ---------------------------------------------------------------- the picture: its view, and the cells drawn on it
+  /** The view of the picture, in one place. Pic.zoom says how far it is zoomed in: 1 is the whole picture, fitted into the
+   *  room beside the controls (viewRoom); ZOOM_MOST is the most. Pic.cx and Pic.cy are the point of the recording, in its
+   *  own pixels, wanted in the middle of that room. Every way of zooming and moving goes through setView: the buttons and
+   *  the keys (in the steps of ZOOM_STEPS; ZOOM_KEYS says which key steps which way, 0 for the whole picture), the wheel, a
+   *  pinch, a drag, a rectangle, the small map, "Zoom to cell" and the cell that is picked. */
+  const ZOOM_MOST = 16, ZOOM_STEPS = [1, 1.5, 2, 3, 4, 6, 8, 12, 16], ZOOM_KEYS = { '+': 1, '=': 1, '-': -1, '_': -1, '0': 0 };
+  /** The room the picture is fitted into: the panel less a strip, TOOLS pixels wide, for the controls on its top left corner.
+   *  The strip runs along the top or down the left side, whichever leaves the whole picture larger: { left, top } gives its
+   *  width on that side, and the controls are laid out to match (showView). So the whole picture never lies under them. */
+  const TOOLS = 36;
+  function viewRoom(w, h) {
+    const iw = S.info.width, ih = S.info.height, beside = Math.min((w - TOOLS - 8) / iw, (h - 8) / ih), under = Math.min((w - 8) / iw, (h - TOOLS - 8) / ih);
+    return beside >= under ? { left: TOOLS, top: 0 } : { left: 0, top: TOOLS };
+  }
+  /** Where the picture lies in a panel of w × h: its left top corner (x, y) and the pixels of the screen to one of its own (z);
+   *  with these, the middle of the room it is fitted into (midX, midY) and that room's size (wide, high).
+   *  Along each side: while the picture fits into the room, it sits in the middle of it. Larger, the point asked for is in
+   *  the middle as far as this limit allows: an edge of the picture comes into the room by no more than the picture is
+   *  larger than the room, and never past the middle. So the picture cannot be dragged out of view, yet a cell at its edge
+   *  can be brought clear of the controls and of the map. */
   function place(w, h) {
-    const iw = S.info.width, ih = S.info.height, fitted = Math.max(0.01, Math.min((w - 8) / iw, (h - 8) / ih)), z = fitted * Pic.zoom;
-    return { x: (w - iw * z) / 2 + Pic.panX, y: (h - ih * z) / 2 + Pic.panY, z, fitted };
+    const iw = S.info.width, ih = S.info.height, room = viewRoom(w, h), wide = w - room.left, high = h - room.top, fitted = Math.max(0.01, Math.min((wide - 8) / iw, (high - 8) / ih)), z = fitted * Pic.zoom;
+    const along = (from, free, size, centre) => { if (size <= free - 8 + 1e-6) return from + (free - size) / 2;
+      const slack = Math.min(free / 2 - 4, size - free + 8); return Math.max(from + free - 4 - size - slack, Math.min(from + 4 + slack, from + free / 2 - centre * z)); };
+    return { x: along(room.left, wide, iw * z, Pic.cx == null ? iw / 2 : Pic.cx), y: along(room.top, high, ih * z, Pic.cy == null ? ih / 2 : Pic.cy), z, fitted, midX: room.left + wide / 2, midY: room.top + high / 2, wide, high };
+  }
+  /** Sets the view and draws it. The zoom is kept from 1 to ZOOM_MOST and the point in the middle where place() allows it,
+   *  and that point is remembered as it came out, so a drag against an edge turns back at once. Zoomed in, the frame on screen
+   *  is asked for at its full size. Without a point, the middle of the picture. */
+  function setView(zoom, cx, cy) {
+    if (!S.info) return;
+    const canvas = $('picture'), w = canvas.clientWidth, h = canvas.clientHeight, movie = S.info.hasMovie && !still(), had = movie ? frameWidth() : 0;
+    Pic.zoom = Math.max(1, Math.min(ZOOM_MOST, zoom)); Pic.cx = cx == null ? S.info.width / 2 : cx; Pic.cy = cy == null ? S.info.height / 2 : cy;
+    if (w && h) { const at = place(w, h); Pic.cx = (at.midX - at.x) / at.z; Pic.cy = (at.midY - at.y) / at.z; }
+    drawPicture(); if (movie && frameWidth() > had) requestFrame();
+  }
+  /** Zooms while the point of the picture at (px, py) of the panel stays where it is, as far as place() allows: the point under the pointer. */
+  function zoomAt(zoom, px, py) {
+    if (!S.info) return;
+    const canvas = $('picture'), before = place(canvas.clientWidth, canvas.clientHeight), z = before.fitted * Math.max(1, Math.min(ZOOM_MOST, zoom));
+    setView(zoom, (px - before.x) / before.z + (before.midX - px) / z, (py - before.y) / before.z + (before.midY - py) / z);
+  }
+  /** One step in (by > 0) or out on ZOOM_STEPS, from whatever the zoom is now; about (px, py), or the middle of the view. */
+  function zoomStep(by, px, py) {
+    if (!S.info) return;
+    const canvas = $('picture'), at = place(canvas.clientWidth, canvas.clientHeight), next = by > 0 ? ZOOM_STEPS.find((z) => z > Pic.zoom * 1.02) : ZOOM_STEPS.slice().reverse().find((z) => z < Pic.zoom / 1.02);
+    zoomAt(next || (by > 0 ? ZOOM_MOST : 1), px == null ? at.midX : px, py == null ? at.midY : py);
+  }
+  /** The part of the recording that is in the panel, in the recording's pixels and never beyond the picture: { x, y, width, height }. */
+  function viewArea() {
+    const canvas = $('picture'), w = canvas.clientWidth, h = canvas.clientHeight, at = place(w, h), x = Math.max(0, -at.x / at.z), y = Math.max(0, -at.y / at.z);
+    return { x, y, width: Math.max(0, Math.min(S.info.width, (w - at.x) / at.z) - x), height: Math.max(0, Math.min(S.info.height, (h - at.y) / at.z) - y) };
+  }
+  /** The part of the recording a saved picture or frame shows. null: the whole picture ("Area" says so, or all of it is on
+   *  screen). With "Area on screen": the part that is in the panel (viewArea) in whole pixels of the recording, every pixel
+   *  counted of which any part shows, and the zoom it is seen at. */
+  function savedArea() {
+    if (S.saveArea !== 'screen') return null;
+    const part = viewArea(), edge = 1e-6, x = Math.floor(part.x + edge), y = Math.floor(part.y + edge);
+    const width = Math.min(S.info.width, Math.ceil(part.x + part.width - edge)) - x, height = Math.min(S.info.height, Math.ceil(part.y + part.height - edge)) - y;
+    return width < 1 || height < 1 || (width === S.info.width && height === S.info.height) ? null : { x, y, width, height, zoom: Pic.zoom };
+  }
+  /** "Area", in the picture's Export menu and in Save frames: the whole picture ('whole') or the area on screen ('screen'). */
+  function setSaveArea(value) { S.saveArea = value === 'screen' ? 'screen' : 'whole'; for (const id of ['save-area', 'frames-area']) $(id).value = S.saveArea; }
+  /** Zooms to a rectangle drawn on the picture ([x0, y0, x1, y1] in the panel's pixels): the part of the recording under it
+   *  then fills the room beside the controls as the whole picture does at 1×. A rectangle too small to be meant, or off the picture, does
+   *  nothing; says whether it zoomed. */
+  function zoomToBand(band) {
+    const canvas = $('picture'), at = place(canvas.clientWidth, canvas.clientHeight), within = (v, most) => Math.max(0, Math.min(most, v));
+    const x0 = within((Math.min(band[0], band[2]) - at.x) / at.z, S.info.width), x1 = within((Math.max(band[0], band[2]) - at.x) / at.z, S.info.width);
+    const y0 = within((Math.min(band[1], band[3]) - at.y) / at.z, S.info.height), y1 = within((Math.max(band[1], band[3]) - at.y) / at.z, S.info.height);
+    if ((x1 - x0) * at.z < 6 || (y1 - y0) * at.z < 6) return false;
+    setView(Math.min((at.wide - 8) / (x1 - x0), (at.high - 8) / (y1 - y0)) / at.fitted, (x0 + x1) / 2, (y0 + y1) / 2); return true;
+  }
+  /** "Zoom to region" on or off. While it is on, a drag on the picture draws a rectangle instead of moving the picture. */
+  function setRegion(on) {
+    Pic.region = on; if (!on) Pic.band = null;
+    const button = $('zoom-region'); button.classList.toggle('on', on); button.setAttribute('aria-pressed', on ? 'true' : 'false'); drawPicture();
+  }
+  /** What the controls on the picture say about its view: the zoom level, which buttons can do anything, the cursor (a hand
+   *  where a drag moves the picture, a cross where it draws a rectangle) and the small map; which way the controls lie
+   *  (viewRoom); and, where a picture is saved, that "Area" now makes a difference. */
+  function showView(image, w, h) {
+    const zoomed = Pic.zoom > 1, text = (Pic.zoom >= 10 ? Math.round(Pic.zoom) : +Pic.zoom.toFixed(1)) + '×', stage = $('picture-stage');
+    $('view-corner').classList.toggle('down', viewRoom(w, h).left > 0);
+    if ($('zoom-level').textContent !== text) $('zoom-level').textContent = text;
+    $('zoom-out').disabled = $('zoom-all').disabled = !zoomed; $('zoom-in').disabled = Pic.zoom >= ZOOM_MOST;
+    stage.classList.toggle('zoomed', zoomed); stage.classList.toggle('region', Pic.region || !!Pic.band); stage.classList.toggle('moving', zoomed && !!Pic.drag && Pic.moved && !Pic.drag.band);
+    for (const id of ['save-area', 'frames-area']) $(id).closest('label').classList.toggle('matters', zoomed);   // zoomed in, "Area" decides what is saved: its row stands out
+    drawMap(image, w, h);
+  }
+  /** The small map, shown while the picture is zoomed in: the whole field as the panel shows it now, dimmed outside a frame
+   *  around the part that is in the panel. A click or a drag in it moves the view there (wire). Its longer side is about a
+   *  quarter of the panel's shorter one. Pic.map keeps the frame as drawn, in the map's own pixels. */
+  function drawMap(image, w, h) {
+    const map = $('view-map'), shown = Pic.zoom > 1 && !!image; map.hidden = !shown; Pic.map = null; if (!shown) return;
+    const iw = S.info.width, ih = S.info.height, long = Math.round(Math.max(64, Math.min(128, 0.26 * Math.min(w, h))));
+    const mw = iw >= ih ? long : Math.max(1, Math.round(long * iw / ih)), mh = iw >= ih ? Math.max(1, Math.round(long * ih / iw)) : long;
+    if (map.style.width !== mw + 'px') map.style.width = mw + 'px'; if (map.style.height !== mh + 'px') map.style.height = mh + 'px';
+    const { ctx } = fit(map), area = viewArea(), x = area.x * mw / iw, y = area.y * mh / ih, fw = area.width * mw / iw, fh = area.height * mh / ih;
+    ctx.imageSmoothingEnabled = true; ctx.drawImage(image, 0, 0, mw, mh);
+    ctx.fillStyle = 'rgba(16,22,28,0.55)'; ctx.fillRect(0, 0, mw, y); ctx.fillRect(0, y + fh, mw, mh - y - fh); ctx.fillRect(0, y, x, fh); ctx.fillRect(x + fw, y, mw - x - fw, fh);
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5; ctx.strokeRect(x + 0.75, y + 0.75, Math.max(1, fw - 1.5), Math.max(1, fh - 1.5));
+    Pic.map = { x, y, width: fw, height: fh };
+  }
+  /** Zoomed in this far, the recording's pixels are drawn as squares, not smoothed: on screen, and in a saved picture of the area on screen. */
+  const pixelsShown = (zoom) => zoom > 3;
+  /** The pens the cells are drawn with, in pixels: on screen, where a pixel is one of the screen at any zoom; and in a saved
+   *  picture, where it is one of a recording 1388 wide and grows with a wider one. For each kind of outline, its dark halo
+   *  and its line (plain: a cell without a call, or any cell under "Plain"); the dashes of a cell that is excluded or
+   *  unscorable; and how high a cell's number is at the least and at the most. */
+  const PENS = { screen: { halo: { plain: 2.2, responded: 2.8, not: 2.2, other: 2.2 }, line: { plain: 1.3, responded: 1.5, not: 1.1, other: 1.1 }, dash: [4, 3], number: [9, 13] },
+    saved: { halo: { plain: 3.2, responded: 3.2, not: 3.2, other: 3.2 }, line: { plain: 1.8, responded: 1.8, not: 1.8, other: 1.8 }, dash: [5, 4], number: [12, 22] } };
+  /** How a cell's outline is drawn, in one place, for the picture on screen and for a saved one. null: it is not drawn ("All
+   *  outlines" is off, or the cell is not in the group under Show). In the colour of its call; or white, as before an
+   *  analysis, when "Outlines" says Plain. A cell that is excluded or unscorable keeps its dashes either way. */
+  function outlineLook(i) {
+    const name = S.info.names[i], known = !!S.results, call = callOf(name); if (!S.outlines || (known && !inGroup(call, S.group, name))) return null;
+    const which = kind(call), plain = !known || S.outlineColours === 'plain';
+    return { pen: plain ? 'plain' : which, colour: plain ? '#ffffff' : ON_PICTURE[which], dashed: known && which === 'other' };
+  }
+  /** A cell's number, as the page counts cells: the number at the end of its shown name ("Cell 12": 12; "Cell007": 7), which
+   *  also opens the cell when typed into the Cell box. A name that ends in no number is written whole. */
+  const cellNumber = (name) => { const m = shortName(name).match(/(\d+)\s*$/); return m ? String(Number(m[1])) : shortName(name); };
+  /** Draws the cells on a picture: every outline that is shown and, with "Number cells", its number in the middle of it,
+   *  white on a dark halo, a little over half as high as a typical cell is wide (within the pen's limits). One drawing for
+   *  the screen and for a saved picture. ctx is in the recording's pixels, with round line joins; unit is the length there
+   *  of one pixel of the pen (PENS); "except" is a cell left out (the selected one, which the screen draws in its own way);
+   *  "part" is the part of the recording the picture shows ({ x, y, width, height }; all of it when not given): a cell
+   *  whose middle lies in it is numbered, and the numbers stay inside it. Leaves no dashes set. */
+  function paintCells(ctx, pen, unit, except, part) {
+    const drawn = [], box = part || { x: 0, y: 0, width: S.info.width, height: S.info.height }, within = (c) => c[0] >= box.x && c[0] <= box.x + box.width && c[1] >= box.y && c[1] <= box.y + box.height;
+    S.paths.forEach((path, i) => { const look = i === except ? null : outlineLook(i); if (!look) return; drawn.push(i);
+      ctx.setLineDash([]); ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.lineWidth = pen.halo[look.pen] * unit * S.outlineWidth; ctx.stroke(path);
+      ctx.setLineDash(look.dashed ? pen.dash.map((length) => length * unit) : []); ctx.strokeStyle = look.colour; ctx.lineWidth = pen.line[look.pen] * unit * S.outlineWidth; ctx.stroke(path); });
+    ctx.setLineDash([]);
+    if (!S.numberCells || !drawn.length) return;
+    const high = Math.max(pen.number[0], Math.min(pen.number[1], 0.55 * S.cellSize / unit)) * unit;
+    ctx.save(); ctx.font = '600 ' + high + 'px ' + getComputedStyle(document.body).fontFamily; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.strokeStyle = 'rgba(0,0,0,0.8)'; ctx.lineWidth = 0.3 * high; ctx.fillStyle = '#ffffff';
+    const labels = drawn.filter((i) => S.centres[i].every(finite) && within(S.centres[i])).map((i) => { const text = cellNumber(S.info.names[i]); return { text, x: S.centres[i][0], y: S.centres[i][1], wide: ctx.measureText(text).width + 0.3 * high, home: S.centres[i] }; });
+    spreadLabels(labels, high, box);
+    for (const label of labels) { ctx.strokeText(label.text, label.x, label.y); ctx.fillText(label.text, label.x, label.y); }
+    ctx.restore();
+  }
+  /** Moves the numbers of neighbouring cells apart where they would lie on one another, and keeps every number inside the
+   *  picture ("box": the part of the recording it shows). Each label: its place (x, y, at first the middle of its cell,
+   *  "home"), its width; "high" is the height of them all. Two that overlap are pushed apart by half the overlap each,
+   *  along the side where less of them overlaps; a few rounds settle a crowd. No number goes further from its cell than
+   *  its own height. */
+  function spreadLabels(labels, high, box) {
+    const keep = (label) => { const far = Math.hypot(label.x - label.home[0], label.y - label.home[1]); if (far > high) { label.x = label.home[0] + (label.x - label.home[0]) * high / far; label.y = label.home[1] + (label.y - label.home[1]) * high / far; }
+      label.x = Math.max(box.x + label.wide / 2, Math.min(box.x + box.width - label.wide / 2, label.x)); label.y = Math.max(box.y + 0.6 * high, Math.min(box.y + box.height - 0.6 * high, label.y)); };
+    labels.forEach(keep);
+    for (let round = 0, moved = true; round < 8 && moved; round++) {
+      moved = false;
+      for (let i = 0; i < labels.length; i++) for (let j = i + 1; j < labels.length; j++) {
+        const a = labels[i], b = labels[j], dx = b.x - a.x, dy = b.y - a.y, overX = (a.wide + b.wide) / 2 - Math.abs(dx), overY = high - Math.abs(dy); if (overX <= 0 || overY <= 0) continue;
+        if (overX < overY) { const by = overX / 2 * (dx < 0 ? -1 : 1); a.x -= by; b.x += by; } else { const by = overY / 2 * (dy < 0 ? -1 : 1); a.y -= by; b.y += by; }
+        keep(a); keep(b); moved = true;
+      }
+    }
   }
   function drawPicture() {
     const canvas = $('picture'); if (!S.info || !(S.info.hasPicture || S.info.hasMovie) || !canvas.clientWidth) return;
     const { ctx, w, h } = fit(canvas); ctx.fillStyle = '#10161C'; ctx.fillRect(0, 0, w, h);
-    const image = Pic.shown || Pic.base; if (!image) return;
-    const at = place(w, h); ctx.imageSmoothingEnabled = Pic.zoom <= 3; ctx.drawImage(image, at.x, at.y, S.info.width * at.z, S.info.height * at.z);
-    const selected = S.cell ? S.info.names.indexOf(S.cell) : -1, known = !!S.results;
+    const image = Pic.shown || Pic.base; pictureChips(); showView(image, w, h); if (!image) return;
+    const at = place(w, h); ctx.imageSmoothingEnabled = !pixelsShown(Pic.zoom); ctx.drawImage(image, at.x, at.y, S.info.width * at.z, S.info.height * at.z);
+    const selected = S.cell ? S.info.names.indexOf(S.cell) : -1;
     ctx.save(); ctx.translate(at.x, at.y); ctx.scale(at.z, at.z); ctx.lineJoin = 'round';
-    const stroke = (path, colour, width, dash) => { ctx.setLineDash(dash ? [4 / at.z, 3 / at.z] : []); ctx.strokeStyle = colour; ctx.lineWidth = width * S.outlineWidth / at.z; ctx.stroke(path); };
-    if (S.outlines) S.paths.forEach((path, i) => {
-      if (i === selected) return;
-      const call = callOf(S.info.names[i]); if (known && !inGroup(call, S.group, S.info.names[i])) return;
-      const which = kind(call);
-      stroke(path, 'rgba(0,0,0,0.55)', which === 'responded' ? 2.8 : 2.2, false);
-      if (!known) stroke(path, '#ffffff', 1.3, false); else stroke(path, ON_PICTURE[which], which === 'responded' ? 1.5 : 1.1, which === 'other');
-    });
-    if (selected >= 0) { stroke(S.paths[selected], '#000000', 5.5, false); stroke(S.paths[selected], '#5BC0FF', 2.6, false); }
+    paintCells(ctx, PENS.screen, 1 / at.z, selected);
+    if (selected >= 0) for (const [colour, width] of [['#000000', 5.5], ['#5BC0FF', 2.6]]) { ctx.strokeStyle = colour; ctx.lineWidth = width * S.outlineWidth / at.z; ctx.stroke(S.paths[selected]); }
     ctx.restore();
     if (selected >= 0) {
       const b = S.bounds[selected], name = shortName(S.cell); ctx.font = '600 12px ' + getComputedStyle(document.body).fontFamily;
       const tw = ctx.measureText(name).width, x = Math.max(4, Math.min(w - tw - 12, at.x + b.x1 * at.z + 6)), y = Math.max(16, Math.min(h - 8, at.y + b.y0 * at.z + 12));
       ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.beginPath(); ctx.roundRect(x - 4, y - 13, tw + 8, 18, 6); ctx.fill(); ctx.fillStyle = '#fff'; ctx.fillText(name, x, y);
     }
+    if (Pic.band) {   // the rectangle being drawn for "Zoom to region"
+      const [x0, y0, x1, y1] = Pic.band, x = Math.min(x0, x1) + 0.5, y = Math.min(y0, y1) + 0.5, wide = Math.abs(x1 - x0), high = Math.abs(y1 - y0);
+      ctx.fillStyle = 'rgba(91,192,255,0.16)'; ctx.fillRect(x, y, wide, high); ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 3; ctx.strokeRect(x, y, wide, high);
+      ctx.setLineDash([5, 4]); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.2; ctx.strokeRect(x, y, wide, high); ctx.setLineDash([]);
+    }
   }
+  /** A point of the pointer in the panel's own pixels. */
+  const panelPoint = (event) => { const box = $('picture').getBoundingClientRect(); return { x: event.clientX - box.left, y: event.clientY - box.top }; };
   function cellAt(event) {
-    const canvas = $('picture'), box = canvas.getBoundingClientRect(), at = place(canvas.clientWidth, canvas.clientHeight);
-    const x = (event.clientX - box.left - at.x) / at.z, y = (event.clientY - box.top - at.y) / at.z, ctx = canvas.getContext('2d');
+    const canvas = $('picture'), at = place(canvas.clientWidth, canvas.clientHeight), p = panelPoint(event), x = (p.x - at.x) / at.z, y = (p.y - at.y) / at.z, ctx = canvas.getContext('2d');
     ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
     let found = -1; for (let i = 0; i < S.paths.length && found < 0; i++) if (ctx.isPointInPath(S.paths[i], x, y)) found = i;
     ctx.restore(); return found;
   }
-  function centreOn(index) {
-    if (index < 0) return; const canvas = $('picture'), b = S.bounds[index]; Pic.panX = Pic.panY = 0;
-    const at = place(canvas.clientWidth, canvas.clientHeight);
-    Pic.panX = canvas.clientWidth / 2 - (at.x + (b.x0 + b.x1) / 2 * at.z); Pic.panY = canvas.clientHeight / 2 - (at.y + (b.y0 + b.y1) / 2 * at.z);
-  }
+  /** Brings a cell to the middle of the view, at the zoom there is. */
+  function centreOn(index) { if (index < 0) return; const b = S.bounds[index]; setView(Pic.zoom, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2); }
   function zoomToCell() {
     const index = S.cell ? S.info.names.indexOf(S.cell) : -1; if (index < 0) return;
-    const canvas = $('picture'), b = S.bounds[index], at = place(canvas.clientWidth, canvas.clientHeight);
-    const wanted = Math.min(canvas.clientWidth / (Math.max(4, b.x1 - b.x0) * 6), canvas.clientHeight / (Math.max(4, b.y1 - b.y0) * 6));
-    Pic.zoom = Math.max(1.01, Math.min(16, wanted / at.fitted)); centreOn(index); drawPicture();
+    const canvas = $('picture'), b = S.bounds[index], wanted = Math.min(canvas.clientWidth / (Math.max(4, b.x1 - b.x0) * 6), canvas.clientHeight / (Math.max(4, b.y1 - b.y0) * 6));
+    setView(Math.max(1.01, wanted / place(canvas.clientWidth, canvas.clientHeight).fitted), (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2);
   }
 
   function selectedCall() { const own = callRow(S.cell); return Object.keys(own).length ? own : (Object.values(calls())[0] || {}); }
@@ -1092,14 +1279,90 @@
     const row = selectedCall(), start = number(row.Start_s), end = number(row.End_s), before = number(row.Baseline_start_s), baselineEnd = number(row.Baseline_end_s);
     return { baseline: finite(before) && finite(baselineEnd) ? [before, baselineEnd] : [start - number(row.Baseline_s), start], response: [start, end], run: [number(row.Run_start_s), number(row.Run_end_s)] };
   }
-  function referenceLevels() {
-    const row = selectedCall(), baseline = number(row.Baseline_mean); if (!finite(baseline) || baseline <= -1) return [];
-    const levels = [{ name: 'response baseline', value: baseline, colour: '#7c8794' }];
-    for (const [key, name, colour] of [['Floor_threshold', 'minimum rise', '#ad7423'], ['Noise_threshold', 'noise threshold', '#a46ea0'], ['Threshold_increase', 'required rise', '#177465']]) {
-      const value = number(row[key]); if (finite(value)) levels.push({ name, value: baseline + (1 + baseline) * value, colour });
-    }
-    return levels;
+  /** What set a cell's required rise: its baseline noise ("noise") or the minimum rise ("floor"). The required rise is always
+   *  the larger of the noise threshold and the minimum rise, and the call table says which (Threshold_source); a table saved
+   *  without that column is read by the engine's own rule. null: the call has no thresholds. */
+  function requiredBy(row) {
+    if (row.Threshold_source === 'Baseline noise') return 'noise'; if (row.Threshold_source === 'Floor') return 'floor';
+    const floor = number(row.Floor_threshold), noise = number(row.Noise_threshold); return finite(floor) && finite(noise) ? (noise > floor ? 'noise' : 'floor') : null;
   }
+  /** The levels the selected cell's call was judged against, on the ΔF/F₀ axis, each a line of the one-cell plot. First the
+   *  required rise. With "all", also the threshold that did not set it, under its own name (the minimum rise where the noise
+   *  set the required rise, the noise threshold where the minimum rise did), and the mean of the baseline. Levels with one
+   *  value are one line, named as the first of them. "colour" and "width" name the entries of the style table a level is drawn by. */
+  function referenceLevels(all) {
+    const row = selectedCall(), baseline = number(row.Baseline_mean); if (!finite(baseline) || baseline <= -1) return [];
+    const level = (key, name, colour, rise) => ({ key, name, colour, width: key === 'required' ? 'requiredWidth' : 'levelWidth', value: baseline + (1 + baseline) * rise });
+    const levels = [level('required', 'required rise', 'colourLevelRequired', number(row.Threshold_increase))];
+    if (all) levels.push(requiredBy(row) === 'noise' ? level('floor', 'minimum rise', 'colourLevelFloor', number(row.Floor_threshold)) : level('noise', 'noise threshold', 'colourLevelNoise', number(row.Noise_threshold)),
+      level('baseline', 'baseline mean', 'colourLevelBaseline', 0));
+    return levels.filter((one, i) => finite(one.value) && !levels.slice(0, i).some((before) => before.value === one.value));
+  }
+  // ---------------------------------------------------------------- style: how the plot and the heatmap look
+  const PT = 96 / 72;   // pixels in a point
+  /** The fonts a figure can be written in, in the order the editor offers them: [key, name, family]. The one list for the editor
+   *  and for the painters. The page's own font, last, has no family here: it is whatever this computer shows the page in. */
+  const FONTS = [['arial', 'Arial', 'Arial, Helvetica, sans-serif'], ['helvetica', 'Helvetica', 'Helvetica, Arial, sans-serif'], ['times', 'Times New Roman', '"Times New Roman", Times, serif'], ['page', 'As on the page', null]];
+  /** The style table: the one place that says how the plot and the heatmap look before anybody edits them. A saved figure
+   *  and the page are drawn from these entries by the same painters; PAGE_STYLE lists the few the page sets differently.
+   *  The figure editor shows some entries as boxes (FIGURE_FIELDS); any other entry can be offered by adding a row there.
+   *  Units as in a graphing program: sizes in inches; text, line widths, dashes and tick lengths in points (STYLE_POINTS);
+   *  opacity from 0 to 1. null: the figure's own text (for the title: none), or the automatic value. A saved figure is
+   *  written in a font with a name (Arial), not in whatever font this computer shows the page in. */
+  const STYLE_SHARED = { title: null, xTitle: null, yTitle: null, font: 'arial', text: 9, titleText: 10, ink: '#000000', background: 'white' };
+  const STYLE = {
+    plot: Object.assign({}, STYLE_SHARED, { width: 7, height: 4,
+      // axes: left and bottom only, ticks pointing out, no grid, a dotted line at zero
+      xMin: null, xMax: null, xStep: null, yMin: null, yMax: null, yStep: null, frame: 'open', grid: false, axisWidth: 0.75, tickLength: 3, colourGrid: '#dee4ea', colourZero: '#9aa5b1', zeroDash: [0.75, 2.25],
+      // a group's mean in the group's colour on its SEM band; a white casing keeps it clear of the single cells under it
+      meanWidth: 1.8, colourMean: '#0072b2', colourResponded: CALL.responded.toLowerCase(), colourNot: CALL.not.toLowerCase(), sem: 'band', semOpacity: 0.25, casing: 0.7, colourCasing: '#ffffff',
+      // the selected cell
+      cellWidth: 1.3, colourCell: '#1f2933',
+      // single cells behind the mean: thin, neutral and faint (opacity null: by their number, traceFade); responders after them, a little wider and stronger
+      traceWidth: 0.6, colourTrace: CALL.other.toLowerCase(), traceOpacity: null, responderWidth: 0.9, responderOpacity: null,
+      // marks: the legend; the stimulus line, with its label above the plot; the baseline band; the response window, a thin bar above the plot
+      legend: 'top', stimulus: true, stimulusText: 'stimulus', stimulusWidth: 0.75, stimulusDash: [3, 2.25], colourStimulus: '#b45f06',
+      baseline: true, colourBaseline: '#edf0f4', window: true, windowBar: 2.25, colourWindow: '#e9a84c',
+      // the selected cell's call. Its required rise, a dashed line (levels); the "Thresholds" box of the page adds the other
+      // threshold and the baseline mean, thinner (referenceLevels)
+      levels: true, levelWidth: 0.75, requiredWidth: 1.35, levelDash: [3.75, 3], colourLevelBaseline: '#7c8794', colourLevelFloor: '#ad7423', colourLevelNoise: '#a46ea0', colourLevelRequired: CALL.responded.toLowerCase(),
+      // and the run that counted, a band: never narrower than runWidth, with a tick at the top of the plot where it starts, so
+      // that a run of two or three frames can be seen
+      run: true, colourRun: '#d5eedd', runWidth: 2.25, runTick: 4.5 }),
+    heatmap: Object.assign({}, STYLE_SHARED, { width: 7, height: 5, barTitle: null,
+      // time: the whole recording, or the limits typed in the editor. The colour range: automatic (heatmapRange), or the two numbers typed there
+      xMin: null, xMax: null, xStep: null, barMin: null, barMax: null,
+      // the colour bar: narrow, at the right, as tall as the picture; a row without a trace, and a pause in the recording
+      bar: true, barWidth: 8, colourMissing: '#e5e5e5',
+      // beside the rows: a strip with each row's call and a mark for a cell below zero; between the groups of rows, a white line
+      strip: true, stripWidth: 3, flagWidth: 1.5, colourOther: CALL.other.toLowerCase(), colourFlag: '#1f2933', divider: 1.5, colourDivider: '#ffffff',
+      // above the picture: the stimulus label, the baseline and the response window as thin bars. Over it: the stimulus line, dark on a
+      // palette with white in it and light on the others
+      marks: true, colourBaseline: '#b8c2cc', colourOnLight: 'rgba(31,41,51,0.55)', colourOnDark: 'rgba(255,255,255,0.75)',
+      // the cell selected on the page
+      colourSelected: '#1f2933' })
+  };
+  /** What the heatmap draws as the plot does (its axis, the marks of time, the colours of the calls) is the plot's entry, written once. */
+  for (const key of ['axisWidth', 'tickLength', 'stimulusText', 'stimulusWidth', 'stimulusDash', 'colourStimulus', 'colourWindow', 'windowBar', 'colourResponded', 'colourNot']) STYLE.heatmap[key] = STYLE.plot[key];
+  /** The entries that are lengths in points; a painter gets them in pixels. */
+  const STYLE_POINTS = ['text', 'titleText', 'axisWidth', 'tickLength', 'zeroDash', 'meanWidth', 'casing', 'cellWidth', 'traceWidth', 'responderWidth', 'stimulusWidth', 'stimulusDash', 'windowBar', 'levelWidth', 'requiredWidth', 'levelDash',
+    'runWidth', 'runTick', 'barWidth', 'stripWidth', 'flagWidth', 'divider'];
+  /** What the page sets differently from a saved figure, the plot and the heatmap alike: its ink and its own font. "page" also
+   *  tells a painter to keep what it drew for the pointer (Plot.geom and the rest) and to mark the selected cell. */
+  const PAGE_STYLE = { plot: { page: true, ink: '#3e4c59', font: 'page' } }; PAGE_STYLE.heatmap = PAGE_STYLE.plot;
+  /** A style as a painter reads it, a "look": the same entries with points turned into pixels, the font as a family and the
+   *  background as a fill (null: none); px and titlePx are the two text sizes. One function for the page and for a saved
+   *  figure, for the plot and the heatmap. */
+  function lookOf(style) {
+    const look = Object.assign({}, style);
+    for (const key of STYLE_POINTS) if (look[key] != null) look[key] = Array.isArray(look[key]) ? look[key].map((v) => v * PT) : look[key] * PT;
+    return Object.assign(look, { px: look.text, titlePx: look.titleText, family: (FONTS.find((font) => font[0] === style.font) || [])[2] || null, background: style.background === 'transparent' ? null : '#fff' });
+  }
+  const PAGE_LOOK = lookOf(Object.assign({}, STYLE.plot, PAGE_STYLE.plot)), PAGE_HEAT = lookOf(Object.assign({}, STYLE.heatmap, PAGE_STYLE.heatmap));
+  /** How strongly single cells are drawn when the style leaves it automatic: fainter the more there are, so a hundred cells
+   *  stay a light cloud under the mean and a handful stay readable. Responders, counted on their own, get half as much again. */
+  const traceFade = (n) => Math.max(0.06, Math.min(0.8, 1.5 / Math.sqrt(Math.max(1, n))));
+  const responderFade = (n) => Math.min(0.9, 1.5 * traceFade(n));
   // ---------------------------------------------------------------- the traces
   /** ΔF/F₀ of the raw values (no background taken off), worked out here for display: each cell's raw trace against its own mean
    *  over the F₀ frames of the analysis. The response calls do not use it. */
@@ -1120,9 +1383,9 @@
   const shownTraces = () => S.signal !== 'dff' && hasTable(S.signal) ? S.results[S.signal] : S.results.traces;
   const isDff = () => !(S.signal !== 'dff' && hasTable(S.signal));
   const signalName = () => isDff() ? 'ΔF/F₀' : S.signal === 'raw' ? 'Raw gray value (not corrected)' : S.signal === 'rawdff' ? 'ΔF/F₀ of raw values (no background removed)' : 'Gray levels above background';
-  /** Mean and SEM of some cells' saved traces, frame by frame (a display summary; the tables are not changed). */
-  function groupMean(names) {
-    const r = S.results, T = shownTraces(), n = r.time.length, mean = new Array(n), sem = new Array(n), used = names.filter((name) => T[name]);
+  /** Mean and SEM of some cells' saved traces, frame by frame (a display summary; the tables are not changed). traces: cell → values (when not given, the signal on screen). */
+  function groupMean(names, traces) {
+    const r = S.results, T = traces || shownTraces(), n = r.time.length, mean = new Array(n), sem = new Array(n), used = names.filter((name) => T[name]);
     for (let i = 0; i < n; i++) {
       let sum = 0, squares = 0, k = 0;
       for (const name of used) { const v = T[name][i]; if (finite(v)) { sum += v; squares += v * v; k++; } }
@@ -1130,23 +1393,45 @@
     }
     return { mean, sem, n: used.length };
   }
-  /** The mean lines of the plot. "Selected cell and mean" and "Mean of the cells shown" with every cell shown use the mean the
-   *  analysis saved; a group of cells, or responders against non-responders, is averaged here from the saved traces. */
+  /** The cells the "Leave out … below zero" switch leaves out of the headline, and so of the plot: those the tally lists, while
+   *  the switch is on and the primary stimulus is selected (the switch belongs to it). */
+  function leftOut() {
+    const r = S.results, control = ((r.windows || []).find((w) => w.key === S.window) || {}).role === 'Control';
+    return new Set(S.withoutBelowZero && r.tally && !control ? r.tally.belowZero || [] : []);
+  }
+  /** The cells a plot uses. The one place that decides it, for the single traces, the means and the automatic range alike:
+   *    shown       the cells of a group that have a trace of the signal on screen, without the cells left out by the
+   *                "Leave out … below zero" switch. These are drawn and averaged.
+   *    steady      those of them an automatic range is taken from: neither excluded nor below zero. A cell that is off for
+   *                the whole recording is still drawn but cannot set a limit. All the shown cells when none is steady.
+   *  group: an index of GROUPS (when not given, the group under Show); traces: cell → values (when not given, the signal on screen). */
+  function plotCells(group, traces) {
+    const T = traces || shownTraces(), which = group == null ? S.group : group, out = leftOut();
+    const shown = S.info.names.filter((name) => T[name] && !out.has(name) && inGroup(callOf(name), which, name));
+    const steady = shown.filter((name) => callOf(name) !== 'Excluded' && !belowZero(name));
+    return { shown, steady: steady.length ? steady : shown };
+  }
+  /** The mean lines of the plot, one per group: its name, the mean and SEM frame by frame, the number of cells, and the entry
+   *  of the style table it is coloured by. "Average" and "One cell + average" show the cells under Show; "Responders vs
+   *  non-responders" shows every cell by its call. All cells in ΔF/F₀ with nobody left out is the mean the analysis saved;
+   *  any other mean is averaged here from the saved traces. */
   function plotSeries() {
     const r = S.results; if (!r) return [];
     if (S.plotMode === 'calls') {
-      const names = S.info.names.filter((n) => shownTraces()[n]);
-      return [['Responded', 'responded', CALL.responded], ['Did not respond', 'did not respond', CALL.not]].map(([status, text, colour]) => {
-        const g = groupMean(names.filter((n) => callOf(n) === status)); return { label: text + ' ± SEM (n = ' + g.n + ')', short: text, colour, mean: g.mean, sem: g.sem, n: g.n };
-      }).filter((s) => s.n > 0);
+      const cells = plotCells(0).shown;
+      return [['Responded', 'responded', 'colourResponded'], ['Did not respond', 'did not respond', 'colourNot']]
+        .map(([status, name, colour]) => Object.assign({ name, short: name, colour }, groupMean(cells.filter((n) => callOf(n) === status)))).filter((s) => s.n > 0);
     }
-    const all = isDff() ? { mean: r.mean, sem: r.sem, n: Object.keys(r.traces).length } : groupMean(S.info.names);
-    if (S.plotMode === 'mean') {
-      const g = S.group === 0 ? all : groupMean(S.listed), who = S.group === 0 ? 'all cells' : GROUPS[S.group].toLowerCase();
-      return [{ label: who + ' ± SEM (n = ' + g.n + ')', short: 'mean of ' + who, colour: '#0072B2', mean: g.mean, sem: g.sem, n: g.n }];
-    }
-    return [{ label: 'mean ± SEM', short: 'mean of all cells', colour: '#0072B2', mean: all.mean, sem: all.sem, n: all.n }];
+    const cells = plotCells().shown, name = GROUPS[S.group].toLowerCase(), saved = S.group === 0 && isDff() && cells.length === Object.keys(r.traces).length;
+    return [Object.assign({ name, short: 'mean of ' + name, colour: 'colourMean' }, saved ? { mean: r.mean, sem: r.sem, n: cells.length } : groupMean(cells))].filter((s) => s.n > 0);
   }
+  /** Whether a mean gets its SEM band: when the look draws bands and there is more than one cell (one cell has no SEM). */
+  const bandDrawn = (series, look) => look.sem !== 'none' && series.n > 1;
+  /** A name with the number of cells it stands for, as every key writes it: "excluded (n = 7)". */
+  const counted = (text, n) => text + ' (n = ' + n + ')';
+  /** What a mean line is called, in one place, for the legend and for the file kept beside a figure: "all cells ± SEM (n = 113)";
+   *  without "± SEM" where no band is drawn, as for one cell: "responded (n = 1)". */
+  const meanLabel = (series, band) => counted(series.name + (band ? ' ± SEM' : ''), series.n);
   const shade = (hex, alpha) => { const c = rgb(hex); return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + alpha + ')'; };
   const plotKind = () => (S.plotMode === 'cell' ? 'traces' : S.plotMode === 'calls' ? 'responders_vs_nonresponders' : 'mean_trace' + (S.group ? '_' + GROUPS[S.group].toLowerCase().replace(/[^a-z0-9]+/g, '_') : '')) + (isDff() ? '' : S.signal === 'raw' ? '_raw_gray_values' : S.signal === 'rawdff' ? '_dFF0_of_raw' : '_gray_levels');
   /** The numbers behind the plot as a table: time, each mean line with its SEM and number of cells, and the selected cell. */
@@ -1161,29 +1446,142 @@
     }
     return rows.join('\n') + '\n';
   }
-  /** What the plot's legend says, as a list: lines, bands and notes, for what the look draws. The page shows it above the plot; a
-   *  saved figure has it drawn in. "fixed": a colour the figure editor does not change. */
-  function legendItems(look) {
-    const r = S.results; if (!r) return []; look = look || PAGE_LOOK;
-    const oneCell = S.plotMode === 'cell', items = plotSeries().map((s) => ({ kind: 'line', colour: s.colour, text: s.label }));
-    if (oneCell && S.cell) items.push(shownTraces()[S.cell] ? { kind: 'line', colour: '#1F2933', text: shortName(S.cell) } : { kind: 'note', colour: '#9A5B00', text: shortName(S.cell) + ': no ΔF/F₀ trace' + (hasTable('corrected') ? ': choose gray levels under Signal' : '') });
-    if (S.every) {
-      const drawn = S.listed.filter((n) => shownTraces()[n]), yes = drawn.filter((n) => callOf(n) === 'Responded').length, no = drawn.filter((n) => callOf(n) === 'Did not respond').length;
-      if (yes) items.push({ kind: 'line', colour: CALL.responded, text: 'responded (' + yes + ')' }); if (no) items.push({ kind: 'line', colour: CALL.not, text: 'did not respond (' + no + ')' });
-      if (drawn.length - yes - no) items.push({ kind: 'line', colour: CALL.other, text: 'no call (' + (drawn.length - yes - no) + ')' });
+  const realSpan = (span) => !!span && finite(span[0]) && finite(span[1]);
+  /** An axis whose ends can be typed: its automatic ends with each typed one in its place. null when that leaves no range (a
+   *  minimum at or above the maximum). The one rule for the painters, which then keep the automatic ends, and for the boxes
+   *  the limits are typed into, which say so (figureRefusal; the page's two Y boxes). */
+  const typedRange = (auto, min, max) => { const lo = finite(min) ? min : auto[0], hi = finite(max) ? max : auto[1]; return hi > lo ? [lo, hi] : null; };
+  /** The recording's first and last frame time. */
+  const wholeTime = () => { const time = S.results.time; return [time[0], time[time.length - 1]]; };
+  /** The time the plot shows. auto: the whole recording, so the axis ends where the data end, or the page's zoom. x0, x1: that,
+   *  or the limits typed in the figure editor. full0 and full1 are the recording's first and last frame. */
+  function plotTimes(look) {
+    const [full0, full1] = wholeTime(), auto = [Plot.x0 === null ? full0 : Plot.x0, Plot.x1 === null ? full1 : Plot.x1], [x0, x1] = typedRange(auto, look.xMin, look.xMax) || auto;
+    return { x0, x1, full0, full1, auto };
+  }
+  /** Whether the plot is asked for a cell it cannot draw: "One cell + average" with a selected cell that has no trace of the signal on screen. */
+  const traceMissing = () => S.plotMode === 'cell' && !!S.cell && !shownTraces()[S.cell];
+  /** What the plot draws in the time it shows (x0 to x1), gathered once for the painter and its legend:
+   *    series    the mean lines            traces  the single cells drawn behind them      own  the selected cell's trace
+   *    spans     the baseline, the response window and the run that counted: each only when it is drawn, null otherwise
+   *    stimulus  when it was added; null when it is not marked
+   *    levels    the selected cell's threshold lines (referenceLevels): the required rise unless the look leaves it out, and the
+   *              others when "Thresholds" is ticked. They and the run belong to one cell's call. */
+  function plotParts(look, x0, x1) {
+    const T = shownTraces(), oneCell = S.plotMode === 'cell', all = responseSpans(), onset = number(selectedCall().Stimulus_onset_s), shown = (span) => realSpan(span) && span[1] > x0 && span[0] < x1;
+    const called = oneCell && isDff() && !!S.cell && Object.keys(callRow(S.cell)).length > 0;
+    return { series: plotSeries(), traces: S.every ? plotCells().shown : [], own: oneCell && S.cell && T[S.cell] ? T[S.cell] : null,
+      spans: { baseline: look.baseline && shown(all.baseline) ? all.baseline : null, response: look.window && shown(all.response) ? all.response : null,
+        run: called && look.run && realSpan(all.run) && all.run[1] >= x0 && all.run[0] <= x1 ? all.run : null },   // (a run of one sample has no length and is drawn all the same)
+      stimulus: look.stimulus && finite(onset) && onset >= x0 && onset <= x1 ? onset : null, levels: called ? referenceLevels(S.thresholds).filter((level) => look.levels || level.key !== 'required') : [] };
+  }
+  /** The legend, in one place: one entry for each thing the plot draws and none for anything else, each with what its swatch
+   *  needs to show the thing as drawn. In order: the selected cell; each group once (its mean line, on its band when a band
+   *  is drawn); "single cells", which are drawn in two ways and so have a swatch of two lines; the selected cell's threshold
+   *  lines; then the bands, "baseline", "response window" and the "response" of a cell that responded. The stimulus is named
+   *  above its own line and has no entry. */
+  function plotLegend(parts, look) {
+    const items = [];
+    if (parts.own) items.push({ kind: 'line', colour: look.colourCell, width: look.cellWidth, text: shortName(S.cell) });
+    for (const s of parts.series) { const band = bandDrawn(s, look); items.push({ kind: 'line', colour: look[s.colour], width: look.meanWidth, band: band ? shade(look[s.colour], look.semOpacity) : null, text: meanLabel(s, band) }); }
+    if (parts.traces.length) {   // one entry; its swatch is a line of each kind that is drawn, the responders' under the others'
+      const yes = parts.traces.filter((name) => callOf(name) === 'Responded').length, lines = [];
+      if (yes < parts.traces.length) lines.push({ colour: look.colourTrace, width: look.traceWidth }); if (yes) lines.push({ colour: look.colourResponded, width: look.responderWidth });
+      items.push({ kind: 'line', colour: lines[0].colour, width: lines[0].width, second: lines[1] || null, text: 'single cells' });
     }
-    const spans = responseSpans(), real = (span) => span && finite(span[0]) && finite(span[1]);
-    if (look.baseline && real(spans.baseline)) items.push({ kind: 'band', colour: '#EDF0F4', text: 'baseline' }); if (look.window && real(spans.response)) items.push({ kind: 'band', colour: '#F5C97A', text: 'response window' });
-    if (oneCell && isDff() && look.levels) {
-      if (real(spans.run)) items.push({ kind: 'band', colour: '#D5EEDD', text: 'response' });
-      for (const level of referenceLevels().slice(1)) items.push({ kind: 'line', colour: level.colour, text: level.name, fixed: true });
-    }
+    for (const level of parts.levels) items.push({ kind: 'line', colour: look[level.colour], width: look[level.width], dash: look.levelDash, text: level.name });
+    if (parts.spans.baseline) items.push({ kind: 'box', colour: look.colourBaseline, outline: true, text: 'baseline' });
+    if (parts.spans.response) items.push({ kind: 'box', colour: look.colourWindow, height: look.windowBar, text: 'response window' });
+    if (parts.spans.run) items.push({ kind: 'box', colour: look.colourRun, outline: true, text: 'response' });
     return items;
   }
-  function legend() {
-    $('legend').innerHTML = legendItems().map((item) => item.kind === 'note' ? '<span class="chip" style="color:' + item.colour + '">' + escape(item.text) + '</span>'
-      : '<span class="chip"><i' + (item.kind === 'band' ? ' class="band"' : '') + ' style="background:' + item.colour + '"></i>' + escape(item.text) + '</span>').join('');
+  /** A trace's own extent: its 1st and 99th percentile (what an automatic range is taken from, so that a spike does not count)
+   *  and its smallest and largest value. Kept per trace, since the traces of a result do not change. null: no number in it. */
+  const Extents = new WeakMap();
+  function extent(trace) {
+    if (!Extents.has(trace)) { const v = trace.filter(finite).sort((a, b) => a - b), at = (part) => v[Math.round(part * (v.length - 1))];
+      Extents.set(trace, v.length ? { low: at(0.01), high: at(0.99), min: v[0], max: v[v.length - 1] } : null); }
+    return Extents.get(trace);
   }
+  /** The automatic Y range, from what the plot draws:
+   *    the means    everything drawn as a mean, with its SEM where a band is drawn, and zero where the axis has a zero;
+   *    the bulk     with single cells drawn, from the 2nd percentile of the cells' lows to the 95th percentile of their highs.
+   *                 Each cell counts by its own extent, over the cells that are neither excluded nor below zero (plotCells),
+   *                 never all samples pooled: one cell that is off for the whole recording holds more samples than any
+   *                 pooled trim removes.
+   *  The range holds both, but reaches no further beyond the means than one and a half times their own height on either side:
+   *  the means then fill at least a quarter of the axis, whatever a few cells do, and a trace that leaves the range ends at the
+   *  plot's edge. Always inside the range: the selected cell's whole trace and its thresholds.
+   *  Then 5 % of room, and outward to the next half step of the ticks: the numbers stay round, and no more than half a step
+   *  lies empty beyond the data. */
+  function plotRange(parts, look) {
+    const T = shownTraces(), least = (values) => values.reduce((a, b) => Math.min(a, b), Infinity), most = (values) => values.reduce((a, b) => Math.max(a, b), -Infinity), drawn = [];
+    for (const s of parts.series) { const band = bandDrawn(s, look); s.mean.forEach((v, i) => { if (finite(v)) { const e = band && finite(s.sem[i]) ? s.sem[i] : 0; drawn.push(v - e, v + e); } }); }
+    if (drawn.length && (isDff() || S.signal === 'rawdff')) drawn.push(0);
+    const means = drawn.length ? [least(drawn), most(drawn)] : null; let range = means;
+    if (parts.traces.length) {
+      const ends = (end) => plotCells().steady.map((name) => extent(T[name])).filter(Boolean).map((e) => e[end]), lows = ends('low'), highs = ends('high');
+      if (lows.length) { const bulk = [share([lows], 0.02), share([highs], 0.95)], reach = means && means[1] > means[0] ? 1.5 * (means[1] - means[0]) : Infinity;
+        range = means ? [Math.max(Math.min(means[0], bulk[0]), means[0] - reach), Math.min(Math.max(means[1], bulk[1]), means[1] + reach)] : bulk; }
+    }
+    const values = range ? range.slice() : [], own = parts.own && extent(parts.own); if (own) values.push(own.min, own.max);
+    for (const level of parts.levels) values.push(level.value);
+    let lo = least(values), hi = most(values);
+    if (!values.length) { lo = 0; hi = 1; } else if (hi - lo < 0.001) hi = lo + 1;
+    const room = (hi - lo) * 0.05; lo -= room; hi += room;
+    for (let step = 0, i = 0; i < 4; i++) {   // rounding widens the range, which can call for a wider tick step: until the step stays
+      const next = ticks(lo, hi, 5).step; if (next === step) break; step = next;
+      lo = +(Math.floor(2 * lo / step + 1e-9) * step / 2).toPrecision(12); hi = +(Math.ceil(2 * hi / step - 1e-9) * step / 2).toPrecision(12);
+    }
+    return [lo, hi];
+  }
+  /** The plot's Y range. auto: the automatic range (plotRange), with the limits typed under "Y axis" on the page in their place
+   *  (either end alone, too; they belong to the signal on screen). lo, hi: that, or the limits typed in the figure editor. */
+  function plotLimits(parts, look) {
+    const range = plotRange(parts, look), typed = Plot.y[S.signal] || {}, auto = typedRange(range, typed.lo, typed.hi) || range, [lo, hi] = typedRange(auto, look.yMin, look.yMax) || auto;
+    return { lo, hi, auto };
+  }
+  /** Places legend entries: in rows from the left, wrapped by whole entries, with one row height and even gaps; or stacked in
+   *  one column. As few rows as the width allows, and those rows as even as they can be: two entries and two, or three and
+   *  two, never three with the fourth left alone. No entry is wider than the width: one that would be is shortened (fitted).
+   *  Returns each entry's place and words and the size of the block; drawLegend draws it.
+   *  ctx carries the font. Lengths are written for 12-pixel text, as in the painters. */
+  function legendLayout(ctx, items, width, look, stacked) {
+    const u = (n) => n * look.px / 12, rowHeight = u(18), gap = u(14), texts = items.map((item) => fitted(ctx, item.text, width - u(21))), wide = texts.map((text) => u(21) + ctx.measureText(text).width);
+    /** The rows, filled from the left: an entry starts a new row when it would pass the width, or when its row holds "most" entries already. */
+    const fill = (most) => { const rows = []; for (const w of wide) { const row = rows[rows.length - 1]; if (row && !stacked && row.n < most && row.width + gap + w <= width) { row.n++; row.width += gap + w; } else rows.push({ n: 1, width: w }); } return rows; };
+    let rows = fill(Infinity);
+    // the same number of rows with the entries shared out evenly, when they fit that way; else with one more to a row, and so on
+    if (!stacked) for (let most = Math.ceil(wide.length / rows.length); most < wide.length; most++) { const even = fill(most); if (even.length === rows.length) { rows = even; break; } }
+    const places = []; let i = 0;
+    rows.forEach((row, r) => { let x = 0; for (let k = 0; k < row.n; k++, i++) { places.push({ item: items[i], text: texts[i], x, y: r * rowHeight }); x += wide[i] + gap; } });
+    return { places, rowHeight, width: rows.reduce((most, row) => Math.max(most, row.width), 0), height: rows.length * rowHeight };
+  }
+  /** Draws a legend placed by legendLayout with its left top corner at (left, top). A swatch shows the thing as it is drawn:
+   *  a line at its own width and dashes, on its band when it has one (two lines, one above the other, for an entry that
+   *  stands for lines of two kinds); a box in a band's colour, as thin as a bar when it stands for one. */
+  function drawLegend(ctx, layout, left, top, look) {
+    const u = (n) => n * look.px / 12; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineCap = 'butt';
+    for (const { item, text, x, y } of layout.places) {
+      const sx = left + x, sy = top + y + layout.rowHeight / 2;
+      if (item.band) { ctx.fillStyle = item.band; ctx.fillRect(sx, sy - u(5), u(16), u(10)); }
+      if (item.kind === 'line') { const rule = (line, y) => { ctx.strokeStyle = line.colour; ctx.lineWidth = line.width; ctx.setLineDash(line.dash || []); ctx.beginPath(); ctx.moveTo(sx, y); ctx.lineTo(sx + u(16), y); ctx.stroke(); ctx.setLineDash([]); };
+        if (item.second) { rule(item, sy - u(2.5)); rule(item.second, sy + u(2.5)); } else rule(item, sy); }
+      else { const high = item.height || u(10); ctx.fillStyle = item.colour; ctx.fillRect(sx + u(2), sy - high / 2, u(14), high);
+        if (item.outline) { ctx.strokeStyle = shade(look.ink, 0.3); ctx.lineWidth = 1; ctx.strokeRect(sx + u(2) + 0.5, sy - high / 2 + 0.5, u(14) - 1, high - 1); } }
+      ctx.fillStyle = look.ink; writeText(ctx, text, sx + u(21), sy, look);
+    }
+  }
+  /** A text as it fits into a width: the text itself, or its beginning with an ellipsis in place of the rest. The one rule for
+   *  text that does not fit, wherever a painter writes words that somebody typed or that grow with the data: titles, legend
+   *  entries, the stimulus label. ctx carries the font. */
+  function fitted(ctx, text, room) {
+    if (ctx.measureText(text).width <= room) return text;
+    let n = text.length; while (n > 0 && ctx.measureText(text.slice(0, n).trimEnd() + '…').width > room) n--;
+    return text.slice(0, n).trimEnd() + '…';
+  }
+  /** A title centred at "at" along a side of the drawing, as it fits there without running past either end of the side. */
+  const centred = (ctx, text, at, side, look) => fitted(ctx, text, 2 * Math.min(at, side - at) - look.px / 2);
   /** Writes a title in a figure. A font chosen in the editor may have no small lowered or raised digits (the ₀ of ΔF/F₀, the ²⁺ of
    *  Ca²⁺) and would borrow them from another font at the wrong size and place: they are drawn from its ordinary digits instead.
    *  The page's own font has them, so the page writes its text as it always did. */
@@ -1199,96 +1597,150 @@
     for (const run of runs) { ctx.font = run.level ? small : font; ctx.fillText(run.text, at, y - (run.level > 0 ? 0.33 : run.level < 0 ? -0.2 : 0) * size); at += run.width; }
     ctx.font = font; ctx.textAlign = align;
   }
-  /** Ticks at a spacing typed in the figure editor; the automatic ones when none is typed or it would give too many. */
-  const steppedTicks = (lo, hi, step, auto) => { if (!finite(step) || step <= 0 || (hi - lo) / step > 60) return auto;
+  /** Ticks at a spacing typed in the figure editor; the automatic ones when none is typed or it would give more than TICKS_MOST
+   *  (the editor refuses such a spacing: figureRefusal). */
+  const TICKS_MOST = 60;
+  const steppedTicks = (lo, hi, step, auto) => { if (!finite(step) || step <= 0 || (hi - lo) / step > TICKS_MOST) return auto;
     const values = []; for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-9; v += step) values.push(Math.abs(v) < step * 1e-9 ? 0 : +v.toPrecision(12)); return { values, step }; };
-  /** How the page draws its own plot, in pixels: the working view. A saved figure is drawn by the same painter with the look
-   *  set in the figure editor. Lengths in the painter are written for 12-pixel text and grow with the text size. */
-  const PAGE_LOOK = { page: true, px: 12, family: null, ink: '#65717D', line: '#C5CED8', tickLine: '#DEE4EA', background: '#fff', grid: true, frame: 'box', axis: 1,
-    mean: 2.4, cell: 1.7, trace: 0.9, sem: true, showStimulus: true, stimulus: 'stimulus', baseline: true, window: true, levels: true, xTitle: null, yTitle: null, x: [null, null], y: [null, null], xStep: null, yStep: null, swap: {} };
-  /** Everything except the time cursor and the hovered trace, drawn once and reused while the cursor moves. */
+  /** Strokes one trace: its samples joined in time, with a break where a sample is missing or the recording paused. */
+  function strokeTrace(ctx, time, values, X, Y, gapLimit) {
+    ctx.beginPath(); let pen = false;
+    for (let i = 0; i < time.length && i < values.length; i++) {
+      if (finite(values[i])) { if (pen && time[i] - time[i - 1] <= gapLimit) ctx.lineTo(X(time[i]), Y(values[i])); else ctx.moveTo(X(time[i]), Y(values[i])); pen = true; } else pen = false;
+    }
+    ctx.stroke();
+  }
+  /** Writes the stimulus label above its line at x, kept inside the width of the plot area (L, W) and no wider than it. Besides its axis titles and
+   *  tick labels, this one word is all a painter writes on a plot; every other name is an entry of the legend. */
+  function stimulusLabel(ctx, look, x, L, W, y) {
+    const text = fitted(ctx, look.stimulusText, W), half = ctx.measureText(text).width / 2; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = look.colourStimulus;
+    ctx.fillText(text, Math.max(L + half, Math.min(L + W - half, x)), y);
+  }
+  /** Where the parts of the plot go in a w × h area, in one step, from the top: the legend (rows starting on the Y axis, or a
+   *  column at the right); a strip for what marks time without lying on the traces (the stimulus label, and under it the
+   *  response-window bar, clear of the plot's top edge); the plot area, with a left margin that fits its tick labels.
+   *  ctx carries the font; items are the legend's entries and tickLabels the Y axis numbers.
+   *  Gaps and margins are written for 12-pixel text and grow with the text; line widths and tick lengths come from the look.
+   *  A column of legend entries takes at most a third of the width. The plot area gets what the rest leaves, and never less
+   *  than 10 pixels each way, so a figure too small for its text still draws; the editor says when it is (FIT). */
+  function plotLayout(ctx, w, h, look, parts, items, tickLabels) {
+    const u = (n) => n * look.px / 12, widest = (texts) => texts.reduce((most, text) => Math.max(most, ctx.measureText(text).width), 0);
+    const column = look.legend === 'right' && items.length ? legendLayout(ctx, items, w / 3, look, true) : null;
+    const L = Math.ceil(u(6) + look.px + u(6) + widest(tickLabels) + u(4) + look.tickLength);
+    const R = Math.ceil(u(14) + (column ? u(12) + column.width + u(4) : 0)), W = Math.max(10, w - L - R);
+    const rows = look.legend === 'top' && items.length ? legendLayout(ctx, items, w - L - u(6), look, false) : null, top = u(8), under = top + (rows ? rows.height + u(4) : 0);
+    const labelled = parts.stimulus !== null && !!look.stimulusText, barred = !!parts.spans.response;
+    const labels = labelled ? u(15) : 0, T = Math.round(under + labels + (barred ? look.windowBar + u(4) : labelled ? u(2) : 0));
+    const below = look.tickLength + u(3) + look.px + u(5), H = Math.max(10, Math.floor(h - T - below - look.px - u(5)));
+    return { L, T, W, H, labelY: under + u(7), lineTop: labelled ? under + labels : T, barY: barred ? T - u(4) - look.windowBar : null, titleY: T + H + below,
+      legend: column ? { layout: column, x: w - u(4) - column.width, y: T } : rows ? { layout: rows, x: L, y: top } : null };
+  }
+  /** Everything about the time course that is settled before a line is drawn, in a w × h area by a look: the time and the range
+   *  shown, what is drawn in them (plotParts), the legend's entries, the Y axis numbers and where the parts go (g: plotLayout).
+   *  ctx is only measured with, in the look's font. The painter draws from this; the figure editor asks it how much room
+   *  the plot would get (figureFit). */
+  function plotPlan(ctx, w, h, look) {
+    const { x0, x1, full0, full1 } = plotTimes(look), parts = plotParts(look, x0, x1), { lo, hi } = plotLimits(parts, look);
+    parts.levels = parts.levels.filter((level) => level.value >= lo && level.value <= hi);   // a threshold that typed limits leave outside the plot is not drawn, and so not listed
+    const items = plotLegend(parts, look);
+    ctx.font = look.px + 'px ' + (look.family || getComputedStyle(document.body).fontFamily);
+    // about five numbers on the Y axis, or as many as its height holds at a line and a half each (a spacing typed in the editor is kept)
+    const laid = (about) => { const ys = steppedTicks(lo, hi, look.yStep, ticks(lo, hi, about)); return { ys, g: plotLayout(ctx, w, h, look, parts, items, ys.values.map((v) => tickText(v, ys.step))) }; };
+    let plan = laid(5); const held = Math.floor(plan.g.H / (look.px * 1.5)); if (held < 5) plan = laid(Math.max(1, held));
+    return Object.assign(plan, { x0, x1, full0, full1, parts, lo, hi, items });
+  }
+  /** Draws the time course into a w × h area by a look: the page's (PAGE_LOOK) or a saved figure's, the same drawing for both.
+   *  On the page this is everything but the time cursor and the hovered trace, drawn once and reused while the cursor moves.
+   *  The only words it writes are the axis titles, the tick labels, the stimulus label and the legend.
+   *  Returns where things went (plotLayout), the axis ranges and the legend's entries. */
   function paintTraces(ctx, w, h, look) {
-    look = look || PAGE_LOOK;
-    const u = look.px === 12 ? (n) => n : (n) => n * look.px / 12, paint = (colour) => look.swap[colour] || colour;
-    const r = S.results, shown = shownTraces(), time = r.time, L = u(54), T = u(10), W = Math.max(10, w - L - u(14)), H = Math.max(10, h - T - u(38));
-    const full0 = time[0], full1 = time[time.length - 1]; let x0 = Plot.x0 === null ? full0 : Plot.x0, x1 = Plot.x1 === null ? full1 : Plot.x1;
-    if (finite(look.x[0])) x0 = look.x[0]; if (finite(look.x[1])) x1 = look.x[1]; if (!(x1 > x0)) { x0 = full0; x1 = full1; }
-    const drawn = S.every ? S.listed.filter((n) => shown[n]) : [];
-    const oneCell = S.plotMode === 'cell', series = plotSeries();
-    if (look.page) { Plot.drawn = drawn; Plot.series = series; }   // the page's cursor and hover read these; a figure leaves them alone
-    const spans = responseSpans(), gapLimit = samplingSupport().gap, levels = oneCell && isDff() && look.levels ? referenceLevels() : [];
-    if (!oneCell || !isDff() || !look.levels) spans.run = null;                                 // the qualifying run and the thresholds belong to one cell
-    const values = (isDff() || S.signal === 'rawdff' ? [0] : []).concat(levels.map((l) => l.value)); for (const s of series) s.mean.forEach((v, i) => { if (finite(v)) { values.push(v); if (finite(s.sem[i])) values.push(v - s.sem[i], v + s.sem[i]); } });
-    const own = oneCell && S.cell ? shown[S.cell] : null; if (own) for (const v of own) if (finite(v)) values.push(v);
-    // with every cell drawn, the axis covers 99 % of all values (plus the mean and the selected cell); rarer extremes run off the edge
-    if (drawn.length) { const rows = drawn.map((n) => shown[n]); values.push(share(rows, 0.005, false), share(rows, 0.995, false)); }
-    let lo = Math.min.apply(null, values), hi = Math.max.apply(null, values); if (hi - lo < 0.001) hi = lo + 1; const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
-    // limits typed under "Y axis" replace the automatic ones (either end alone, too); they belong to the signal on screen.
-    // Limits typed in the figure editor replace both.
-    const typed = Plot.y[S.signal] || {}; if (finite(typed.lo)) lo = typed.lo; if (finite(typed.hi)) hi = typed.hi;
-    if (finite(look.y[0])) lo = look.y[0]; if (finite(look.y[1])) hi = look.y[1]; if (!(hi > lo)) hi = lo + Math.max(1e-6, Math.abs(lo) * 0.1);
-    const X = (t) => L + (t - x0) / (x1 - x0) * W, Y = (v) => T + (hi - v) / (hi - lo) * H;
-    if (look.page) Plot.geom = { L, T, W, H, x0, x1, lo, hi, full0, full1 };
-    if (look.background) { ctx.fillStyle = look.background; ctx.fillRect(0, 0, w, h); } ctx.font = look.px + 'px ' + (look.family || getComputedStyle(document.body).fontFamily);
-    ctx.save(); ctx.beginPath(); ctx.rect(L, T, W, H); ctx.clip();
-    for (const [span, colour, name, wanted] of [[spans.baseline, '#EDF0F4', 'response baseline', look.baseline], [spans.response, '#FFF4E3', 'response window', look.window], [spans.run, '#D5EEDD', 'qualifying run', true]]) {
-      if (!wanted || !span || !finite(span[0]) || !finite(span[1])) continue;
-      const a = Math.max(L, X(span[0])), b = Math.min(L + W, X(span[1])); if (b <= a) continue;
-      const strip = name === 'response window';
-      ctx.fillStyle = strip ? '#F5C97A' : colour; ctx.fillRect(a, T, b - a, strip ? u(5) : H);
-      if (!strip && ctx.measureText(name).width + u(8) <= b - a) { ctx.fillStyle = look.ink; ctx.fillText(name, a + u(4), T + u(14)); }
+    const u = (n) => n * look.px / 12, r = S.results, shown = shownTraces(), time = r.time, gapLimit = samplingSupport().gap;
+    const { x0, x1, full0, full1, parts, lo, hi, items, ys, g } = plotPlan(ctx, w, h, look), spans = parts.spans, { L, T, W, H } = g;
+    const xs = steppedTicks(x0, x1, look.xStep, ticks(x0, x1, Math.max(2, Math.floor(W / u(90)))));
+    const X = (t) => L + (t - x0) / (x1 - x0) * W, Y = (v) => T + (hi - v) / (hi - lo) * H, crisp = (at) => Math.round(at) + 0.5;
+    if (look.background) { ctx.fillStyle = look.background; ctx.fillRect(0, 0, w, h); }
+    const inside = (draw) => { ctx.save(); ctx.beginPath(); ctx.rect(L, T, W + 1, H + 1); ctx.clip(); draw(); ctx.restore(); };
+    const across = (y, colour, width, dash) => { ctx.strokeStyle = colour; ctx.lineWidth = width; ctx.lineCap = 'butt'; ctx.setLineDash(dash || []); ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(L + W, y); ctx.stroke(); ctx.setLineDash([]); };
+    /** A span of time as a band over the whole height of the plot, at least "least" wide (from where it starts, kept inside the plot). */
+    const band = (span, colour, least) => { const b = Math.min(L + W, Math.max(X(span[1]), X(span[0]) + least)), a = Math.max(L, Math.min(X(span[0]), b - least)); ctx.fillStyle = colour; ctx.fillRect(a, T, b - a, H); };
+    const line = (values) => strokeTrace(ctx, time, values, X, Y, gapLimit);
+    // behind the data: the baseline band and the run that counted; grid lines when wanted; a dotted line at zero
+    inside(() => {
+      if (spans.baseline) band(spans.baseline, look.colourBaseline, 0);
+      if (spans.run) band(spans.run, look.colourRun, look.runWidth);
+      if (look.grid) for (const v of ys.values) across(crisp(Y(v)), look.colourGrid, look.axisWidth);
+      if (lo < 0 && hi > 0 && (isDff() || S.signal === 'rawdff')) across(crisp(Y(0)), look.colourZero, look.axisWidth, look.zeroDash);
+    });
+    // marks of time, in the strip above the plot: the response window, a thin bar; the stimulus, a thin dashed line with its
+    // label above it. Nothing of this lies on the traces.
+    if (spans.response) { const a = Math.max(L, X(spans.response[0])), b = Math.min(L + W, X(spans.response[1])); ctx.fillStyle = look.colourWindow; ctx.fillRect(a, g.barY, b - a, look.windowBar); }
+    if (parts.stimulus !== null) {
+      const sx = crisp(X(parts.stimulus)); ctx.strokeStyle = look.colourStimulus; ctx.lineWidth = look.stimulusWidth; ctx.lineCap = 'butt'; ctx.setLineDash(look.stimulusDash);
+      ctx.beginPath(); ctx.moveTo(sx, g.lineTop); ctx.lineTo(sx, T + H); ctx.stroke(); ctx.setLineDash([]);
+      if (look.stimulusText) stimulusLabel(ctx, look, sx, L, W, g.labelY);
     }
-    const added = number(selectedCall().Stimulus_onset_s);
-    if (look.showStimulus && finite(added) && added >= x0 && added <= x1) {
-      const sx = Math.round(X(added)) + 0.5; ctx.strokeStyle = '#B45F06'; ctx.lineWidth = u(1.4); ctx.setLineDash([u(2), u(3)]); ctx.beginPath(); ctx.moveTo(sx, T); ctx.lineTo(sx, T + H); ctx.stroke(); ctx.setLineDash([]);
-      ctx.fillStyle = '#8A4B08'; ctx.textAlign = sx > L + W - u(70) ? 'right' : 'left'; ctx.fillText(look.stimulus, sx + (sx > L + W - u(70) ? -u(4) : u(4)), T + u(20)); ctx.textAlign = 'left';
-    }
-    ctx.restore();
-    const ys = steppedTicks(lo, hi, look.yStep, ticks(lo, hi, 5)), xs = steppedTicks(x0, x1, look.xStep, ticks(x0, x1, Math.max(2, Math.floor(W / u(90)))));
-    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-    for (const v of ys.values) { const y = Math.round(Y(v)) + 0.5; ctx.lineWidth = look.axis; ctx.beginPath();
-      if (look.grid) { ctx.strokeStyle = v === 0 ? '#AEB8C2' : '#DEE4EA'; ctx.moveTo(L, y); ctx.lineTo(L + W, y); } else { ctx.strokeStyle = look.tickLine; ctx.moveTo(L - u(4), y); ctx.lineTo(L, y); }
-      ctx.stroke(); ctx.fillStyle = look.ink; ctx.fillText(tickText(v, ys.step), L - u(8), y); }
-    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    for (const v of xs.values) { const x = Math.round(X(v)) + 0.5; ctx.strokeStyle = look.tickLine; ctx.beginPath(); ctx.moveTo(x, T + H); ctx.lineTo(x, T + H + u(4)); ctx.stroke(); ctx.fillStyle = look.ink; ctx.fillText(tickText(v, xs.step), x, T + H + u(7)); }
-    writeText(ctx, look.xTitle == null ? 'Time (s)' : look.xTitle, L + W / 2, h - u(15), look);
-    ctx.save(); ctx.translate(u(13), T + H / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'middle'; writeText(ctx, look.yTitle == null ? signalName() : look.yTitle, 0, 0, look); ctx.restore();
-    ctx.strokeStyle = look.line; ctx.lineWidth = look.axis;
-    if (look.frame === 'box') ctx.strokeRect(L + 0.5, T + 0.5, W, H); else { ctx.beginPath(); ctx.moveTo(L + 0.5, T); ctx.lineTo(L + 0.5, T + H + 0.5); ctx.lineTo(L + W, T + H + 0.5); ctx.stroke(); }
-    ctx.save(); ctx.beginPath(); ctx.rect(L, T, W + 1, H + 1); ctx.clip(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    const line = (y) => { ctx.beginPath(); let pen = false; for (let i = 0; i < time.length && i < y.length; i++) { if (finite(y[i])) { const px = X(time[i]), py = Y(y[i]); if (pen && time[i] - time[i - 1] <= gapLimit) ctx.lineTo(px, py); else ctx.moveTo(px, py); pen = true; } else pen = false; } ctx.stroke(); };
-    if (drawn.length) {
-      ctx.globalAlpha = drawn.length > 120 ? 0.22 : drawn.length > 40 ? 0.32 : 0.48; ctx.lineWidth = look.trace;
-      // non-responders first, so the responders are not hidden under them
-      for (const responders of [false, true]) for (const name of drawn) { const call = callOf(name); if ((call === 'Responded') === responders) { ctx.strokeStyle = paint(CALL[kind(call)]); line(shown[name]); } }
-      ctx.globalAlpha = 1;
-    }
-    if (look.sem) for (const s of series) {
-      ctx.fillStyle = shade(paint(s.colour), drawn.length ? 0.28 : 0.20);
-      for (let i = 1; i < time.length; i++) if (time[i] - time[i - 1] <= gapLimit && [s.mean[i - 1], s.mean[i], s.sem[i - 1], s.sem[i]].every(finite)) {
-        ctx.beginPath(); ctx.moveTo(X(time[i - 1]), Y(s.mean[i - 1] - s.sem[i - 1])); ctx.lineTo(X(time[i]), Y(s.mean[i] - s.sem[i])); ctx.lineTo(X(time[i]), Y(s.mean[i] + s.sem[i])); ctx.lineTo(X(time[i - 1]), Y(s.mean[i - 1] + s.sem[i - 1])); ctx.closePath(); ctx.fill();
+    // the data: single cells (the others first, faint; then the responders, a little wider and stronger, so they are not
+    // hidden), SEM bands, the selected cell's thresholds, the means, and the selected cell on top; last, a tick at the top
+    // of the plot where the run that counted starts
+    inside(() => {
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      if (parts.traces.length) {
+        const responded = (name) => callOf(name) === 'Responded', yes = parts.traces.filter(responded), no = parts.traces.filter((name) => !responded(name));
+        ctx.strokeStyle = look.colourTrace; ctx.lineWidth = look.traceWidth; ctx.globalAlpha = look.traceOpacity == null ? traceFade(no.length) : look.traceOpacity; for (const name of no) line(shown[name]);
+        ctx.strokeStyle = look.colourResponded; ctx.lineWidth = look.responderWidth; ctx.globalAlpha = look.responderOpacity == null ? responderFade(yes.length) : look.responderOpacity; for (const name of yes) line(shown[name]);
+        ctx.globalAlpha = 1;
       }
-    }
-    for (const level of levels) { ctx.strokeStyle = level.colour; ctx.lineWidth = level.name === 'required rise' ? u(1.8) : u(1); ctx.setLineDash([u(5), u(4)]); ctx.beginPath(); ctx.moveTo(L, Y(level.value)); ctx.lineTo(L + W, Y(level.value)); ctx.stroke(); } ctx.setLineDash([]);
-    for (const s of series) { if (drawn.length) { ctx.strokeStyle = '#fff'; ctx.lineWidth = look.mean + 1.8; line(s.mean); } ctx.strokeStyle = paint(s.colour); ctx.lineWidth = look.mean; line(s.mean); }
-    if (own) { ctx.strokeStyle = '#fff'; ctx.lineWidth = look.cell + 1.9; line(own); ctx.strokeStyle = paint('#1F2933'); ctx.lineWidth = look.cell; line(own); }
-    ctx.restore();
+      for (const s of parts.series) if (bandDrawn(s, look)) {   // one shape per unbroken stretch, so a band has no seams
+        ctx.fillStyle = shade(look[s.colour], look.semOpacity); let run = [];
+        const fill = () => { if (run.length > 1) { ctx.beginPath(); run.forEach((i, k) => { const x = X(time[i]), y = Y(s.mean[i] + s.sem[i]); if (k) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+          for (let k = run.length - 1; k >= 0; k--) ctx.lineTo(X(time[run[k]]), Y(s.mean[run[k]] - s.sem[run[k]])); ctx.closePath(); ctx.fill(); } run = []; };
+        for (let i = 0; i < time.length; i++) { const has = finite(s.mean[i]) && finite(s.sem[i]); if (!has || (run.length && time[i] - time[i - 1] > gapLimit)) fill(); if (has) run.push(i); }
+        fill();
+      }
+      for (const level of parts.levels) across(Y(level.value), look[level.colour], look[level.width], look.levelDash);
+      ctx.lineCap = 'round';
+      const cased = (values, colour, width, casing) => { if (casing) { ctx.strokeStyle = look.colourCasing; ctx.lineWidth = width + 2 * look.casing; line(values); } ctx.strokeStyle = colour; ctx.lineWidth = width; line(values); };
+      for (const s of parts.series) cased(s.mean, look[s.colour], look.meanWidth, parts.traces.length > 0);
+      if (parts.own) cased(parts.own, look.colourCell, look.cellWidth, true);
+      if (spans.run && spans.run[0] >= x0 && spans.run[0] <= x1) { const sx = X(spans.run[0]); ctx.strokeStyle = look.colourLevelRequired; ctx.lineWidth = look.requiredWidth; ctx.lineCap = 'butt'; ctx.beginPath(); ctx.moveTo(sx, T); ctx.lineTo(sx, T + look.runTick); ctx.stroke(); }
+    });
+    // axes: left and bottom (or a box), ticks pointing out, numbers with a true minus sign, all in the one ink
+    const left = L + 0.5, bottom = T + H + 0.5; ctx.strokeStyle = ctx.fillStyle = look.ink; ctx.lineWidth = look.axisWidth; ctx.lineCap = 'butt'; ctx.lineJoin = 'miter'; ctx.beginPath();
+    if (look.frame === 'box') ctx.rect(left, T + 0.5, W, H); else { ctx.moveTo(left, T); ctx.lineTo(left, bottom); ctx.lineTo(L + W, bottom); }
+    for (const v of ys.values) { ctx.moveTo(left, crisp(Y(v))); ctx.lineTo(left - look.tickLength, crisp(Y(v))); }
+    for (const v of xs.values) { ctx.moveTo(crisp(X(v)), bottom); ctx.lineTo(crisp(X(v)), bottom + look.tickLength); }
+    ctx.stroke();
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; for (const v of ys.values) ctx.fillText(tickText(v, ys.step), L - look.tickLength - u(4), crisp(Y(v)));
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top'; for (const v of xs.values) ctx.fillText(tickText(v, xs.step), crisp(X(v)), T + H + look.tickLength + u(3));
+    writeText(ctx, centred(ctx, look.xTitle == null ? 'Time (s)' : look.xTitle, L + W / 2, w, look), L + W / 2, g.titleY, look);
+    ctx.save(); ctx.translate(u(6) + look.px / 2, T + H / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'middle'; writeText(ctx, centred(ctx, look.yTitle == null ? signalName() : look.yTitle, T + H / 2, h, look), 0, 0, look); ctx.restore();
+    if (g.legend) drawLegend(ctx, g.legend.layout, g.legend.x, g.legend.y, look);
+    const drew = Object.assign(g, { x0, x1, lo, hi, full0, full1, items });
+    if (look.page) { Plot.geom = drew; Plot.drawn = parts.traces; Plot.series = parts.series; }   // the page's cursor and hover read these; a figure leaves them alone
+    return drew;
   }
   function drawPlot() {
     const canvas = $('plot'), r = S.results; $('plot-empty').hidden = !!r;
+    // What the page says beside the plot, not in it, set before the canvas is measured (the note takes a line from it): that the
+    // selected cell has no trace to draw; and "Thresholds" is offered where there are thresholds, with one cell in ΔF/F₀.
+    const missing = !!r && traceMissing(); $('cell-note').hidden = !missing; if (missing) $('cell-note').textContent = 'No ΔF/F₀ trace' + (hasTable('corrected') ? ': choose gray levels under Signal' : '');
+    $('thresholds').disabled = !(r && S.plotMode === 'cell' && isDff());
     if (!canvas.clientWidth) return;
     const { ctx, w, h, dpr } = fit(canvas);
     if (!r) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); return; }
     if (Plot.dirty || Plot.layer.width !== canvas.width || Plot.layer.height !== canvas.height) {
       Plot.layer.width = canvas.width; Plot.layer.height = canvas.height; const lctx = Plot.layer.getContext('2d'); lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      paintTraces(lctx, w, h); Plot.dirty = false;
+      paintTraces(lctx, w, h, PAGE_LOOK); Plot.dirty = false;
+      // A limit typed under "Y axis" that the plot does not use marks its box: text that is no number, or a minimum at or above the maximum (typedRange).
+      for (const [id, end, why] of [['y-min', 'lo', 'Minimum must be below maximum'], ['y-max', 'hi', 'Maximum must be above minimum']]) { const box = $(id), value = typedNumber(box.value), unused = value !== null && Plot.geom[end] !== value;
+        if (unused) { box.setAttribute('aria-invalid', 'true'); box.title = Number.isNaN(value) ? 'Not a number' : why; } else { box.removeAttribute('aria-invalid'); box.removeAttribute('title'); } }
+      canvas.setAttribute('aria-label', 'Plot of ' + signalName() + ' against time: ' + Plot.geom.items.map((item) => item.text).join('; '));   // the legend is drawn in the plot: said here for a screen reader
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(Plot.layer, 0, 0); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const g = Plot.geom, time = r.time, X = (t) => g.L + (t - g.x0) / (g.x1 - g.x0) * g.W, Y = (v) => g.T + (g.hi - v) / (g.hi - g.lo) * g.H;
     ctx.save(); ctx.beginPath(); ctx.rect(g.L, g.T, g.W + 1, g.H + 1); ctx.clip();
-    if (Plot.hover && shownTraces()[Plot.hover] && Plot.hover !== S.cell) {
-      const y = shownTraces()[Plot.hover], gapLimit = samplingSupport().gap; ctx.strokeStyle = CALL[kind(callOf(Plot.hover))]; ctx.lineWidth = 2.2; ctx.lineJoin = 'round'; ctx.beginPath(); let pen = false;
-      for (let i = 0; i < time.length; i++) { if (finite(y[i])) { if (pen && time[i] - time[i - 1] <= gapLimit) ctx.lineTo(X(time[i]), Y(y[i])); else ctx.moveTo(X(time[i]), Y(y[i])); pen = true; } else pen = false; } ctx.stroke();
+    if (Plot.hover && shownTraces()[Plot.hover] && Plot.hover !== S.cell) {   // the trace under the pointer, in the colour of its call
+      ctx.strokeStyle = CALL[kind(callOf(Plot.hover))]; ctx.lineWidth = 2.2; ctx.lineJoin = 'round'; strokeTrace(ctx, time, shownTraces()[Plot.hover], X, Y, samplingSupport().gap);
     }
     // Nothing sits on the traces while nobody is reading it. While the frame moves (a drag in the plot, the slider or the step
     // buttons under the picture, the arrow keys, Play) and for a moment after, a solid line shows where the picture is, with
@@ -1330,8 +1782,11 @@
   }
 
   // ---------------------------------------------------------------- heatmap
-  // Drawn the way the SimpleCa²⁺ app draws it: every cell in one picture, classic axes, a colour bar with ticks, the app's
-  // blue–white–red for signed values (or one of its palettes from zero up), and its "peak after the baseline" ordering.
+  // Every cell in one picture, one row each: ΔF/F₀ as colour against time. Blue–white–red has white at zero and scales its two
+  // sides separately; the other palettes, those of the SimpleCa²⁺ app, start at zero. Beside the rows a strip gives each row's
+  // response call, and the key says what its colours mean and how many cells each holds; at the right, a colour bar. Nothing
+  // else is written beside the rows but the names of the cells, when they are asked for. One painter for the page and for a
+  // saved figure.
   const PALETTES = {
     plasma: ['#0d0887', '#46039f', '#7201a8', '#9c179e', '#bd3786', '#d8576b', '#ed7953', '#fb9f3a', '#fdca26', '#f0f921'],
     viridis: ['#440154', '#482878', '#3e4989', '#31688e', '#26828e', '#1f9e89', '#35b779', '#6ece58', '#b5de2b', '#fde725'],
@@ -1341,119 +1796,215 @@
     signed: ['#3B4CC0', '#FFFFFF', '#B40426']
   };
   const rgb = (hex) => [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
-  /** 256 colours along a palette. */
+  /** The colours along a palette, in RAMP steps: an even number, so that the middle colour (the white of blue–white–red) is one of them. */
+  const RAMP = 256;
   function ramp(name) {
-    const stops = PALETTES[name].map(rgb), out = new Uint8Array(256 * 3);
-    for (let i = 0; i < 256; i++) { const at = i / 255 * (stops.length - 1), k = Math.min(stops.length - 2, Math.floor(at)), f = at - k;
+    const stops = PALETTES[name].map(rgb), out = new Uint8Array((RAMP + 1) * 3);
+    for (let i = 0; i <= RAMP; i++) { const at = i / RAMP * (stops.length - 1), k = Math.min(stops.length - 2, Math.floor(at)), f = at - k;
       for (let c = 0; c < 3; c++) out[i * 3 + c] = Math.round(stops[k][c] + (stops[k + 1][c] - stops[k][c]) * f); }
     return out;
   }
-  /** The largest value after the baseline frames and when it happens: the app's rule for ordering heatmap rows. */
+  /** The largest value after the baseline frames and when it happens: the app's rule for the "Time to peak" and "Peak amplitude" orders. */
   function peakAfterBaseline(trace, time, lastBaselineFrame) {
     let best = -Infinity, at = Infinity; if (!trace) return { value: -Infinity, time: Infinity };
     for (let i = Math.max(0, lastBaselineFrame); i < trace.length; i++) if (finite(trace[i]) && trace[i] > best) { best = trace[i]; at = time[i]; }
     return { value: best, time: at };
   }
-  const TOP = 30, BOTTOM = 46, LEFT = 66, RIGHT = 92, ROW = 15;
-  /** How the page draws its own heatmap. A saved figure is drawn by the same painter with the look set in the figure editor. */
-  const PAGE_HEAT = { page: true, px: 12, family: null, ink: '#333', soft: '#65717D', background: '#fff', bar: true, marks: true, strip: true, key: true, selected: true, xTitle: null, yTitle: null, barTitle: null };
-  /** The heatmap's rows in the order chosen, its colour range (or the one typed in the figure editor) and the picture itself at
-   *  one pixel per sample and cell. */
-  function heatmapData(scaleTo) {
-    const r = S.results, all = S.info.names, time = r.time, rank = (n) => callOf(n) === 'Responded' ? 0 : callOf(n) === 'Did not respond' ? 1 : 2;
-    const lastBaseline = r.baselineFrames && finite(r.baselineFrames[1]) ? r.baselineFrames[1] : 0;
-    const peaks = {}; for (const n of all) peaks[n] = peakAfterBaseline(r.traces[n], time, lastBaseline);
-    const names = all.slice(), original = (a, b) => all.indexOf(a) - all.indexOf(b);
-    if (S.order === 'call') names.sort((a, b) => rank(a) - rank(b) || peaks[b].value - peaks[a].value || original(a, b));
-    else if (S.order === 'tpeak') names.sort((a, b) => peaks[a].time - peaks[b].time || original(a, b));
-    else if (S.order === 'amp') names.sort((a, b) => peaks[b].value - peaks[a].value || original(a, b));
-    const rows = names.map((n) => r.traces[n] || null), have = rows.filter(Boolean), signed = S.palette === 'signed';
-    // the colour range: the largest value, or a limit that covers 99 % of the values so one extreme cell cannot wash out the rest
-    const largest = share(have, 1, true), most = S.range === 'full' ? largest : share(have, 0.99, true);
-    const step0 = ticks(0, most > 0 ? most : 1, 5).step, limit = finite(scaleTo) && scaleTo > 0 ? scaleTo : Math.max(step0, Math.ceil(most / step0 - 1e-9) * step0);
-    const colours = ramp(S.palette), missing = [229, 229, 229];
-    // one pixel per sample and cell, then stretched without smoothing: sharp edges at any size
-    const small = document.createElement('canvas'); small.width = time.length; small.height = names.length;
-    const sctx = small.getContext('2d'), data = sctx.createImageData(time.length, names.length);
-    rows.forEach((trace, c) => { for (let f = 0; f < time.length; f++) {
-      const v = trace ? trace[f] : null, o = (c * time.length + f) * 4; let colour = missing;
-      if (finite(v)) { const t = signed ? (Math.max(-1, Math.min(1, v / limit)) + 1) / 2 : Math.max(0, Math.min(1, v / limit)), k = Math.round(t * 255) * 3; colour = [colours[k], colours[k + 1], colours[k + 2]]; }
-      data.data[o] = colour[0]; data.data[o + 1] = colour[1]; data.data[o + 2] = colour[2]; data.data[o + 3] = 255; } });
-    sctx.putImageData(data, 0, 0);
-    return { names, rank, signed, largest, limit, colours, small, callKey: [[CALL.responded, 'responded'], [CALL.not, 'did not respond'], [CALL.other, 'excluded or unscorable']] };
+  /** The entry of the style table that colours a row's response call, by the kind of call ("kind"). */
+  const CALL_STYLE = { responded: 'colourResponded', not: 'colourNot', other: 'colourOther' };
+  /** The cells the heatmap uses. The one place that decides it, for the rows, their groups and the automatic colour range:
+   *    rows    every measured cell in the order chosen under Sort, without the excluded cells when they are hidden. In every
+   *            order but the original one, a cell without a trace comes after those with one, and a cell below zero last
+   *            among those (its ΔF/F₀ is divided by an F₀ near zero, so its size and timing rank nothing).
+   *            "Response call" and "Onset time" keep the calls together (responded, did not respond, the rest), and the rule
+   *            holds inside each group; the largest rise in the response window (the call table's Peak_increase) is on top.
+   *            "Onset time" puts the responders in the order of their onsets and leaves the rest as "Response call" has them.
+   *    groups  those groups as runs of rows, { kind, first, n }; none in the other orders, where the calls are mixed.
+   *    steady  the cells an automatic colour range is taken from: neither excluded nor below zero (plotCells). */
+  function heatmapCells() {
+    const r = S.results, all = S.info.names, place = new Map(all.map((name, i) => [name, i])), original = (a, b) => place.get(a) - place.get(b);
+    const rows = all.filter((name) => !(S.hideExcluded && callOf(name) === 'Excluded')), which = (name) => kind(callOf(name)), grouped = S.order === 'call' || S.order === 'onset';
+    if (S.order !== 'orig') {
+      const rank = (name) => (grouped ? Object.keys(CALL_STYLE).indexOf(which(name)) : 0), bare = (name) => (r.traces[name] ? 0 : 1), below = (name) => (belowZero(name) ? 1 : 0);
+      const onset = (name) => { const v = number(callRow(name).Onset_s); return S.order === 'onset' && which(name) === 'responded' && finite(v) ? v : Infinity; };
+      const rise = (name) => { const v = number(callRow(name).Peak_increase); return finite(v) ? v : -Infinity; };
+      const last = r.baselineFrames && finite(r.baselineFrames[1]) ? r.baselineFrames[1] : 0, peaks = grouped ? null : new Map(rows.map((name) => [name, peakAfterBaseline(r.traces[name], r.time, last)]));
+      const key = grouped ? (a, b) => rise(b) - rise(a) : S.order === 'tpeak' ? (a, b) => peaks.get(a).time - peaks.get(b).time : (a, b) => peaks.get(b).value - peaks.get(a).value;
+      // (two cells without the number differ by "not a number", which counts as a tie and passes to the next key)
+      rows.sort((a, b) => rank(a) - rank(b) || onset(a) - onset(b) || bare(a) - bare(b) || below(a) - below(b) || key(a, b) || original(a, b));
+    }
+    const groups = [];
+    if (grouped) rows.forEach((name, c) => { const now = groups[groups.length - 1]; if (now && now.kind === which(name)) now.n++; else groups.push({ kind: which(name), first: c, n: 1 }); });
+    return { rows, groups, steady: plotCells(0, r.traces).steady };
   }
-  /** Draws the heatmap into a w × h area and returns where the picture itself lies. Lengths are written for 12-pixel text. */
-  function paintHeatmap(ctx, w, h, look, d, tall) {
-    const u = look.px === 12 ? (n) => n : (n) => n * look.px / 12, r = S.results, time = r.time, names = d.names, signed = d.signed, limit = d.limit, colours = d.colours;
-    const left = u(LEFT), top = u(TOP), right = look.bar ? u(RIGHT) : u(18), bottom = u(BOTTOM);
-    const W = Math.max(10, w - left - right), H = Math.max(10, h - top - bottom), rowH = H / names.length, support = samplingSupport(), spans = responseSpans();
-    const family = look.family || getComputedStyle(document.body).fontFamily;
-    if (look.background) { ctx.fillStyle = look.background; ctx.fillRect(0, 0, w, h); } ctx.imageSmoothingEnabled = false;
-    const X = (t) => left + (t - time[0]) / (time[time.length - 1] - time[0]) * W;
-    ctx.fillStyle = '#e5e5e5'; ctx.fillRect(left, top, W, H);
-    support.bounds.forEach((span, f) => { const x = X(span[0]), width = Math.max(0, X(span[1]) - x); if (width) ctx.drawImage(d.small, f, 0, 1, names.length, x, top, width, H); });
-    // Actual timestamps determine sample widths; unsampled gaps remain blank.
-    // where the baseline and the stimulus are
-    ctx.font = u(11) + 'px ' + family; ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
-    if (look.marks) {
-      for (const [span, colour, name] of [[spans.baseline, '#B8C2CC', 'response baseline'], [spans.response, '#E9A84C', 'response window']]) {
-        if (!span || !finite(span[0]) || !finite(span[1])) continue; const a = Math.max(left, X(span[0])), b = Math.min(left + W, X(span[1])); if (b <= a) continue;
-        ctx.fillStyle = colour; ctx.fillRect(a, top - u(7), b - a, u(4)); if (ctx.measureText(name).width + u(4) < b - a) { ctx.fillStyle = look.soft; ctx.fillText(name, a + u(1), top - u(11)); }
-      }
-      if (finite(spans.response[0]) && spans.response[0] > time[0]) { const x = Math.round(X(spans.response[0])) + 0.5; ctx.strokeStyle = signed ? 'rgba(31,41,51,0.55)' : 'rgba(255,255,255,0.75)'; ctx.setLineDash([u(4), u(3)]); ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, top + H); ctx.stroke(); ctx.setLineDash([]); }
+  /** The heatmap's colour range, from the values of the steady cells alone: the cells left out of it (excluded, or below zero) are
+   *  the few that would otherwise set it, since one of them can hold more extreme samples than a trim of all cells removes.
+   *  "1st to 99th percentile": of those values. "Smallest to largest": their smallest and largest. Each end is rounded outward
+   *  to a tidy number of its own, so the two sides of blue–white–red scale separately; a palette that starts at zero starts at
+   *  zero. A limit typed in the figure editor replaces its end (and moves the other end when that would not lie beyond it);
+   *  two typed limits that are not a range are not used. */
+  function heatmapRange(steady, look) {
+    const T = S.results.traces, values = Float64Array.from(steady.flatMap((name) => T[name].filter(finite))).sort(), whole = S.range === 'full';
+    const at = (part) => (values.length ? values[Math.round(part * (values.length - 1))] : 0), bottom = at(whole ? 0 : 0.01), top = at(whole ? 1 : 0.99);
+    const tidy = (v) => { const step = ticks(0, v, 5).step; return +(Math.ceil(v / step - 1e-9) * step).toPrecision(12); };
+    let low = S.palette === 'signed' && bottom < 0 ? -tidy(-bottom) : 0, high = top > 0 ? tidy(top) : 1;
+    const span = high - low, a = look.barMin, b = look.barMax;
+    if (finite(a) && finite(b)) { if (b > a) { low = a; high = b; } }
+    else if (finite(a)) { low = a; if (!(high > low)) high = low + span; }
+    else if (finite(b)) { high = b; if (!(high > low)) low = high - span; }
+    return { low, high };
+  }
+  /** What the heatmap draws, gathered once for the painter and its key:
+   *    names, groups   the rows and their groups (heatmapCells)       flagged  the rows of cells below zero
+   *    x0, x1          the time shown: the whole recording, or the limits typed in the figure editor
+   *    low, high       the colour range (heatmapRange)                 colourAt the colour of a value
+   *    below, above    whether a value that is drawn lies beyond that end of the range: the colour bar then says ≤ or ≥
+   *    calls           the kinds of call among the rows, with what the key calls each and its number of rows
+   *    spans, stimulus the baseline, the response window and when the stimulus was added (in results saved without that time,
+   *                    the start of the response window)
+   *    small           the picture itself at one pixel per sample and cell; a missing value is left clear. */
+  function heatmapData(look) {
+    const r = S.results, time = r.time, cells = heatmapCells(), names = cells.rows, signed = S.palette === 'signed', spans = responseSpans(), onset = number(selectedCall().Stimulus_onset_s);
+    const [x0, x1] = typedRange(wholeTime(), look.xMin, look.xMax) || wholeTime();
+    const { low, high } = heatmapRange(cells.steady, look), colours = ramp(S.palette);
+    // Where a value lies along the palette, from 0 to 1. Blue–white–red: white at zero, the full blue at the lower limit and
+    // the full red at the upper one, each side on its own scale. The others: evenly from the lower limit to the upper.
+    const along = signed ? (v) => { const c = Math.max(low, Math.min(high, v)); return c >= 0 ? 0.5 + (high > 0 ? 0.5 * c / high : 0) : 0.5 - (low < 0 ? 0.5 * c / low : 0); }
+      : (v) => Math.max(0, Math.min(1, (v - low) / (high - low)));
+    const colourAt = (v) => { const k = Math.round(along(v) * RAMP) * 3; return [colours[k], colours[k + 1], colours[k + 2]]; };
+    const small = document.createElement('canvas'); small.width = Math.max(1, time.length); small.height = Math.max(1, names.length);
+    const sctx = small.getContext('2d'), data = sctx.createImageData(small.width, small.height), slack = (high - low) * 1e-9; let below = false, above = false;
+    names.forEach((name, c) => { const trace = r.traces[name]; if (!trace) return;
+      for (let f = 0; f < time.length; f++) {
+        const v = trace[f]; if (!finite(v)) continue; const o = (c * time.length + f) * 4, k = Math.round(along(v) * RAMP) * 3;
+        data.data[o] = colours[k]; data.data[o + 1] = colours[k + 1]; data.data[o + 2] = colours[k + 2]; data.data[o + 3] = 255;
+        if (time[f] >= x0 && time[f] <= x1) { if (v < low - slack) below = true; else if (v > high + slack) above = true; }
+      } });
+    sctx.putImageData(data, 0, 0);
+    const said = { Excluded: 'excluded', Unscorable: 'unscorable' }, others = Array.from(new Set(names.filter((name) => kind(callOf(name)) === 'other').map((name) => said[callOf(name)] || 'no call'))).sort().join(' or ');
+    const calls = [['responded', 'responded'], ['not', 'did not respond'], ['other', others]].map(([k, text]) => ({ kind: k, text, n: names.filter((name) => kind(callOf(name)) === k).length })).filter((call) => call.n > 0);
+    return { names, groups: cells.groups, flagged: new Set(names.filter(belowZero)), signed, x0, x1, low, high, below, above, colourAt, calls, spans, stimulus: finite(onset) ? onset : spans.response[0], small };
+  }
+  /** Whether a span of time lies, at least in part, in the time the heatmap shows. */
+  const spanShown = (d, span) => realSpan(span) && span[1] > d.x0 && span[0] < d.x1;
+  /** The heatmap's key, in one place: what the colours of the strip mean (the calls that are drawn, each with its number of
+   *  cells), the mark of a cell below zero, and the two bars above the picture, each only when it is drawn. Entries as
+   *  drawLegend draws them. */
+  function heatmapKey(d, look) {
+    const items = [];
+    if (look.strip) { for (const call of d.calls) items.push({ kind: 'box', colour: look[CALL_STYLE[call.kind]], outline: true, text: counted(call.text, call.n) });
+      if (d.flagged.size) items.push({ kind: 'box', colour: look.colourFlag, text: 'below zero' }); }
+    if (look.marks && spanShown(d, d.spans.baseline)) items.push({ kind: 'box', colour: look.colourBaseline, height: look.windowBar, text: 'baseline' });
+    if (look.marks && spanShown(d, d.spans.response)) items.push({ kind: 'box', colour: look.colourWindow, height: look.windowBar, text: 'response window' });
+    return items;
+  }
+  /** Where the parts of the heatmap go in a w × h area, in one step, sized from the text they hold. From the top: the key (rows
+   *  starting at the left edge, since most of it is about what stands left of the picture); a strip for the stimulus label and the colour bar's title, with the bars of the baseline
+   *  and the response window under it; the picture. Left of the picture, outward (each as its distance from the picture's edge):
+   *  the strip of calls, the mark of a cell below zero, the cell names with their ticks, the axis title. Right of it: the colour bar, as tall as the picture, with its numbers: both ends, each with ≤ or ≥ when values
+   *  lie beyond it, and the round values between that are clear of them. ctx gets the look's font, for measuring here and for
+   *  the painter's own text. Gaps are written for 12-pixel text and grow with the text; widths come from the look. */
+  function heatmapLayout(ctx, w, h, look, d) {
+    ctx.font = look.px + 'px ' + (look.family || getComputedStyle(document.body).fontFamily);
+    const u = (n) => n * look.px / 12, wide = (text) => ctx.measureText(text).width, widest = (texts) => texts.reduce((most, text) => Math.max(most, wide(text)), 0);
+    const yTitle = look.yTitle == null ? 'Cells' : look.yTitle, barTitle = fitted(ctx, look.barTitle == null ? 'ΔF/F₀' : look.barTitle, w / 4), g = {}; let at = 0;   // (the colour bar's title makes room for itself, up to a quarter of the width)
+    if (look.strip) { at += u(2) + look.stripWidth; g.strip = at; if (d.flagged.size) { at += u(1) + look.flagWidth; g.flag = at; } }
+    if (S.rowNames) { at += u(1); g.tick = at; at += look.tickLength + u(2); g.names = at; at += widest(d.names.map(shortName)); }
+    g.beside = at;   // how far the strip and the names reach: a click there picks the row too
+    if (yTitle) { at += u(6) + look.px / 2; g.title = at; at += look.px / 2; }
+    const L = Math.ceil(at + u(6)), items = heatmapKey(d, look), key = items.length ? legendLayout(ctx, items, w - u(14), look, false) : null, top = u(8), under = top + (key ? key.height + u(4) : 0);
+    const stimulus = look.marks && finite(d.stimulus) && d.stimulus >= d.x0 && d.stimulus <= d.x1;
+    const labelled = stimulus && !!look.stimulusText, barred = look.marks && (spanShown(d, d.spans.baseline) || spanShown(d, d.spans.response)), titled = look.bar && !!barTitle;
+    const labels = labelled ? u(15) : 0, T = Math.round(under + Math.max(labels + (barred ? look.windowBar + u(4) : labelled ? u(2) : 0), titled ? u(9) + look.px : 0));
+    const below = look.tickLength + u(3) + look.px + u(5), H = Math.max(10, Math.floor(h - T - below - look.px - u(5))), Y = (v) => T + (d.high - v) / (d.high - d.low) * H;
+    // the colour bar's numbers: an end is written in full, whatever the spacing of the round values between
+    const between = ticks(d.low, d.high, Math.max(1, Math.floor(H / u(60)))), edge = (d.high - d.low) * 1e-9, clear = look.px * 1.1;
+    const exact = (v) => { let digits = between.step >= 1 ? 0 : Math.min(6, Math.ceil(-Math.log10(between.step) - 1e-9)); while (digits < 6 && Math.abs(+v.toFixed(digits) - v) > 1e-9 * Math.max(1, Math.abs(v))) digits++; return v.toFixed(digits).replace('-', '−'); };
+    const numbers = [{ value: d.high, text: (d.above ? '≥ ' : '') + exact(d.high) }, { value: d.low, text: (d.below ? '≤ ' : '') + exact(d.low) }]
+      .concat(between.values.filter((v) => v > d.low + edge && v < d.high - edge).map((value) => ({ value, text: Y(value) - T < clear || T + H - Y(value) < clear ? '' : tickText(value, between.step) })));
+    const R = Math.ceil(look.bar ? u(12) + Math.max(look.barWidth + look.tickLength + u(3) + widest(numbers.map((n) => n.text)), titled ? wide(barTitle) : 0) + u(6) : u(14)), W = Math.max(10, w - L - R);
+    return Object.assign(g, { L, T, W, H, yTitle, barTitle: titled ? barTitle : '', items, key: key ? { layout: key, x: u(8), y: top } : null, stimulus, labelY: under + u(7), lineTop: labelled ? under + labels : T,
+      barsY: barred ? T - u(4) - look.windowBar : null, titleY: T + H + below, bar: look.bar ? { x: L + W + u(12), numbers } : null });
+  }
+  /** Draws the heatmap into a w × h area by a look: the page's (PAGE_HEAT) or a saved figure's, the same drawing for both.
+   *  Returns where things went (heatmapLayout), the rows, the time shown and the colour range. */
+  function paintHeatmap(ctx, w, h, look, d) {
+    const u = (n) => n * look.px / 12, names = d.names, support = samplingSupport();
+    const g = heatmapLayout(ctx, w, h, look, d), { L, T, W, H } = g, rowH = H / Math.max(1, names.length), rowY = (c) => T + c * rowH;
+    const X = (t) => L + (t - d.x0) / (d.x1 - d.x0) * W, crisp = (at) => Math.round(at) + 0.5;
+    if (look.background) { ctx.fillStyle = look.background; ctx.fillRect(0, 0, w, h); }
+    // the picture, stretched without smoothing: each sample as wide as the frame times say, so a pause in the recording stays
+    // blank; white lines between the groups
+    ctx.fillStyle = look.colourMissing; ctx.fillRect(L, T, W, H);
+    ctx.save(); ctx.beginPath(); ctx.rect(L, T, W, H); ctx.clip(); ctx.imageSmoothingEnabled = false;
+    if (names.length) support.bounds.forEach((span, f) => { const x = X(span[0]), width = X(span[1]) - x; if (width > 0 && x < L + W && x + width > L) ctx.drawImage(d.small, f, 0, 1, names.length, x, T, width, H); });
+    ctx.fillStyle = look.colourDivider; for (const group of d.groups.slice(1)) ctx.fillRect(L, rowY(group.first) - look.divider / 2, W, look.divider);
+    ctx.restore();
+    // marks of time: the baseline and the response window as thin bars above the picture; the stimulus as a thin dashed line,
+    // its label above
+    if (g.barsY !== null) for (const [span, colour] of [[d.spans.baseline, look.colourBaseline], [d.spans.response, look.colourWindow]]) {
+      if (!realSpan(span)) continue; const a = Math.max(L, X(span[0])), b = Math.min(L + W, X(span[1])); if (b > a) { ctx.fillStyle = colour; ctx.fillRect(a, g.barsY, b - a, look.windowBar); }
     }
-    // the response call of each row, and lines between the groups when the rows are sorted by call
+    if (g.stimulus) {
+      const sx = crisp(X(d.stimulus)), dashed = (from, to, colour) => { ctx.strokeStyle = colour; ctx.beginPath(); ctx.moveTo(sx, from); ctx.lineTo(sx, to); ctx.stroke(); };
+      ctx.lineWidth = look.stimulusWidth; ctx.lineCap = 'butt'; ctx.setLineDash(look.stimulusDash);
+      dashed(g.lineTop, T, look.colourStimulus); dashed(T, T + H, d.signed ? look.colourOnLight : look.colourOnDark); ctx.setLineDash([]);
+      if (look.stimulusText) stimulusLabel(ctx, look, sx, L, W, g.labelY);
+    }
+    // beside the rows: each row's call as a strip, and a mark for a cell below zero
+    ctx.lineCap = 'butt'; ctx.lineJoin = 'miter'; ctx.textBaseline = 'middle'; ctx.textAlign = 'right';
     if (look.strip) {
-      names.forEach((name, c) => { ctx.fillStyle = CALL[kind(callOf(name))]; ctx.fillRect(left - u(7), top + c * rowH, u(4), Math.max(1, rowH - (rowH > 3 ? 0.5 : 0))); });
-      if (look.key && W > u(760)) { ctx.font = u(11) + 'px ' + family; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; let kx = left;   // the same key inside the picture, for saved files
-        for (const [colour, text] of d.callKey) { ctx.fillStyle = colour; ctx.fillRect(kx, h - u(14), u(10), u(8)); ctx.fillStyle = look.soft; ctx.fillText(text, kx + u(14), h - u(10)); kx += u(24) + ctx.measureText(text).width; } ctx.textBaseline = 'alphabetic'; }
+      const high = Math.max(1, rowH - (rowH > 3 ? 0.5 : 0));
+      names.forEach((name, c) => { ctx.fillStyle = look[CALL_STYLE[kind(callOf(name))]]; ctx.fillRect(L - g.strip, rowY(c), look.stripWidth, high);
+        if (d.flagged.has(name)) { ctx.fillStyle = look.colourFlag; ctx.fillRect(L - g.flag, rowY(c), look.flagWidth, high); } });
     }
-    if (S.order === 'call') names.forEach((name, c) => { if (c > 0 && d.rank(name) !== d.rank(names[c - 1])) { ctx.fillStyle = '#fff'; ctx.fillRect(left, top + c * rowH - 1, W, 2); } });
-    const chosen = look.selected ? names.indexOf(S.cell) : -1;
-    if (chosen >= 0) { const y = top + chosen * rowH;
-      // thin rows are marked beside the picture, never drawn over; tall rows get a frame
-      if (rowH >= 8) { ctx.strokeStyle = '#1F2933'; ctx.lineWidth = 1.5; ctx.strokeRect(left + 0.75, y + 0.75, W - 1.5, rowH - 1.5); }
-      ctx.fillStyle = '#1F2933'; ctx.beginPath(); ctx.moveTo(left + W + 2, y + rowH / 2); ctx.lineTo(left + W + 9, y + rowH / 2 - 5); ctx.lineTo(left + W + 9, y + rowH / 2 + 5); ctx.closePath(); ctx.fill(); }
-    // classic axes: a line on the left and below, ticks outside
-    ctx.strokeStyle = look.ink; ctx.lineWidth = u(1); ctx.beginPath(); ctx.moveTo(left - u(9.5), top); ctx.lineTo(left - u(9.5), top + H + 0.5); ctx.lineTo(left + W, top + H + 0.5); ctx.stroke();
-    ctx.fillStyle = look.ink; ctx.font = u(12) + 'px ' + family; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    const xs = ticks(time[0], time[time.length - 1], Math.max(2, Math.floor(W / u(110))));
-    for (const v of xs.values) { const x = Math.round(X(v)) + 0.5; ctx.beginPath(); ctx.moveTo(x, top + H); ctx.lineTo(x, top + H + u(5)); ctx.stroke(); ctx.fillText(tickText(v, xs.step), x, top + H + u(8)); }
-    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-    if (tall) { ctx.font = u(11) + 'px ' + family; names.forEach((name, c) => { ctx.fillStyle = look.selected && name === S.cell ? '#1F2933' : look.soft; ctx.fillText(shortName(name), left - u(13), top + (c + 0.5) * rowH); }); }
-    else { const every = ticks(0, names.length, Math.max(2, Math.floor(H / u(60)))).step; for (let c = every; c <= names.length; c += every) { const y = Math.round(top + (c - 0.5) * rowH) + 0.5; ctx.beginPath(); ctx.moveTo(left - u(9.5), y); ctx.lineTo(left - u(14), y); ctx.stroke(); ctx.fillText(String(c), left - u(17), y); } }
-    ctx.font = '600 ' + u(13) + 'px ' + family; ctx.fillStyle = look.titleInk || '#1F2933'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; writeText(ctx, look.xTitle == null ? 'Time (s)' : look.xTitle, left + W / 2, h - u(10), look);
-    if (!tall) { ctx.save(); ctx.translate(u(16), top + H / 2); ctx.rotate(-Math.PI / 2); writeText(ctx, look.yTitle == null ? 'Cell' : look.yTitle, 0, 0, look); ctx.restore(); }
-    // colour bar with ticks, as in the app
-    if (look.bar) {
-      const barX = left + W + u(26), barH = Math.min(u(190), H), barY = top + (tall ? 0 : Math.max(0, (H - barH) / 2)), low = signed ? -limit : 0;
-      for (let i = 0; i < barH; i++) { const k = Math.round((1 - i / (barH - 1)) * 255) * 3; ctx.fillStyle = 'rgb(' + colours[k] + ',' + colours[k + 1] + ',' + colours[k + 2] + ')'; ctx.fillRect(barX, barY + i, u(13), 1.5); }
-      ctx.strokeStyle = '#4d4d4d'; ctx.lineWidth = 0.6; ctx.strokeRect(barX + 0.3, barY + 0.3, u(13) - 0.6, barH - 0.6);
-      ctx.font = u(12) + 'px ' + family; ctx.fillStyle = look.ink; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-      const bs = ticks(low, limit, signed ? 6 : 5);
-      for (const v of bs.values) { const y = barY + (1 - (v - low) / (limit - low)) * (barH - 1); ctx.fillRect(barX + u(13), Math.round(y), u(4), 1);
-        ctx.fillText((v === limit && d.largest > limit ? '≥ ' : v === low && signed && d.largest > limit ? '≤ ' : '') + tickText(v, bs.step).replace('-', '−'), barX + u(20), y); }
-      ctx.font = '600 ' + u(13) + 'px ' + family; ctx.fillStyle = look.titleInk || '#1F2933'; ctx.textBaseline = 'alphabetic'; writeText(ctx, look.barTitle == null ? 'ΔF/F₀' : look.barTitle, barX - u(2), barY - u(look.page ? 9 : 14), look);
+    // cell names: every row when the rows are tall enough for the text, else every Nth, each with a tick to its row
+    const every = Math.max(1, Math.ceil(look.px * 1.1 / rowH)), named = [];
+    if (S.rowNames) {
+      ctx.strokeStyle = ctx.fillStyle = look.ink; ctx.lineWidth = look.axisWidth; ctx.beginPath();
+      for (let c = 0; c < names.length; c += every) { const y = rowY(c + 0.5); ctx.moveTo(L - g.tick, crisp(y)); ctx.lineTo(L - g.tick - look.tickLength, crisp(y)); ctx.fillText(shortName(names[c]), L - g.names, y); named.push(names[c]); }
+      ctx.stroke();
     }
-    return { L: left, T: top, W, H, rows: names.length, bounds: support.bounds };
+    // on the page, the selected cell: an arrow beside its row, and a frame around it when the row is tall enough to keep its colours
+    const chosen = look.page ? names.indexOf(S.cell) : -1;
+    if (chosen >= 0) {
+      const y = rowY(chosen), mid = y + rowH / 2; ctx.strokeStyle = ctx.fillStyle = look.colourSelected;
+      if (rowH >= u(8)) { ctx.lineWidth = look.divider; ctx.strokeRect(L + look.divider / 2, y + look.divider / 2, W - look.divider, rowH - look.divider); }
+      ctx.beginPath(); ctx.moveTo(L + W + u(2), mid); ctx.lineTo(L + W + u(9), mid - u(5)); ctx.lineTo(L + W + u(9), mid + u(5)); ctx.closePath(); ctx.fill();
+    }
+    // the time axis: a line under the picture, ticks pointing out, numbers with a true minus sign; then the two titles
+    const bottom = T + H + 0.5, xs = steppedTicks(d.x0, d.x1, look.xStep, ticks(d.x0, d.x1, Math.max(2, Math.floor(W / u(90)))));
+    ctx.strokeStyle = ctx.fillStyle = look.ink; ctx.lineWidth = look.axisWidth; ctx.beginPath(); ctx.moveTo(L, bottom); ctx.lineTo(L + W, bottom);
+    for (const v of xs.values) { ctx.moveTo(crisp(X(v)), bottom); ctx.lineTo(crisp(X(v)), bottom + look.tickLength); }
+    ctx.stroke();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top'; for (const v of xs.values) ctx.fillText(tickText(v, xs.step), crisp(X(v)), T + H + look.tickLength + u(3));
+    writeText(ctx, centred(ctx, look.xTitle == null ? 'Time (s)' : look.xTitle, L + W / 2, w, look), L + W / 2, g.titleY, look);
+    if (g.yTitle) { ctx.save(); ctx.translate(L - g.title, T + H / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'middle'; writeText(ctx, centred(ctx, g.yTitle, T + H / 2, h, look), 0, 0, look); ctx.restore(); }
+    // the colour bar: every colour of the range from the upper limit down, a tick at each number, the title above
+    if (g.bar) {
+      const x = g.bar.x, Y = (v) => T + (d.high - v) / (d.high - d.low) * H, right = x + look.barWidth;
+      for (let i = 0; i < H; i++) { const c = d.colourAt(d.high - (i + 0.5) / H * (d.high - d.low)); ctx.fillStyle = 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')'; ctx.fillRect(x, T + i, look.barWidth, Math.min(1.5, H - i)); }
+      ctx.strokeStyle = ctx.fillStyle = look.ink; ctx.lineWidth = look.axisWidth; ctx.strokeRect(x, T, look.barWidth, H);
+      ctx.beginPath(); for (const n of g.bar.numbers) { const y = Y(n.value); ctx.moveTo(right, y); ctx.lineTo(right + look.tickLength, y); } ctx.stroke();
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; for (const n of g.bar.numbers) if (n.text) ctx.fillText(n.text, right + look.tickLength + u(3), Y(n.value));
+      if (g.barTitle) writeText(ctx, g.barTitle, x, g.labelY, look);
+    }
+    if (g.key) drawLegend(ctx, g.key.layout, g.key.x, g.key.y, look);
+    return Object.assign(g, { rows: names.length, names, named, groups: d.groups, bounds: support.bounds, x0: d.x0, x1: d.x1, low: d.low, high: d.high, below: d.below, above: d.above });
   }
   function drawHeatmap() {
     const canvas = $('heatmap'), box = $('heatmap-box'), r = S.results; $('heatmap-empty').hidden = !!r; if (!r || $('panel-heatmap').hidden) return;
-    const d = heatmapData(), names = d.names, limit = d.limit, signed = d.signed; Heat.names = names;
-    $('heatmap-legend').innerHTML = '<span class="chip">ΔF/F₀ <i class="scale" style="background:linear-gradient(to right,' + PALETTES[S.palette].join(',') + ')"></i>' + (signed ? '−' + fmt(limit) + ' to ' + fmt(limit) : '0 to ' + fmt(limit) + ' (below 0: darkest colour)') + '</span>' +
-      '<span class="chip">strip beside the Cell axis:</span>' + d.callKey.map(([colour, text]) => '<span class="chip"><i class="band" style="background:' + colour + '"></i>' + text + '</span>').join('') +
-      '<span class="chip"><i class="band" style="background:#e5e5e5"></i>no ΔF/F₀ trace</span><span class="chip">◀ selected cell · dashed line: stimulus · top strip: baseline and response window</span>';
-    const tall = S.tall, width = Math.max(320, box.clientWidth - 2), height = tall ? TOP + names.length * ROW + BOTTOM : Math.max(220, box.clientHeight - 2);
-    box.classList.toggle('fit', !tall); canvas.style.width = width + 'px'; canvas.style.height = height + 'px';
-    const { ctx, w, h } = fit(canvas);
-    Heat.geom = paintHeatmap(ctx, w, h, PAGE_HEAT, d, tall);
+    canvas.style.width = Math.max(320, box.clientWidth - 2) + 'px'; canvas.style.height = Math.max(220, box.clientHeight - 2) + 'px';
+    const { ctx, w, h } = fit(canvas), g = Heat.geom = paintHeatmap(ctx, w, h, PAGE_HEAT, heatmapData(PAGE_HEAT));
+    // the key and the colour bar are drawn in the picture: said here for a screen reader
+    canvas.setAttribute('aria-label', 'Heatmap of ΔF/F₀, one row for each of ' + plural(g.rows, 'cell') + ' against time. Colours from ' + g.bar.numbers[1].text + ' to ' + g.bar.numbers[0].text + '. ' + g.items.map((item) => item.text).join('; '));
   }
   function heatmapAt(event) {
     const g = Heat.geom; if (!S.results || !g) return null;
-    const box = $('heatmap').getBoundingClientRect(), y = event.clientY - box.top, x = event.clientX - box.left, row = Math.floor((y - TOP) / g.H * g.rows);
-    if (row < 0 || row >= Heat.names.length || x < LEFT - 12 || x > LEFT + g.W) return null;
-    const time = S.results.time, wanted = time[0] + Math.max(0, Math.min(1, (x - LEFT) / g.W)) * (time[time.length - 1] - time[0]), f = nearestFrame(wanted) - 1;
-    return { name: Heat.names[row], frame: f, inside: x >= LEFT, gap: wanted < g.bounds[f][0] || wanted > g.bounds[f][1] };
+    const box = $('heatmap').getBoundingClientRect(), y = event.clientY - box.top, x = event.clientX - box.left, row = Math.floor((y - g.T) / g.H * g.rows);
+    if (row < 0 || row >= g.rows || x < g.L - g.beside || x > g.L + g.W) return null;
+    const wanted = g.x0 + Math.max(0, Math.min(1, (x - g.L) / g.W)) * (g.x1 - g.x0), f = nearestFrame(wanted) - 1;
+    return { name: g.names[row], frame: f, inside: x >= g.L, gap: wanted < g.bounds[f][0] || wanted > g.bounds[f][1] };
   }
 
   // ---------------------------------------------------------------- tables (the saved tables themselves; long decimals are shortened for reading only)
@@ -1530,112 +2081,152 @@
       manifest: S.results.manifest, settingsPending: hasPending(), displayed_window: S.window, cell: S.cell, group: GROUPS[S.group],
       frame: S.frame, time_s: frameTimes()[S.frame - 1], view: S.view, results_folder: S.results.folder || (S.state && S.state.folder) || null,
       time_range: Plot.geom ? [Plot.geom.x0, Plot.geom.x1] : [Plot.x0, Plot.x1], time_zoomed: Plot.x0 !== null, palette: S.palette, range: S.range, order: S.order,
-      plot: S.plotMode, signal: S.results && isDff() ? 'dF/F0' : S.signal, y_axis: Plot.geom ? [Plot.geom.lo, Plot.geom.hi] : null, y_axis_typed: Plot.y[S.signal] || null, plotted: (Plot.series || []).map((s) => s.label), all_traces_drawn: S.every };
+      plot: S.plotMode, signal: S.results && isDff() ? 'dF/F0' : S.signal, y_axis: Plot.geom ? [Plot.geom.lo, Plot.geom.hi] : null, y_axis_typed: Plot.y[S.signal] || null, plotted: (Plot.series || []).map((s) => meanLabel(s, bandDrawn(s, PAGE_LOOK))), all_traces_drawn: S.every, thresholds_drawn: S.thresholds, cells_left_out: Array.from(leftOut()) };
   }
+  /** How saved pictures are written. Format, resolution and TIFF compression are one setting for every saved picture, the
+   *  figures and the pictures of the cells alike; size is the width of a picture of the cells (a figure has its own). Each has
+   *  a list on the page (saveBoxes), and showSaveOptions makes those lists show what is set here. */
   const Save = { format: 'png', size: '8x6', dpi: 300, compression: 'lzw' };
   const inches = () => Save.size === 'screen' ? null : Save.size.split('x').map(Number);
+  const saveBoxes = { format: 'save-format', size: 'save-size', dpi: 'save-dpi', compression: 'save-compression' };
+  function showSaveOptions() {
+    for (const key of Object.keys(saveBoxes)) $(saveBoxes[key]).value = String(Save[key]);
+    $('save-compression-label').hidden = Save.format !== 'tiff';
+    const size = inches(), wide = S.info ? Math.round(S.info.width * pictureScale()) : 0;
+    $('save-pixels').textContent = wide ? 'Pictures and frames ' + wide + ' px wide' + (size && wide < Math.round(size[0] * Save.dpi) ? ' (4× the recording, the most it allows).' : '.') : '';
+  }
   // ---------------------------------------------------------------- figures: how a saved plot or heatmap looks
-  const PT = 96 / 72;   // pixels in a point
-  const FONTS = { page: null, arial: 'Arial, Helvetica, sans-serif', times: '"Times New Roman", Times, serif', courier: '"Courier New", Courier, monospace' };
-  /** Everything the figure editor sets, with the values of a figure nobody has edited. Sizes in inches, text and lines in
-   *  points, as in a graphing program. null: the figure's own text, or the automatic value. */
-  const FIGURE_DEFAULT = {
-    plot: { width: 8, height: 6, title: null, xTitle: null, yTitle: null, font: 'page', text: 9, titleText: 10, ink: '#65717d', background: 'white',
-      xMin: null, xMax: null, xStep: null, yMin: null, yMax: null, yStep: null, frame: 'box', grid: true, axisWidth: 0.75,
-      meanWidth: 1.8, colourMean: '#0072b2', sem: 'band', cellWidth: 1.3, colourCell: '#1f2933', traceWidth: 0.7, colourResponded: CALL.responded.toLowerCase(), colourNot: CALL.not.toLowerCase(),
-      legend: 'top', stimulus: true, stimulusText: 'stimulus', baseline: true, window: true, levels: true },
-    heatmap: { width: 8, height: 6, title: null, xTitle: null, yTitle: null, barTitle: null, font: 'page', text: 9, titleText: 10, ink: '#333333', background: 'white', barMax: null, bar: true, marks: true, strip: true }
-  };
   /** What belongs to one recording or one signal and is not carried to the next: the title, the Y axis title and the axis numbers. */
-  const FIGURE_OWN = ['title', 'yTitle', 'xMin', 'xMax', 'xStep', 'yMin', 'yMax', 'yStep', 'barMax'];
+  const FIGURE_OWN = ['title', 'yTitle', 'xMin', 'xMax', 'xStep', 'yMin', 'yMax', 'yStep', 'barMin', 'barMax'];
   const FIGURE_MOST = 80e6;   // pixels in one saved figure: beyond this a browser may not draw it
-  const Fig = { plot: Object.assign({}, FIGURE_DEFAULT.plot), heatmap: Object.assign({}, FIGURE_DEFAULT.heatmap), open: null, queued: false };
-  /** The boxes of the figure editor, in order: [section, key, label, type, more]. Types: number (unit, least, most; an empty box
-   *  is "auto" where the default is null), text (the figure's own text until one is typed), choice, tick, colour, and page (a list
-   *  that lives on the page, such as the heatmap's colours, shown here too so one place has everything). "when" leaves out a box
-   *  for something the plot on screen does not show. */
+  /** The room a figure's plot area (the heatmap's picture) should have. said: the share of the figure; under it, the editor
+   *  says beside the text size that the text is too large for the figure. least: its width and its height in heights of the
+   *  figure's text; under it the text and the legend have left no plot to speak of. A number that would do that is not taken
+   *  (FIGURE_ROOM), and a figure that got there another way is not saved. */
+  const FIT = { said: 0.4, least: 4 };
+  /** The numbers that decide whether the plot has room, each with what the editor says when it would have none. */
+  const FIGURE_ROOM = { text: 'Too large for this figure size', titleText: 'Too large for this figure size', width: 'Too small for this text size', height: 'Too small for this text size' };
+  /** The two figures as edited (each starts as its style), which one the editor shows, and what the last drawing placed where.
+   *  earlier: what start() took from the preferences, for each figure and for the file settings (Save), so that the editor
+   *  can say while any of it is in use. rows: the editor's number boxes, each with the line it speaks on (figureSay). */
+  const Fig = { plot: Object.assign({}, STYLE.plot), heatmap: Object.assign({}, STYLE.heatmap), open: null, queued: false, drawn: null, earlier: { plot: {}, heatmap: {}, save: {} }, rows: {} };
+  /** The boxes of the figure editor, in order: [section, key, label, type, more]; key is an entry of the style table. Types:
+   *  number (unit, with the least and the most it takes, or "above": the number it must be greater than; an empty box is
+   *  "auto" where the default is null), text (the figure's own text until one is typed), choice, tick, colour, and page (a list
+   *  or a tick box that lives on the page, such as the heatmap's colours or its cell names, shown here too so one place has
+   *  everything: its key is the id of the page's control). "when" leaves out a box for something the plot on screen does not show. */
   const FIGURE_SIZE = [['Size', 'width', 'Width', 'number', { unit: 'in', least: 1, most: 20 }], ['Size', 'height', 'Height', 'number', { unit: 'in', least: 1, most: 20 }],
-    ['Size', 'save-dpi', 'Resolution', 'page'], ['Size', 'save-format', 'Format', 'page'], ['Size', 'save-compression', 'TIFF compression', 'page']];
-  const FIGURE_TEXT = [['Text', 'font', 'Font', 'choice', { options: [['page', 'As on the page'], ['arial', 'Arial'], ['times', 'Times New Roman'], ['courier', 'Courier New']] }],
+    ['File', 'save-dpi', 'Resolution', 'page'], ['File', 'save-format', 'Format', 'page'], ['File', 'save-compression', 'TIFF compression', 'page']];
+  /** What the editor says beside the name of a section: the file settings are not this figure's alone (Save). */
+  const FIGURE_SECTIONS = { File: 'for every saved picture' };
+  const FIGURE_TEXT = [['Text', 'font', 'Font', 'choice', { options: FONTS.map((font) => font.slice(0, 2)) }],
     ['Text', 'text', 'Text size', 'number', { unit: 'pt', least: 4, most: 48 }], ['Text', 'titleText', 'Title size', 'number', { unit: 'pt', least: 4, most: 72 }],
     ['Text', 'ink', 'Text and axes', 'colour'], ['Text', 'background', 'Background', 'choice', { options: [['white', 'White'], ['transparent', 'Transparent']] }]];
-  const cellDrawn = () => S.plotMode === 'cell' && !!S.cell && !!shownTraces()[S.cell], callsDrawn = () => S.every || S.plotMode === 'calls';
+  const cellDrawn = () => S.plotMode === 'cell' && !!S.cell && !!shownTraces()[S.cell], byCall = () => S.plotMode === 'calls', cellCalled = () => S.plotMode === 'cell' && isDff();
   const FIGURE_FIELDS = {
     plot: FIGURE_SIZE.concat([['Text', 'title', 'Title', 'text'], ['Text', 'xTitle', 'X axis title', 'text'], ['Text', 'yTitle', 'Y axis title', 'text']], FIGURE_TEXT, [
-      ['Axes', 'xMin', 'X min', 'number', {}], ['Axes', 'xMax', 'X max', 'number', {}], ['Axes', 'xStep', 'X ticks every', 'number', { least: 0 }],
-      ['Axes', 'yMin', 'Y min', 'number', {}], ['Axes', 'yMax', 'Y max', 'number', {}], ['Axes', 'yStep', 'Y ticks every', 'number', { least: 0 }],
-      ['Axes', 'frame', 'Frame', 'choice', { options: [['box', 'Box'], ['open', 'Left and bottom']] }], ['Axes', 'grid', 'Grid lines', 'tick'], ['Axes', 'axisWidth', 'Axis thickness', 'number', { unit: 'pt', least: 0.25, most: 6 }],
+      ['Axes', 'xMin', 'X min', 'number', {}], ['Axes', 'xMax', 'X max', 'number', {}], ['Axes', 'xStep', 'X ticks every', 'number', { above: 0 }],
+      ['Axes', 'yMin', 'Y min', 'number', {}], ['Axes', 'yMax', 'Y max', 'number', {}], ['Axes', 'yStep', 'Y ticks every', 'number', { above: 0 }],
+      ['Axes', 'frame', 'Frame', 'choice', { options: [['open', 'Left and bottom'], ['box', 'Box']] }], ['Axes', 'grid', 'Grid lines', 'tick'], ['Axes', 'axisWidth', 'Axis thickness', 'number', { unit: 'pt', least: 0.25, most: 6 }],
       ['Lines', 'meanWidth', 'Mean line', 'number', { unit: 'pt', least: 0.25, most: 10 }], ['Lines', 'colourMean', 'Mean colour', 'colour', { when: () => S.plotMode !== 'calls' }],
       ['Lines', 'sem', 'SEM', 'choice', { options: [['band', 'Shaded band'], ['none', 'Not shown']] }],
       ['Lines', 'cellWidth', 'Cell line', 'number', { unit: 'pt', least: 0.25, most: 10, when: cellDrawn }], ['Lines', 'colourCell', 'Cell colour', 'colour', { when: cellDrawn }],
-      ['Lines', 'traceWidth', 'All traces', 'number', { unit: 'pt', least: 0.1, most: 6, when: () => S.every }],
-      ['Lines', 'colourResponded', 'Responded', 'colour', { when: callsDrawn }], ['Lines', 'colourNot', 'Did not respond', 'colour', { when: callsDrawn }],
-      ['Marks', 'legend', 'Legend', 'choice', { options: [['top', 'Above the plot'], ['none', 'Not shown']] }], ['Marks', 'stimulus', 'Stimulus line', 'tick'], ['Marks', 'stimulusText', 'Stimulus label', 'text'],
-      ['Marks', 'baseline', 'Baseline', 'tick'], ['Marks', 'window', 'Response window', 'tick'], ['Marks', 'levels', 'Thresholds', 'tick', { when: () => S.plotMode === 'cell' && isDff() }]]),
+      ['Lines', 'traceWidth', 'All traces', 'number', { unit: 'pt', least: 0.1, most: 6, when: () => S.every }], ['Lines', 'colourTrace', 'Single cells', 'colour', { when: () => S.every }],
+      ['Lines', 'colourResponded', 'Responded', 'colour', { when: () => S.every || byCall() }], ['Lines', 'colourNot', 'Did not respond', 'colour', { when: byCall }],
+      ['Marks', 'legend', 'Legend', 'choice', { options: [['top', 'Above the plot'], ['right', 'Right of the plot'], ['none', 'Not shown']] }], ['Marks', 'stimulus', 'Stimulus line', 'tick'], ['Marks', 'stimulusText', 'Stimulus label', 'text'],
+      ['Marks', 'baseline', 'Baseline', 'tick'], ['Marks', 'window', 'Response window', 'tick'],
+      ['Marks', 'run', 'Response', 'tick', { when: cellCalled }], ['Marks', 'levels', 'Required rise', 'tick', { when: cellCalled }], ['Marks', 'thresholds', 'Thresholds', 'page', { when: cellCalled }]]),
     heatmap: FIGURE_SIZE.concat([['Text', 'title', 'Title', 'text'], ['Text', 'xTitle', 'X axis title', 'text'], ['Text', 'yTitle', 'Y axis title', 'text'], ['Text', 'barTitle', 'Colour bar title', 'text']], FIGURE_TEXT, [
-      ['Colours', 'palette', 'Colours', 'page'], ['Colours', 'range', 'Range', 'page'], ['Colours', 'barMax', 'Scale to', 'number', { least: 0 }], ['Colours', 'bar', 'Colour bar', 'tick'], ['Colours', 'order', 'Sort', 'page'],
+      ['Axes', 'xMin', 'X min', 'number', {}], ['Axes', 'xMax', 'X max', 'number', {}], ['Axes', 'xStep', 'X ticks every', 'number', { above: 0 }],
+      ['Colours', 'palette', 'Colours', 'page'], ['Colours', 'range', 'Range', 'page'], ['Colours', 'barMin', 'Scale from', 'number', {}], ['Colours', 'barMax', 'Scale to', 'number', {}], ['Colours', 'bar', 'Colour bar', 'tick'],
+      ['Rows', 'order', 'Sort', 'page'], ['Rows', 'row-names', 'Cell names', 'page'], ['Rows', 'hide-excluded', 'Hide excluded cells', 'page'],
       ['Marks', 'marks', 'Windows and stimulus', 'tick'], ['Marks', 'strip', 'Response calls', 'tick']])
   };
-  /** Whether a value may be kept for a box: the one rule for what is typed and for what comes back from the preferences. */
+  /** The boxes of an axis: its two limits and the spacing of its ticks (the colour scale has no spacing). */
+  const FIGURE_AXES = { x: ['xMin', 'xMax', 'xStep'], y: ['yMin', 'yMax', 'yStep'], colour: ['barMin', 'barMax'] };
+  /** Whether a value may be kept for a box by the box's own limits: the one rule for what is typed and for what comes back from the preferences. */
   function figureValid(kind, key, value) {
     const field = FIGURE_FIELDS[kind].find((f) => f[1] === key), type = field && field[3], more = (field && field[4]) || {};
-    if (type === 'number') return value === null ? FIGURE_DEFAULT[kind][key] === null : finite(value) && (more.least == null || (more.least === 0 ? value > 0 : value >= more.least)) && (more.most == null || value <= more.most);
+    if (type === 'number') return value === null ? STYLE[kind][key] === null : finite(value) && (more.least == null || value >= more.least) && (more.most == null || value <= more.most) && (more.above == null || value > more.above);
     if (type === 'text') return value === null || (typeof value === 'string' && value.length <= 80);
     if (type === 'tick') return typeof value === 'boolean'; if (type === 'colour') return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
     return type === 'choice' && more.options.some((option) => option[0] === value);
   }
+  /** The ends of a figure's axes before a limit is typed for them in the editor, as the painters find them: the time shown and,
+   *  for the plot, the Y range. The colour scale has none: a limit typed for one of its ends moves the other (heatmapRange). */
+  function figureAuto(kind) {
+    if (kind === 'heatmap') return { x: wholeTime() };
+    const look = lookOf(Fig.plot), times = plotTimes(look); return { x: times.auto, y: plotLimits(plotParts(look, times.x0, times.x1), look).auto };
+  }
+  /** Why a figure cannot use a number, in the words the editor puts under its box; '' when it can. value: the number, null for
+   *  an empty box, NaN for text that is no number. First the box's own limits (figureValid). Then the room for the plot: a
+   *  size of the text or of the figure that would leave it under the least (FIT), and with less than it has now. Then the rules
+   *  of an axis, which span its boxes: its two limits must leave a range, each with the other one or, where that is not
+   *  typed, with the automatic end; and its ticks may not be closer than the painters draw them. The painters go by the same
+   *  two rules (typedRange, steppedTicks): a number that passed here and no longer does, because the plot under the figure
+   *  has changed, is not drawn either, and the editor marks it. */
+  function figureRefusal(kind, key, value) {
+    const more = FIGURE_FIELDS[kind].find((f) => f[1] === key)[4] || {}, fig = Fig[kind], said = (v) => String(+v.toPrecision(6)).replace('-', '−');
+    if (!figureValid(kind, key, value)) return more.least != null ? more.least + ' to ' + more.most + ' ' + more.unit : more.above != null ? 'Above ' + more.above : 'Not a number';
+    if (FIGURE_ROOM[key] && value !== fig[key]) { const room = figureFit(kind, { [key]: value }).room; return room < FIT.least && room < figureFit(kind).room ? FIGURE_ROOM[key] : ''; }
+    const axis = value === null ? null : Object.keys(FIGURE_AXES).find((name) => FIGURE_AXES[name].includes(key)); if (!axis) return '';
+    const [min, max, step] = FIGURE_AXES[axis], auto = figureAuto(kind)[axis] || [-Infinity, Infinity], now = (k) => (k === key ? value : fig[k]), range = typedRange(auto, now(min), now(max));
+    if (key === min) return range ? '' : finite(fig[max]) ? 'Minimum must be below maximum' : 'Must be below ' + said(auto[1]);
+    if (key === max) return range ? '' : finite(fig[min]) ? 'Maximum must be above minimum' : 'Must be above ' + said(auto[0]);
+    const [lo, hi] = range || auto, least = (hi - lo) / TICKS_MOST, digit = Math.pow(10, Math.floor(Math.log10(least)) - 1);   // (the least spacing is said to two figures, rounded up)
+    return value < least ? 'At least ' + said(Math.ceil(least / digit - 1e-9) * digit) : '';
+  }
   /** A figure's settings as kept in the preferences: only what differs from the defaults, without what belongs to one recording. */
-  const figureKept = (kind) => { const kept = {}; for (const key of Object.keys(FIGURE_DEFAULT[kind])) if (!FIGURE_OWN.includes(key) && Fig[kind][key] !== FIGURE_DEFAULT[kind][key]) kept[key] = Fig[kind][key]; return kept; };
+  const figureKept = (kind) => { const kept = {}; for (const key of Object.keys(STYLE[kind])) if (!FIGURE_OWN.includes(key) && Fig[kind][key] !== STYLE[kind][key]) kept[key] = Fig[kind][key]; return kept; };
   /** Takes kept settings back: known boxes and valid values only, so an old or damaged preference cannot break a figure. */
   function figureRestore(kind, text) {
     let kept; try { kept = JSON.parse(text); } catch (broken) { return; } if (!kept || typeof kept !== 'object') return;
-    for (const key of Object.keys(FIGURE_DEFAULT[kind])) if (!FIGURE_OWN.includes(key) && kept[key] !== undefined && figureValid(kind, key, kept[key])) Fig[kind][key] = kept[key];
+    for (const key of Object.keys(STYLE[kind])) if (!FIGURE_OWN.includes(key) && kept[key] !== undefined && kept[key] !== STYLE[kind][key] && figureValid(kind, key, kept[key])) Fig.earlier[kind][key] = Fig[kind][key] = kept[key];
   }
-  const sameColour = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
-  /** The editor's settings as a painter's look: points become pixels, and a colour that was changed replaces the page's. While
-   *  "Text and axes" is untouched the figure keeps the page's own grays for its title, legend, frame and ticks. */
-  function figureLook(kind, fig) {
-    const own = !sameColour(fig.ink, FIGURE_DEFAULT[kind].ink);
-    const look = { px: fig.text * PT, titlePx: fig.titleText * PT, family: FONTS[fig.font] || null, ink: fig.ink, titleInk: own ? fig.ink : '#1F2933', background: fig.background === 'transparent' ? null : '#fff', xTitle: fig.xTitle, yTitle: fig.yTitle };
-    if (kind === 'heatmap') return Object.assign(look, { legendInk: own ? fig.ink : '#3E4C59', swap: {}, soft: own ? fig.ink : '#65717D', bar: fig.bar, marks: fig.marks, strip: fig.strip, selected: false, barTitle: fig.barTitle });
-    const swap = {}; for (const [key, colour] of [['colourMean', '#0072B2'], ['colourCell', '#1F2933'], ['colourResponded', CALL.responded], ['colourNot', CALL.not]]) if (!sameColour(fig[key], colour)) swap[colour] = fig[key];
-    return Object.assign(look, { legendInk: own ? fig.ink : '#3E4C59', line: own ? fig.ink : '#C5CED8', tickLine: own ? fig.ink : '#DEE4EA', grid: fig.grid, frame: fig.frame, axis: fig.axisWidth * PT,
-      mean: fig.meanWidth * PT, cell: fig.cellWidth * PT, trace: fig.traceWidth * PT, sem: fig.sem !== 'none', showStimulus: fig.stimulus, stimulus: fig.stimulusText || '', baseline: fig.baseline, window: fig.window, levels: fig.levels,
-      x: [fig.xMin, fig.xMax], y: [fig.yMin, fig.yMax], xStep: fig.xStep, yStep: fig.yStep, swap });
+  /** Whether a figure still uses a setting kept from an earlier session: one of its own, or one of the file settings the editor shows. */
+  const earlierInUse = (kind) => Object.keys(Fig.earlier[kind]).some((key) => Fig[kind][key] === Fig.earlier[kind][key]) ||
+    ['format', 'dpi', 'compression'].some((key) => Save[key] === Fig.earlier.save[key] && (key !== 'compression' || Save.format === 'tiff'));
+  /** A figure measured out from its settings: its size in pixels at 96 to the inch, its look, its title and the height of the
+   *  row the title takes (none without a title). */
+  function figureFrame(fig) { const look = lookOf(fig), title = fig.title || ''; return { w: Math.round(fig.width * 96), h: Math.round(fig.height * 96), look, title, top: title ? 6 * look.px / 12 + look.titlePx * 1.5 : 0 }; }
+  /** What FIT is held against, from a figure's frame and where its parts went (g): how much of the figure the plot area takes
+   *  (share), how much of what the title leaves (body), and its shorter side in heights of the text (room). */
+  const fitOf = (frame, g) => ({ share: g.W * g.H / (frame.w * frame.h), body: g.W * g.H / (frame.w * Math.max(1, frame.h - frame.top)), room: Math.min(g.W, g.H) / frame.look.px });
+  /** The fit a figure would have with some settings changed (none: as it is): laid out as the painters lay it out, nothing drawn. */
+  function figureFit(kind, changes) {
+    const frame = figureFrame(Object.assign({}, Fig[kind], changes)), ctx = document.createElement('canvas').getContext('2d'), { w, h, look, top } = frame;
+    return fitOf(frame, kind === 'heatmap' ? heatmapLayout(ctx, w, h - top, look, heatmapData(look)) : plotPlan(ctx, w, h - top, look).g);
   }
-  /** The plot or the heatmap as a figure of the size set in the editor: its title, the plot's legend, then the drawing by the
+  /** The plot or the heatmap as a figure of the size set in the editor: a title when one was typed, then the drawing by the
    *  page's own painter. The preview and the saved file are this one drawing at different numbers of pixels per inch. */
   function figureCanvas(kind, perInch) {
-    const fig = Fig[kind], w = Math.round(fig.width * 96), h = Math.round(fig.height * 96), look = figureLook(kind, fig);
+    const fig = Fig[kind], frame = figureFrame(fig), { w, h, look, title, top: y } = frame;
     const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(fig.width * perInch)); canvas.height = Math.max(1, Math.round(fig.height * perInch));
     if (canvas.width * canvas.height > FIGURE_MOST) throw new Error('This figure would be ' + canvas.width + ' × ' + canvas.height + ' pixels. Choose a smaller size or resolution.');
     const ctx = canvas.getContext('2d'), u = (n) => n * look.px / 12, family = look.family || getComputedStyle(document.body).fontFamily; ctx.setTransform(canvas.width / w, 0, 0, canvas.height / h, 0, 0);
     if (look.background) { ctx.fillStyle = look.background; ctx.fillRect(0, 0, w, h); }
-    const title = fig.title == null ? S.info.recording : fig.title; let y = 0; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
-    if (title) { ctx.fillStyle = look.titleInk; ctx.font = '600 ' + look.titlePx + 'px ' + family; writeText(ctx, title, u(12), u(6) + look.titlePx * 0.75, look); y = u(6) + look.titlePx * 1.5; }
-    const heat = kind === 'heatmap' ? heatmapData(fig.barMax) : null;
-    const items = heat ? (fig.strip ? heat.callKey.map(([colour, text]) => ({ kind: 'band', colour, text, fixed: true })) : []) : fig.legend !== 'none' ? legendItems(look) : [];
-    if (items.length) {
-      ctx.font = look.px + 'px ' + family; let x = u(12); y += u(12);
-      for (const item of items) {
-        const width = (item.kind === 'note' ? 0 : u(24)) + ctx.measureText(item.text).width + u(16); if (x + width > w - u(8) && x > u(12)) { x = u(12); y += u(18); }
-        const colour = item.fixed ? item.colour : look.swap[item.colour] || item.colour;
-        if (item.kind === 'line') { ctx.fillStyle = colour; ctx.fillRect(x, y - u(1.5), u(18), u(3)); }
-        else if (item.kind === 'band') { ctx.fillStyle = colour; ctx.fillRect(x, y - u(5), u(14), u(10)); ctx.strokeStyle = '#C5CED8'; ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y - u(5) + 0.5, u(14), u(10)); }
-        ctx.fillStyle = item.kind === 'note' ? item.colour : look.legendInk; writeText(ctx, item.text, x + (item.kind === 'note' ? 0 : u(24)), y, look); x += width;
-      }
-      y += u(14);
-    } else if (title) y += u(4);
-    ctx.translate(0, y); look.background = null;   // the whole figure has its background already
-    if (heat) paintHeatmap(ctx, w, h - y, look, heat, false); else paintTraces(ctx, w, h - y, look);
+    ctx.save(); ctx.translate(0, y); look.background = null;   // under the title's row, written last; the whole figure has its background already
+    const drew = kind === 'heatmap' ? paintHeatmap(ctx, w, h - y, look, heatmapData(look)) : paintTraces(ctx, w, h - y, look); ctx.restore();
+    Fig.drawn = Object.assign({ kind, title, top: y }, fitOf(frame, drew), drew);
+    // the title starts where the legend or the key under it does: on the plot's Y axis, or at the heatmap's left edge. One too long for the figure is shortened.
+    if (title) { const x = drew.key ? drew.key.x : drew.L; ctx.fillStyle = look.ink; ctx.font = '600 ' + look.titlePx + 'px ' + family; ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; writeText(ctx, fitted(ctx, title, w - x - u(6)), x, u(6) + look.titlePx * 0.75, look); }
     return canvas;
   }
-  /** The pictures the Export menus and the editor save. "figure" says which figure's settings made them, for the file kept beside. */
-  const plotPicture = () => figureCanvas('plot', Save.dpi).toDataURL('image/png'); plotPicture.figure = 'plot';
-  const heatmapPicture = () => figureCanvas('heatmap', Save.dpi).toDataURL('image/png'); heatmapPicture.figure = 'heatmap';
-  /** What a text box of the editor shows before anything is typed: the figure's own text. */
-  const figureOwnText = (kind, key) => key === 'title' ? S.info.recording : key === 'xTitle' ? 'Time (s)' : key === 'yTitle' ? (kind === 'plot' ? signalName() : 'Cell') : key === 'barTitle' ? 'ΔF/F₀' : '';
-  /** Draws the preview: the saved picture itself, fitted into the stage. Asked for on every change, drawn once per screen refresh. */
+  /** The pictures the Export menus and the editor save. "figure" says which figure's settings made them, for the file kept
+   *  beside. A figure whose plot has no room (FIT.least) is not saved; the editor shows it and says so. */
+  const figurePicture = (kind) => Object.assign(() => { const canvas = figureCanvas(kind, Save.dpi); if (Fig.drawn.room < FIT.least) throw new Error('The text is too large for this figure size. Change it in Edit figure.'); return canvas.toDataURL('image/png'); }, { figure: kind });
+  const plotPicture = figurePicture('plot'), heatmapPicture = figurePicture('heatmap');
+  /** What a text box of the editor shows before anything is typed: the figure's own text. A figure has no title of its own. */
+  const figureOwnText = (kind, key) => key === 'xTitle' ? 'Time (s)' : key === 'yTitle' ? (kind === 'plot' ? signalName() : 'Cells') : key === 'barTitle' ? 'ΔF/F₀' : '';
+  /** Says what a number box of the editor has to say, on the line under it: why the number in it is not used ("why"; the box is
+   *  then marked), or else a remark on a number that is used ("remark"). */
+  function figureSay(key, words) {
+    const row = Fig.rows[key]; if (!row) return; Object.assign(row, words); const text = row.why || row.remark;
+    row.note.textContent = text; row.note.hidden = !text; if (row.why) row.box.setAttribute('aria-invalid', 'true'); else row.box.removeAttribute('aria-invalid');
+  }
+  /** Draws the preview: the saved picture itself, fitted into the stage. Asked for on every change, drawn once per screen refresh.
+   *  Then what the drawing showed about its fit: text that crowds the plot, beside the size of that text; and no saving of a
+   *  figure with too many pixels or with no room for its plot. */
   function previewFigure() {
     if (!Fig.open || Fig.queued) return; Fig.queued = true;
     requestAnimationFrame(() => {
@@ -1644,93 +2235,241 @@
       const scale = Math.max(0.05, Math.min((stage.clientWidth - 32) / (fig.width * 96), (stage.clientHeight - 32) / (fig.height * 96), 2)), made = figureCanvas(kind, 96 * scale * (window.devicePixelRatio || 1));
       shown.width = made.width; shown.height = made.height; shown.style.width = Math.round(fig.width * 96 * scale) + 'px'; shown.style.height = Math.round(fig.height * 96 * scale) + 'px';
       const ctx = shown.getContext('2d'); ctx.clearRect(0, 0, shown.width, shown.height); ctx.drawImage(made, 0, 0);
-      const note = $('figure-pixels'), most = wide * high > FIGURE_MOST; note.classList.toggle('bad', most);
-      note.textContent = wide + ' × ' + high + ' pixels' + (most ? ': too large to save. Choose a smaller size or resolution.' : ' · shown at ' + Math.round(100 * scale) + ' %');
-      $('figure-save').disabled = $('figure-download').disabled = most;
+      const d = Fig.drawn, note = $('figure-pixels'), most = wide * high > FIGURE_MOST, none = d.room < FIT.least; note.classList.toggle('bad', most || none);
+      note.textContent = wide + ' × ' + high + ' pixels' + (most ? ': too large to save. Choose a smaller size or resolution.' : none ? ': no room for the ' + kind + '. Choose smaller text or a larger size.' : ' · shown at ' + Math.round(100 * scale) + ' %');
+      $('figure-save').disabled = $('figure-download').disabled = most || none;
+      // the title's size is the one to change when the plot would have its room without the title; else the text size
+      const crowding = d.share >= FIT.said ? null : d.body < FIT.said ? 'text' : 'titleText';
+      for (const key of ['text', 'titleText']) figureSay(key, { remark: key === crowding ? 'Too large for this figure size' : '' });
     });
   }
   /** Rows that depend on another: TIFF compression belongs to TIFF. */
   function figureRows() { const box = $('figure-save-compression'); if (box) box.closest('.row').hidden = Save.format !== 'tiff'; }
   /** Builds the editor's boxes for the plot or the heatmap from FIGURE_FIELDS and opens it. */
   function openFigure(kind) {
-    if (!S.results) return; Fig.open = kind; const fig = Fig[kind], holder = $('figure-controls'); holder.replaceChildren();
+    if (!S.results) return; Fig.open = kind; Fig.rows = {}; const fig = Fig[kind], holder = $('figure-controls'), numbers = []; holder.replaceChildren();
     $('figure-name').textContent = kind === 'plot' ? 'Plot figure' : 'Heatmap figure'; $('figure-saved').textContent = '';
-    const changed = () => { store('step4.figure.' + kind, JSON.stringify(figureKept(kind))); previewFigure(); };
+    const earlier = document.createElement('p'); earlier.className = 'fine'; earlier.id = 'figure-earlier'; earlier.textContent = 'Settings kept from an earlier session are in use.'; holder.appendChild(earlier);
+    // After anything is set, the rules that span boxes are looked at again. A box still holding a number the figure could not
+    // use hands it over now if it can, and so on until none does. Then every number box says where it stands: also one whose
+    // number the figure holds and can no longer use, because its axis has changed under it.
+    const review = () => { while (numbers.some((box) => box.take())) { } for (const box of numbers) box.mark(); earlier.hidden = !earlierInUse(kind); };
+    const changed = () => { review(); store('step4.figure.' + kind, JSON.stringify(figureKept(kind))); previewFigure(); };
     let section = null;
     for (const [group, key, label, type, more] of FIGURE_FIELDS[kind]) {
       const options = more || {}; if (options.when && !options.when()) continue;
-      if (group !== section) { section = group; const head = document.createElement('h3'); head.textContent = group; holder.appendChild(head); }
+      if (group !== section) { section = group; const head = document.createElement('h3'); head.textContent = group; holder.appendChild(head);
+        if (FIGURE_SECTIONS[group]) { const about = document.createElement('span'); about.textContent = FIGURE_SECTIONS[group]; head.appendChild(about); } }
       const row = document.createElement('label'), name = document.createElement('span'); row.className = 'row'; name.textContent = label; row.appendChild(name); let box;
-      if (type === 'page') {   // the same list as on the page: choosing here chooses there
-        const source = $(key); box = document.createElement('select'); for (const o of source.options) { const copy = document.createElement('option'); copy.value = o.value; copy.textContent = o.textContent; box.appendChild(copy); }
-        box.value = source.value; box.addEventListener('change', () => { source.value = box.value; source.dispatchEvent(new Event('change', { bubbles: true })); figureRows(); previewFigure(); });
+      if (type === 'page') {   // the same list or tick box as on the page: choosing here chooses there
+        const source = $(key), ticked = source.type === 'checkbox', value = ticked ? 'checked' : 'value'; box = document.createElement(ticked ? 'input' : 'select'); if (ticked) box.type = 'checkbox';
+        for (const o of source.options || []) { const copy = document.createElement('option'); copy.value = o.value; copy.textContent = o.textContent; box.appendChild(copy); }
+        box[value] = source[value]; box.addEventListener('change', () => { source[value] = box[value]; source.dispatchEvent(new Event('change', { bubbles: true })); figureRows(); changed(); });
       } else if (type === 'choice') {
         box = document.createElement('select'); for (const [value, text] of options.options) { const o = document.createElement('option'); o.value = value; o.textContent = text; box.appendChild(o); }
         box.value = fig[key]; box.addEventListener('change', () => { fig[key] = box.value; changed(); });
       } else if (type === 'tick') { box = document.createElement('input'); box.type = 'checkbox'; box.checked = !!fig[key]; box.addEventListener('change', () => { fig[key] = box.checked; changed(); });
-      } else if (type === 'colour') { box = document.createElement('input'); box.type = 'color'; box.value = fig[key]; box.addEventListener('input', () => { fig[key] = box.value; changed(); });
-      } else if (type === 'text') {
-        box = document.createElement('input'); box.type = 'text'; box.maxLength = 80; box.spellcheck = false; box.value = fig[key] == null ? figureOwnText(kind, key) : fig[key];
-        box.addEventListener('input', () => { fig[key] = box.value; changed(); });
-      } else {   // a number: kept as soon as it makes sense; an empty box is "auto" where the figure can choose
-        box = document.createElement('input'); box.type = 'text'; box.inputMode = 'decimal'; box.value = fig[key] == null ? '' : fig[key]; if (FIGURE_DEFAULT[kind][key] === null) box.placeholder = 'auto';
-        box.addEventListener('input', () => { const text = box.value.trim().replace(',', '.'), value = text === '' ? null : Number(text), ok = figureValid(kind, key, value);
-          if (ok) { fig[key] = value; changed(); box.removeAttribute('aria-invalid'); } else box.setAttribute('aria-invalid', 'true'); });
-        box.addEventListener('change', () => { box.value = fig[key] == null ? '' : fig[key]; box.removeAttribute('aria-invalid'); });
+      } else if (type === 'colour') {   // shown while it is picked, kept when it is chosen
+        box = document.createElement('input'); box.type = 'color'; box.value = fig[key]; box.addEventListener('input', () => { fig[key] = box.value; previewFigure(); }); box.addEventListener('change', changed);
+      } else if (type === 'text') {   // shown while it is typed, kept when the box is left
+        box = document.createElement('input'); box.type = 'text'; box.maxLength = 80; box.spellcheck = false; box.value = fig[key] == null ? figureOwnText(kind, key) : fig[key]; if (!figureOwnText(kind, key)) box.placeholder = 'none';
+        box.addEventListener('input', () => { fig[key] = box.value; previewFigure(); }); box.addEventListener('change', changed);
+      } else {   // a number; an empty box is "auto" where the figure can choose. While it is typed the box says whether the
+        // figure can use it (figureRefusal). It is taken when the box is left or Enter is pressed, and only whole: "40" is
+        // never the 4 it passes through. A number the figure cannot use stays in the box, marked, with the reason under it,
+        // and the figure keeps the number it had.
+        box = document.createElement('input'); box.type = 'text'; box.inputMode = 'decimal'; if (STYLE[kind][key] === null) box.placeholder = 'auto';
+        const note = document.createElement('i'); note.className = 'range-note'; note.hidden = true; Fig.rows[key] = { box, note, why: '', remark: '' };
+        const show = () => { box.value = fig[key] == null ? '' : String(fig[key]); }, judged = () => { const value = typedNumber(box.value); return { value, why: figureRefusal(kind, key, value) }; };
+        const take = () => { const { value, why } = judged(); if (why || value === fig[key]) return false; fig[key] = value; return true; };
+        numbers.push({ take, mark: () => { const why = judged().why; figureSay(key, { why }); if (!why) show(); } }); show();
+        box.addEventListener('input', () => figureSay(key, { why: judged().why }));
+        box.addEventListener('change', () => { if (take()) changed(); }); box.addEventListener('keydown', (event) => { if (event.key === 'Enter' && take()) changed(); });
       }
       box.id = 'figure-' + key;
       if (options.unit) { const cell = document.createElement('span'), unit = document.createElement('i'); cell.className = 'unit'; unit.textContent = options.unit; cell.append(box, unit); row.appendChild(cell); } else row.appendChild(box);
+      if (Fig.rows[key]) { const note = Fig.rows[key].note; note.id = box.id + '-note'; box.setAttribute('aria-describedby', note.id); row.appendChild(note); }
       holder.appendChild(row);
     }
-    figureRows(); figureBehind(true); $('figure-editor').hidden = false; holder.scrollTop = 0; previewFigure(); $('figure-close').focus();
+    figureRows(); review(); figureBehind(true); $('figure-editor').hidden = false; holder.scrollTop = 0; previewFigure(); $('figure-close').focus();
   }
   /** While the editor is open the page behind it takes no clicks, keys or focus. */
   function figureBehind(off) { for (const part of document.body.children) if (part.id !== 'figure-editor' && part.tagName !== 'SCRIPT') part.inert = off; }
   function closeFigure() { const kind = Fig.open; if (!kind) return; $('figure-editor').hidden = true; Fig.open = null; figureBehind(false); const menu = $(kind === 'plot' ? 'export-plot' : 'export-heatmap'); if (menu) menu.querySelector('summary').focus(); }
-  /** Back to a figure nobody has edited, for this figure only. */
-  function resetFigure() { const kind = Fig.open; if (!kind) return; Fig[kind] = Object.assign({}, FIGURE_DEFAULT[kind]); store('step4.figure.' + kind, null); openFigure(kind); }
+  /** "Reset to defaults": the built-in look, for every box the editor shows. The figure's own settings go back to the style
+   *  table and are no longer kept. The lists and tick boxes that live on the page go back to how the page opens, the file
+   *  settings that all saved pictures share among them. */
+  function resetFigure() {
+    const kind = Fig.open; if (!kind) return; Fig[kind] = Object.assign({}, STYLE[kind]); Fig.earlier[kind] = {}; Fig.earlier.save = {}; store('step4.figure.' + kind, null);
+    for (const [, key, , type, more] of FIGURE_FIELDS[kind]) {
+      if (type !== 'page' || (more && more.when && !more.when())) continue;
+      const box = $(key), ticked = box.type === 'checkbox', value = ticked ? 'checked' : 'value', first = ticked ? box.defaultChecked : (Array.from(box.options).find((option) => option.defaultSelected) || box.options[0]).value;
+      if (box[value] !== first) { box[value] = first; box.dispatchEvent(new Event('change', { bubbles: true })); }
+    }
+    openFigure(kind);
+  }
   /** A saved picture or frame is as wide as Options says (inches × dpi), up to 4 times its recorded pixels; its shape is the recording's. */
   const pictureScale = () => { const size = inches(), iw = S.info.width || 1; return size ? Math.max(0.25, Math.min(4, size[0] * Save.dpi / iw)) : (Save.dpi >= 600 ? 3 : Save.dpi >= 300 ? 2 : 1); };
   const pictureOptions = () => ({ format: Save.format, dpi: Save.dpi, compression: Save.compression });
-  /** How a saved picture was made, for the file kept beside it: a figure's size and every setting of the editor, or the size from Options. */
-  const pictureRecord = (picture) => Object.assign(picture.figure ? { size: Fig[picture.figure].width + 'x' + Fig[picture.figure].height, figure: Object.assign({ kind: picture.figure }, Fig[picture.figure]) } : { size: Save.size }, pictureOptions());
+  /** What a saved heatmap shows that its settings alone do not say: the cell of each row from the top, and the colour range used. */
+  function heatmapRecord() { const cells = heatmapCells(), range = heatmapRange(cells.steady, Fig.heatmap); return { rows: cells.rows, colour_range: [range.low, range.high], cell_names: S.rowNames, excluded_hidden: S.hideExcluded }; }
+  /** How a saved picture was made, for the file kept beside it: a figure's size and every setting of the editor; or, for a
+   *  picture of the cells, the size from Options, the area it shows (picture.area; picture.barred: with a scale bar) and
+   *  how the cells were drawn. */
+  const pictureRecord = (picture) => Object.assign(picture.figure ? { size: Fig[picture.figure].width + 'x' + Fig[picture.figure].height, figure: Object.assign({ kind: picture.figure }, Fig[picture.figure]) } : Object.assign({ size: Save.size }, areaRecord(picture.area, picture.barred), outlineRecord()),
+    picture.figure === 'heatmap' ? { heatmap: heatmapRecord() } : {}, pictureOptions());
+  /** The file kept beside a saved picture: what the page showed (exportMetadata; before an analysis, the view and the frame),
+   *  then what the picture itself shows in place of that (picture.shows: the two frames of a pair, not the frame on
+   *  screen), then how the picture was made. */
+  const savedRecord = (picture) => Object.assign(S.results ? exportMetadata() : viewMetadata(), picture.shows, { picture: pictureRecord(picture) });
   const viewMetadata = () => ({ schema: 'simpleca.view-export', schema_version: 1, recording: S.info.recording, plugin_version: S.info.pluginVersion, view: S.view, frame: S.frame, outlines: S.outlines });
-  /** What the colours of the picture mean in the view on screen, then what the outlines mean. Each: [colour, text, is an outline]. */
-  function pictureKey() {
-    const colours = viewColours().length ? viewColours() : [['#ffffff', 'as recorded']];
-    const lines = !S.outlines ? [] : S.results ? [[ON_PICTURE.responded, 'responded', true], [ON_PICTURE.not, 'did not respond', true], [ON_PICTURE.other, 'excluded or unscorable', true]] : [['#ffffff', 'your cells', true]];
-    return colours.concat(lines);
+  /** What the colours of the picture mean in the view on screen, then what the outlines mean (outlineKey). Each: [colour, text, is an outline, dashed]. */
+  const pictureKey = () => (viewColours().length ? viewColours() : [['#ffffff', 'as recorded']]).concat(outlineKey());
+  /** What a saved picture or frame shows of the cells, for the file kept beside it: whether the outlines were drawn, their
+   *  colours by what they mean (as its key says it), and whether the cells were numbered. */
+  const outlineRecord = () => ({ outlines_shown: S.outlines, outline_colours: Object.fromEntries(outlineKey().map((entry) => [entry[1].replace(/ /g, '_'), entry[0]])), cells_numbered: S.outlines && S.numberCells });
+  /** The length of the scale bar of a picture "microns" wide: the longest of 1, 2, 5, 10, 20, 50 … µm that is at most a fifth of it. */
+  function scaleBarLength(microns) { const most = microns / 5, power = Math.pow(10, Math.floor(Math.log10(most) + 1e-9)); return (most >= 5 * power ? 5 : most >= 2 * power ? 2 : 1) * power; }
+  /** The scale bar of a saved picture of an area (of the whole picture when none is given), in µm; null when the recording does not say how large a pixel is. */
+  const scaleBar = (area) => (S.info.micronsPerPixel > 0 ? scaleBarLength((area ? area.width : S.info.width) * S.info.micronsPerPixel) : null);
+  /** The area of a saved picture, for the file kept beside it: the whole picture; or the area's left top corner and its size
+   *  in pixels of the recording and, where the recording says how large a pixel is, in micrometres, with the zoom it was
+   *  seen at. With it the length of the picture's scale bar: a picture of an area has one, and so has one that is "barred"
+   *  (a pair of frames). */
+  function areaRecord(area, barred) {
+    if (!area) return Object.assign({ area: 'whole picture' }, barred ? { scale_bar_um: scaleBar(null) } : null);
+    const pixel = S.info.micronsPerPixel, box = (by) => ({ left: +(area.x * by).toFixed(3), top: +(area.y * by).toFixed(3), width: +(area.width * by).toFixed(3), height: +(area.height * by).toFixed(3) });
+    return { area: 'area on screen', area_pixels: box(1), area_um: pixel > 0 ? box(pixel) : null, zoom: +area.zoom.toFixed(2), scale_bar_um: scaleBar(area) };
   }
-  /** The whole picture in the view on screen (a movie frame is fetched at full size), with the outlines shown on the page and a
-   *  key to the colours underneath. One ordinary colour picture. */
   const VIEW_NAMES = { picture: 'colour overview', raw: 'as recorded', flat: 'background removed', green: 'GFP', magenta: 'response in magenta', change: 'change from baseline' };
-  async function viewCanvas(frame, labelled) {
-    const f = frame || S.frame; let image = S.view === 'background' ? Pic.background : Pic.base;
-    if (!still()) { const reply = await fetch('api/frame?f=' + f + '&mode=' + S.view + '&v=' + encodeURIComponent(Buf.version || ''), { cache: 'no-store' }); if (!reply.ok) throw new Error('Frame ' + f + ' could not be read.'); image = await createImageBitmap(await reply.blob()); }
-    if (!image) throw new Error('The picture is not loaded yet.');
-    const iw = S.info.width, ih = S.info.height, scale = pictureScale(), key = labelled ? [] : pictureKey(), font = getComputedStyle(document.body).fontFamily;
-    const unit = Math.max(1, iw / 1388), size = Math.round(20 * unit), gap = Math.round(30 * unit), measure = document.createElement('canvas').getContext('2d'); measure.font = size + 'px ' + font;
-    const places = []; let x = 14 * unit, row = 0; for (const item of key) { const width = size * 1.4 + measure.measureText(item[1]).width + size * 1.4; if (x + width > iw - 8 && x > 14 * unit) { x = 14 * unit; row++; } places.push([x, row]); x += width; }
-    const keyHeight = labelled ? 0 : Math.round((row + 1) * gap + gap * 1.5), canvas = document.createElement('canvas'); canvas.width = Math.round(iw * scale); canvas.height = Math.round((ih + keyHeight) * scale);
-    const ctx = canvas.getContext('2d'); ctx.scale(scale, scale); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, iw, ih + keyHeight); ctx.drawImage(image, 0, 0, iw, ih);
-    const known = !!S.results; ctx.lineJoin = 'round';
-    if (S.outlines) S.paths.forEach((path, i) => {
-      const call = callOf(S.info.names[i]); if (known && !inGroup(call, S.group, S.info.names[i])) return; const which = kind(call);
-      ctx.setLineDash([]); ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.lineWidth = 3.2 * unit * S.outlineWidth; ctx.stroke(path);
-      ctx.setLineDash(known && which === 'other' ? [5 * unit, 4 * unit] : []); ctx.strokeStyle = known ? ON_PICTURE[which] : '#ffffff'; ctx.lineWidth = 1.8 * unit * S.outlineWidth; ctx.stroke(path);
-    });
-    ctx.setLineDash([]); ctx.font = size + 'px ' + font; ctx.textBaseline = 'middle';
-    key.forEach((item, i) => { const kx = places[i][0], ky = ih + gap * 0.9 + places[i][1] * gap;
-      if (item[2]) { ctx.strokeStyle = item[0]; ctx.lineWidth = 2 * unit; ctx.strokeRect(kx, ky - size * 0.45, size * 0.9, size * 0.9); } else { ctx.fillStyle = item[0]; ctx.fillRect(kx, ky - size * 0.45, size * 0.9, size * 0.9); }
+  /** The view on screen at frame f, at its full size: a frame of the recording, fetched whole, or the view's still picture. */
+  async function viewImage(f) {
+    if (still()) { const image = S.view === 'background' ? Pic.background : Pic.base; if (!image) throw new Error('The picture is not loaded yet.'); return image; }
+    const reply = await fetch('api/frame?f=' + f + '&mode=' + S.view + '&v=' + encodeURIComponent(Buf.version || ''), { cache: 'no-store' }); if (!reply.ok) throw new Error('Frame ' + f + ' could not be read.');
+    return createImageBitmap(await reply.blob());
+  }
+  /** How a saved picture of the cells is measured out, in one place, for a picture, a frame of a set and a pair of frames.
+   *  Lengths are in pixels of the recording as a picture of the whole field has them; "scale" turns them into pixels of the
+   *  file (pictureScale). A picture of an area is as wide as one of the whole field: the area is enlarged, while its labels,
+   *  its key and the pens of its outlines keep the size they have in every saved picture.
+   *    part        the part of the recording shown (all of it when no area is given); cut: whether that is an area
+   *    wide, high  its size as drawn; by: how far it is enlarged to get there
+   *    unit, size, gap, font   what labels are made of: a pen's pixel, the height of text, a row of the key, the page's font */
+  function sheet(area) {
+    const iw = S.info.width, scale = pictureScale(), unit = Math.max(1, iw / 1388), part = area || { x: 0, y: 0, width: iw, height: S.info.height };
+    return { scale, part, cut: !!area, by: iw / part.width, wide: iw, high: area ? Math.round(iw * scale * part.height / part.width) / scale : part.height,
+      unit, size: Math.round(20 * unit), gap: Math.round(30 * unit), font: getComputedStyle(document.body).fontFamily };
+  }
+  /** A black canvas for a sheet of wide × high, to draw on in the sheet's own lengths. */
+  function sheetCanvas(at, wide, high) {
+    const canvas = document.createElement('canvas'); canvas.width = Math.round(wide * at.scale); canvas.height = Math.round(high * at.scale);
+    if (canvas.width * canvas.height > FIGURE_MOST) throw new Error('This picture would be ' + canvas.width + ' × ' + canvas.height + ' pixels. Choose a smaller size or resolution in Options.');
+    const ctx = canvas.getContext('2d'); ctx.scale(at.scale, at.scale); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, wide, high); ctx.lineJoin = 'round';
+    return { canvas, ctx };
+  }
+  /** Draws one picture's part of the recording with its top left corner at (x, y) of a sheet: the recording's own pixels,
+   *  then the cells as the page draws them (paintCells: the outlines shown, in their colours or plain, and their numbers)
+   *  with the pens of a saved picture. The whole picture is drawn as it always was. An area ends cleanly at its edges, and
+   *  its pixels are squares where the page shows them so (pixelsShown). "framed": the whole picture is cut at its edges
+   *  too, as a panel beside another must be. */
+  function paintView(ctx, image, at, x, y, framed) {
+    const part = at.part, fx = image.width / S.info.width, fy = image.height / S.info.height;
+    ctx.save(); ctx.translate(x, y);
+    if (at.cut || framed) { ctx.beginPath(); ctx.rect(0, 0, at.wide, at.high); ctx.clip(); }
+    ctx.imageSmoothingEnabled = !(at.cut && pixelsShown(part.zoom));
+    ctx.drawImage(image, part.x * fx, part.y * fy, part.width * fx, part.height * fy, 0, 0, at.wide, at.high);
+    ctx.scale(at.by, at.by); ctx.translate(-part.x, -part.y); paintCells(ctx, PENS.saved, at.unit / at.by, -1, at.cut ? part : undefined);
+    ctx.restore();
+  }
+  /** The scale bar of a sheet, measured: its length in µm (scaleBar), how long that is on the sheet, the words written over
+   *  it, their font, and the width of the two together. null where the recording does not say how large a pixel is. */
+  function sheetBar(at) {
+    const length = scaleBar(at.cut ? at.part : null); if (!length) return null;
+    const measure = document.createElement('canvas').getContext('2d'), font = '600 ' + Math.round(at.size * 1.1) + 'px ' + at.font, text = +length.toPrecision(2) + ' µm', bar = length / S.info.micronsPerPixel * at.by;
+    measure.font = font; return { length, bar, text, font, wide: Math.max(bar, measure.measureText(text).width) };
+  }
+  /** Draws a scale bar (sheetBar) in white: its length in words, their middle at "middle", over a bar of that length; the
+   *  two end at "right". */
+  function paintScaleBar(ctx, at, bar, right, middle) {
+    ctx.font = bar.font; ctx.textBaseline = 'middle'; ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
+    ctx.fillText(bar.text, right - bar.wide / 2, middle); ctx.fillRect(right - bar.wide / 2 - bar.bar / 2, middle + at.size * 0.67, bar.bar, 6 * at.unit); ctx.textAlign = 'left';
+  }
+  /** A key laid out for a strip "wide" across: its entries in rows from the left, a new row where one would not fit. A
+   *  scale bar ("bar", sheetBar), when the picture has one, takes the right end of the first row, and the entries stay
+   *  clear of it: in a strip too narrow for the first entry beside the bar, the entries start on the row under it.
+   *  With the places of the entries, the strip's height: the rows, and a line under them for the recording's name. */
+  function keyLayout(at, key, wide, bar) {
+    const measure = document.createElement('canvas').getContext('2d'), left = 14 * at.unit, beside = bar ? bar.wide + left + at.size : 0, fits = (x, width, row) => x + width <= wide - 8 - (row ? 0 : beside); measure.font = at.size + 'px ' + at.font;
+    const places = []; let x = left, row = 0;
+    for (const item of key) { const width = at.size * 1.4 + measure.measureText(item[1]).width + at.size * 1.4; if (!fits(x, width, row) && (x > left || (bar && !row))) { x = left; row++; } places.push([x, row]); x += width; }
+    return { key, places, bar, wide, height: Math.round((row + 1) * at.gap + at.gap * 1.5) };
+  }
+  /** Draws a key (keyLayout) under a picture that ends at y: a filled square for a colour of the view, an open one for an
+   *  outline, dashed where dashes alone tell it from another outline of its colour; under them the recording's name; and
+   *  on the right, within the height of the first row, the picture's scale bar when it has one. */
+  function paintKey(ctx, at, laid, y) {
+    const { unit, size, gap } = at, key = laid.key; ctx.font = size + 'px ' + at.font; ctx.textBaseline = 'middle';
+    key.forEach((item, i) => { const kx = laid.places[i][0], ky = y + gap * 0.9 + laid.places[i][1] * gap;
+      if (item[2]) { ctx.setLineDash(item[3] && key.some((other) => other !== item && other[2] && other[0] === item[0]) ? [4 * unit, 3 * unit] : []); ctx.strokeStyle = item[0]; ctx.lineWidth = 2 * unit; ctx.strokeRect(kx, ky - size * 0.45, size * 0.9, size * 0.9); ctx.setLineDash([]); }
+      else { ctx.fillStyle = item[0]; ctx.fillRect(kx, ky - size * 0.45, size * 0.9, size * 0.9); }
       ctx.fillStyle = '#fff'; ctx.fillText(item[1], kx + size * 1.4, ky); });
-    if (labelled) {   // a frame of a set: its number, time and view in the corner
-      const time = frameTimes()[f - 1], text = 'Frame ' + f + (finite(time) ? ' · ' + time.toFixed(1) + ' s' : '') + ' · ' + (VIEW_NAMES[S.view] || S.view);
-      ctx.font = '600 ' + Math.round(size * 1.1) + 'px ' + font; const tw = ctx.measureText(text).width;
-      ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(10 * unit, 10 * unit, tw + 20 * unit, size * 1.9); ctx.fillStyle = '#fff'; ctx.fillText(text, 20 * unit, 10 * unit + size * 0.98);
-    } else { ctx.fillStyle = '#AEB8C2'; ctx.font = Math.round(size * 0.8) + 'px ' + font; ctx.fillText(S.info.recording, 14 * unit, ih + keyHeight - gap * 0.55); }
+    ctx.fillStyle = '#AEB8C2'; ctx.font = Math.round(size * 0.8) + 'px ' + at.font; ctx.fillText(S.info.recording, 14 * unit, y + laid.height - gap * 0.55);
+    if (laid.bar) paintScaleBar(ctx, at, laid.bar, laid.wide - 14 * unit, y + gap * 0.9 - size * 0.3);
+  }
+  /** A frame's number and time, as its label says them: "Frame 22 · 10.5 s". */
+  const frameText = (f) => { const time = frameTimes()[f - 1]; return 'Frame ' + f + (finite(time) ? ' · ' + time.toFixed(1) + ' s' : ''); };
+  /** The labels of a frame of a set, white on dark boxes: on its top left corner its number, its time and the view; on its
+   *  bottom right corner its scale bar ("bar", sheetBar), when it has one. */
+  function paintFrameLabels(ctx, at, f, bar) {
+    const { unit, size } = at, text = frameText(f) + ' · ' + (VIEW_NAMES[S.view] || S.view);
+    ctx.font = '600 ' + Math.round(size * 1.1) + 'px ' + at.font; ctx.textBaseline = 'middle'; const tw = ctx.measureText(text).width;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(10 * unit, 10 * unit, tw + 20 * unit, size * 1.9); ctx.fillStyle = '#fff'; ctx.fillText(text, 20 * unit, 10 * unit + size * 0.98);
+    if (!bar) return;
+    const high = size * 1.65 + 14 * unit, top = at.high - 10 * unit - high;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(at.wide - 30 * unit - bar.wide, top, bar.wide + 20 * unit, high); paintScaleBar(ctx, at, bar, at.wide - 20 * unit, top + size * 0.98);
+  }
+  /** A saved picture of the cells in the view on screen (at the frame on screen when none is given): the whole picture, or
+   *  the area given (savedArea), with the cells on it (paintView). Under a picture, a key to the colours. A frame of a set
+   *  ("labelled") has its number, time and view on its corner instead. A picture or frame of an area has a scale bar: at
+   *  the right of the key, or on the frame's bottom right corner. One ordinary colour picture. */
+  async function viewCanvas(frame, labelled, area) {
+    const f = frame || S.frame, image = await viewImage(f), at = sheet(area), bar = at.cut ? sheetBar(at) : null, key = labelled ? null : keyLayout(at, pictureKey(), at.wide, bar);
+    const { canvas, ctx } = sheetCanvas(at, at.wide, at.high + (key ? key.height : 0));
+    paintView(ctx, image, at, 0, 0);
+    if (key) paintKey(ctx, at, key, at.high); else paintFrameLabels(ctx, at, f, bar);
     return canvas;
   }
-  async function viewPicture(frame, labelled) { return (await viewCanvas(frame, labelled)).toDataURL('image/png'); }
+  /** How "Baseline and peak" is measured out: two panels of one size side by side, a strip over them that says what each is,
+   *  and the key under both, with the scale bar. Every edge lies on a whole pixel of the file, so each panel is as sharp as a frame saved alone. */
+  function pairLayout(area) {
+    const at = sheet(area), whole = (v) => Math.round(v * at.scale) / at.scale, head = whole(at.size * 2.2), second = whole(at.wide + 12 * at.unit), wide = second + at.wide, key = keyLayout(at, pictureKey(), wide, sheetBar(at));
+    return { at, head, second, wide, key, high: head + at.high + key.height };
+  }
+  /** Baseline and peak: two frames of the view on screen in one picture, for showing a response. Each panel is drawn as a
+   *  saved frame is (paintView: the same area, outlines and numbers), and the plugin shows every frame of a view between the
+   *  same gray levels, so the two can be compared. Over each panel what it is, with its frame and time; under both the key,
+   *  once, with the scale bar at its right. */
+  async function pairCanvas(baseline, peak, area) {
+    const images = [await viewImage(baseline), await viewImage(peak)], laid = pairLayout(area), at = laid.at, { canvas, ctx } = sheetCanvas(at, laid.wide, laid.high), left = 14 * at.unit;
+    [['baseline', baseline, 0], ['peak', peak, laid.second]].forEach(([name, f, x], i) => {
+      paintView(ctx, images[i], at, x, laid.head, true);
+      ctx.textBaseline = 'middle'; ctx.font = '600 ' + Math.round(at.size * 1.1) + 'px ' + at.font; ctx.fillStyle = '#fff'; ctx.fillText(name, x + left, laid.head / 2);
+      const named = ctx.measureText(name).width; ctx.font = at.size + 'px ' + at.font; ctx.fillStyle = '#AEB8C2'; ctx.fillText(frameText(f), x + left + named + at.size * 0.8, laid.head / 2); });
+    paintKey(ctx, at, laid.key, laid.head + at.high);
+    return canvas;
+  }
+  /** The two frames "Baseline and peak" opens on. Baseline: the last of the F₀ frames. Peak: the selected cell's peak in the
+   *  response window, as its call has it; with no such cell, the frame of the response window where the mean ΔF/F₀ of the
+   *  cells that responded is highest (of the cells that did not, when none responded). Before an analysis, the frame on
+   *  screen for both. */
+  function pairFrames() {
+    const r = S.results; if (!r) return { baseline: S.frame, peak: S.frame };
+    const baseline = r.baselineFrames ? r.baselineFrames[1] : S.frame, own = number(callRow(S.cell).Peak_s); if (finite(own)) return { baseline, peak: nearestFrame(own) };
+    const names = S.info.names.filter((name) => r.traces[name]), yes = names.filter((name) => callOf(name) === 'Responded'), mean = groupMean(yes.length ? yes : names.filter((name) => callOf(name) === 'Did not respond'), r.traces).mean;
+    const [from, to] = responseSpans().response; let peak = S.frame, top = -Infinity;
+    r.time.forEach((t, i) => { if (t >= from - 1e-9 && t <= to + 1e-9 && finite(mean[i]) && mean[i] > top) { top = mean[i]; peak = i + 1; } });
+    return { baseline, peak };
+  }
   /** Where n frames of w x h go in one picture: a grid about as wide as it is tall, each tile at most its own size and the
    *  whole at most COMBINED_MAX pixels wide. Returns { cols, rows, tw, th, gap, width, height }. */
   const COMBINED_MAX = 6000;
@@ -1739,13 +2478,16 @@
     const tw = Math.max(1, Math.min(w, Math.floor((COMBINED_MAX - (cols + 1) * gap) / cols))), th = Math.max(1, Math.round(tw * h / w));
     return { cols, rows, tw, th, gap, width: cols * tw + (cols + 1) * gap, height: rows * th + (rows + 1) * gap };
   }
-  const viewKind = () => 'picture_' + ({ picture: 'colour_overview', background: 'background_areas', raw: 'as_recorded', flat: 'background_removed', green: 'gfp', magenta: 'response_in_magenta', change: 'change_from_baseline' }[S.view] || S.view) + (still() ? '' : '_frame' + S.frame);
+  /** What a saved picture of the cells is called in its file's name: the view; for a view of the recording the frame on screen,
+   *  or the frames given ("baseline_frame5_peak_frame12"); and "area" when it shows the area on screen. */
+  const viewWord = () => ({ picture: 'colour_overview', background: 'background_areas', raw: 'as_recorded', flat: 'background_removed', green: 'gfp', magenta: 'response_in_magenta', change: 'change_from_baseline' }[S.view] || S.view);
+  const viewKind = (area, frames) => 'picture_' + viewWord() + (still() ? '' : '_' + (frames || 'frame' + S.frame)) + (area ? '_area' : '');
   const badSave = (error) => /fetch/i.test(error.message) ? 'Fiji is not connected. Keep Fiji open, or reopen the analysis from Fiji.' : error.message;
   /** Download through the browser: the same file Save writes (format, size, resolution), plus how it was made. */
   async function save(picture, kind, noteId) {
     const note = $(noteId); note.className = 'save-note'; note.textContent = 'Preparing…';
     try {
-      const metadata = JSON.stringify(Object.assign(S.results ? exportMetadata() : viewMetadata(), { picture: pictureRecord(picture) }), null, 2), png = await picture();
+      const metadata = JSON.stringify(savedRecord(picture), null, 2), png = await picture();
       const reply = await api('convert', Object.assign({ png }, pictureOptions())), name = exportName(kind, reply.extension);
       const bytes = Uint8Array.from(atob(reply.base64), (c) => c.charCodeAt(0));
       download(new Blob([bytes], { type: reply.extension === 'tif' ? 'image/tiff' : 'image/png' }), name);
@@ -1757,7 +2499,7 @@
   async function saveToFolder(picture, kind, noteId, csv) {
     const note = $(noteId); note.className = 'save-note'; note.textContent = 'Saving…';
     try {
-      const metadata = Object.assign(S.results ? exportMetadata() : viewMetadata(), { picture: pictureRecord(picture) }), name = exportName(kind, 'png').replace(/\.png$/, '');
+      const metadata = savedRecord(picture), name = exportName(kind, 'png').replace(/\.png$/, '');
       const reply = await api('export', Object.assign({ name, png: await picture(), csv: csv || null, metadata }, pictureOptions()));
       note.textContent = 'Saved ' + reply.saved[0] + (csv ? ' + CSV' : '') + ' ';
       const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open folder';
@@ -1792,21 +2534,29 @@
     for (const button of document.querySelectorAll('[data-plot]')) button.addEventListener('click', () => setPlotMode(button.dataset.plot));
     const showY = () => { const now = Plot.y[S.signal] || {}; $('y-min').value = finite(now.lo) ? now.lo : ''; $('y-max').value = finite(now.hi) ? now.hi : ''; };
     for (const [id, end] of [['y-min', 'lo'], ['y-max', 'hi']]) $(id).addEventListener('input', () => {
-      const text = $(id).value.trim(), value = Number(text), now = Plot.y[S.signal] || (Plot.y[S.signal] = {});
-      now[end] = text !== '' && isFinite(value) ? value : null; Plot.dirty = true; drawPlot();
+      const value = typedNumber($(id).value), now = Plot.y[S.signal] || (Plot.y[S.signal] = {});
+      now[end] = finite(value) ? value : null; Plot.dirty = true; drawPlot();
     });
     $('y-auto').addEventListener('click', () => { delete Plot.y[S.signal]; showY(); Plot.dirty = true; drawPlot(); });
     const setSignal = (value) => { if (value !== S.signal) Fig.plot.yTitle = Fig.plot.yMin = Fig.plot.yMax = Fig.plot.yStep = null;   // typed for the other signal
-      S.signal = Data.signal = value; $('signal').value = value; $('data-signal').value = value; showY(); Plot.dirty = true; drawPlot(); legend(); if (S.results && !$('panel-data').hidden) showData(); };
+      S.signal = Data.signal = value; $('signal').value = value; $('data-signal').value = value; showY(); Plot.dirty = true; drawPlot(); if (S.results && !$('panel-data').hidden) showData(); };
     $('signal').addEventListener('change', () => setSignal($('signal').value));
     $('save-plot-folder').addEventListener('click', () => saveToFolder(plotPicture, plotKind(), 'plot-saved', plotNumbers()));
     $('save-heatmap-folder').addEventListener('click', () => saveToFolder(heatmapPicture, 'heatmap', 'heatmap-saved'));
-    $('save-picture-folder').addEventListener('click', () => saveToFolder(viewPicture, viewKind(), 'picture-saved'));
-    $('save-picture').addEventListener('click', () => save(viewPicture, viewKind(), 'picture-saved'));
+    // A picture of the cells: the frame on screen, and the area "Area" says, both as they are when its entry is clicked.
+    const cellsPicture = (how) => () => { const area = savedArea(), picture = async () => (await viewCanvas(null, false, area)).toDataURL('image/png'); picture.area = area; how(picture, viewKind(area), 'picture-saved'); };
+    $('save-picture-folder').addEventListener('click', cellsPicture(saveToFolder)); $('save-picture').addEventListener('click', cellsPicture(save));
+    $('save-area').addEventListener('change', () => setSaveArea($('save-area').value));
     $('outline-width').addEventListener('change', () => { S.outlineWidth = Number($('outline-width').value) || 1; store('step4.outline', $('outline-width').value); drawPicture(); });
+    $('outline-colours').addEventListener('change', () => { S.outlineColours = $('outline-colours').value === 'plain' ? 'plain' : 'call'; store('step4.plain', S.outlineColours === 'plain' ? '1' : '0'); drawPicture(); });
+    $('number-cells').addEventListener('change', () => { S.numberCells = $('number-cells').checked; store('step4.numbers', S.numberCells ? '1' : '0'); drawPicture(); });
     // One Export menu per panel holds its save buttons. Choosing an entry closes the menu; so does a click elsewhere or Escape.
-    // A panel opened from an entry (Options, Save frames) is placed against the menu's own button, which stays on screen.
+    // A panel opened from an entry (Options, Save frames) is placed against the menu's own button, which stays on screen:
+    // its right edge on the button's, inside the window; above the button in the lower half of the window, under it in the upper.
     const anchorOf = (button) => button.closest('details.export') || button;
+    const openBeside = (panel, entry) => { panel.hidden = false; const box = anchorOf(entry).getBoundingClientRect(), wide = panel.offsetWidth;
+      panel.style.left = Math.max(8, Math.min(window.innerWidth - wide - 16, box.right - wide)) + 'px'; panel.style.top = ''; panel.style.bottom = '';
+      if (box.top > window.innerHeight / 2) panel.style.bottom = (window.innerHeight - box.top + 6) + 'px'; else panel.style.top = (box.bottom + 6) + 'px'; };
     const menus = Array.from(document.querySelectorAll('details.export, details.quality-chip'));
     for (const menu of menus) {
       menu.addEventListener('click', (event) => { if (event.target.closest('.export-menu button')) menu.open = false; }, true);
@@ -1821,61 +2571,86 @@
     // the path as the click travelled: an entry that redraws itself when clicked is no longer inside the menu by now
     document.addEventListener('click', (event) => { const path = event.composedPath(); for (const menu of menus) if (menu.open && !path.includes(menu)) menu.open = false; });
     document.addEventListener('keydown', (event) => { if (event.key === 'Escape') for (const menu of menus) if (menu.open) { menu.open = false; menu.querySelector('summary').focus(); event.preventDefault(); } });   // (an Escape that closed a menu does nothing else)
-    // every Nth frame of the view on screen, each its own labelled picture, in a folder of their own
-    const framesPanel = $('frames-options'), framesEvery = () => Math.round(Number($('frames-every').value));
-    const framesCount = () => { const every = framesEvery(), ok = every >= 1 && every <= S.info.frames; $('frames-go').disabled = !ok;
-      $('frames-count').textContent = ok ? plural(Math.ceil(S.info.frames / every), 'picture') + (Math.ceil(S.info.frames / every) > 1 ? ' and one with all of them' : '') + ', ' + (Save.format === 'tiff' ? 'TIFF ' + Save.compression.toUpperCase() : 'PNG') + ', ' + Save.dpi + ' dpi.' : 'A whole number from 1 to ' + S.info.frames + '.'; };
+    // Save frames…, for a view of the recording, in two ways (the two buttons at its top). Every Nth frame: each its own
+    // labelled picture, in a folder of their own, with one picture of them all. Baseline and peak: those two frames side by
+    // side in one picture (pairCanvas). Its two boxes open on the frames suggested (pairFrames); a frame typed over a
+    // suggestion is kept, for as long as the suggestion stays the same. A box that does not hold a frame of the recording
+    // keeps what was typed, is marked, and says beside it which frames there are; nothing is saved meanwhile, and the
+    // panel opens on the suggestion again.
+    const framesPanel = $('frames-options'), framesEvery = () => Math.round(Number($('frames-every').value)), framesWay = () => framesPanel.querySelector('[data-frames].on').dataset.frames;
+    const fileWords = () => (Save.format === 'tiff' ? 'TIFF ' + Save.compression.toUpperCase() : 'PNG') + ', ' + Save.dpi + ' dpi.';
+    const Pair = { suggested: {}, typed: {} }, pairBoxes = { baseline: 'frames-baseline', peak: 'frames-peak' }, pairFrame = (key) => { const frame = wholeIn($(pairBoxes[key])); return frame >= 1 && frame <= S.info.frames ? frame : NaN; };
+    const framesCount = () => {
+      const pair = framesWay() === 'pair', go = $('frames-go');
+      $('frames-every-row').hidden = pair; $('frames-baseline-row').hidden = $('frames-peak-row').hidden = $('frames-download').hidden = !pair;
+      go.textContent = pair ? 'Save picture' : 'Save frames'; go.title = pair ? 'Saves the picture and how it was made into the plots folder' : 'Saves the frames into a folder of their own inside the plots folder';
+      if (!pair) { const every = framesEvery(), ok = every >= 1 && every <= S.info.frames; go.disabled = !ok;
+        $('frames-count').textContent = ok ? plural(Math.ceil(S.info.frames / every), 'picture') + (Math.ceil(S.info.frames / every) > 1 ? ' and one with all of them' : '') + ', ' + fileWords() : 'A whole number from 1 to ' + S.info.frames + '.'; return; }
+      let ok = true;
+      for (const key of Object.keys(pairBoxes)) { const box = $(pairBoxes[key]), range = $(pairBoxes[key] + '-range'), bad = !finite(pairFrame(key)); ok = ok && !bad;
+        if (bad) box.setAttribute('aria-invalid', 'true'); else box.removeAttribute('aria-invalid'); range.hidden = !bad; range.textContent = '1 to ' + S.info.frames; }
+      go.disabled = $('frames-download').disabled = !ok;
+      const laid = ok ? pairLayout(savedArea()) : null; $('frames-count').textContent = ok ? 'One picture, ' + Math.round(laid.wide * laid.at.scale) + ' × ' + Math.round(laid.high * laid.at.scale) + ' px, ' + fileWords() : '';
+    };
     $('frames-every').addEventListener('input', framesCount); $('frames-cancel').addEventListener('click', () => { framesPanel.hidden = true; });
-    $('frames-every').addEventListener('keydown', (event) => { if (event.key === 'Enter' && !$('frames-go').disabled) $('frames-go').click(); if (event.key === 'Escape') framesPanel.hidden = true; });
+    for (const key of Object.keys(pairBoxes)) $(pairBoxes[key]).addEventListener('input', () => { const typed = $(pairBoxes[key]).value; if (finite(pairFrame(key)) && typed.trim() !== String(Pair.suggested[key])) Pair.typed[key] = typed; else delete Pair.typed[key]; framesCount(); });
+    for (const button of framesPanel.querySelectorAll('[data-frames]')) button.addEventListener('click', () => {
+      for (const other of framesPanel.querySelectorAll('[data-frames]')) { other.classList.toggle('on', other === button); other.setAttribute('aria-pressed', other === button ? 'true' : 'false'); } framesCount(); });
+    $('frames-area').addEventListener('change', () => { setSaveArea($('frames-area').value); framesCount(); });
+    framesPanel.addEventListener('keydown', (event) => { if (event.key === 'Enter' && event.target.tagName === 'INPUT' && !$('frames-go').disabled) $('frames-go').click(); if (event.key === 'Escape') { framesPanel.hidden = true; event.preventDefault(); } });   // (an Escape that closed the panel does nothing else)
     $('save-frames').addEventListener('click', (event) => {
       const note = $('picture-saved'); note.className = 'save-note';
       if (still()) { note.className = 'save-note bad'; note.textContent = 'Choose a recording view first: this view is one still picture.'; return; }
       if (!framesPanel.hidden) { framesPanel.hidden = true; return; }
-      $('frames-every').value = stored('step4.every') || '50'; $('frames-every').max = S.info.frames; framesCount(); framesPanel.hidden = false;
-      const box = anchorOf($('save-frames')).getBoundingClientRect(); framesPanel.style.left = Math.max(8, Math.min(window.innerWidth - 316, box.right - 300)) + 'px'; framesPanel.style.top = ''; framesPanel.style.bottom = '';
-      if (box.top > window.innerHeight / 2) framesPanel.style.bottom = (window.innerHeight - box.top + 6) + 'px'; else framesPanel.style.top = (box.bottom + 6) + 'px';
-      $('frames-every').focus(); $('frames-every').select(); event.stopPropagation();
+      $('frames-every').value = stored('step4.every') || '50'; $('frames-every').max = S.info.frames;
+      const suggested = pairFrames(); for (const key of Object.keys(pairBoxes)) { if (Pair.suggested[key] !== suggested[key]) delete Pair.typed[key]; $(pairBoxes[key]).value = Pair.typed[key] === undefined ? suggested[key] : Pair.typed[key]; } Pair.suggested = suggested;
+      framesCount(); openBeside(framesPanel, $('save-frames'));
+      const first = $(framesWay() === 'pair' ? 'frames-baseline' : 'frames-every'); first.focus(); first.select(); event.stopPropagation();
     });
     document.addEventListener('click', (event) => { if (!framesPanel.hidden && !framesPanel.contains(event.target) && event.target.id !== 'save-frames') framesPanel.hidden = true; });
-    // every Nth frame of the view on screen, each its own labelled picture, in a folder of their own
-    $('frames-go').addEventListener('click', async () => {
-      const note = $('picture-saved'), every = framesEvery(); note.className = 'save-note'; framesPanel.hidden = true;
+    // The same area for every frame of a set, also when the view is moved while they are saved: the area is taken once, as saving begins.
+    const saveEvery = async () => {
+      const note = $('picture-saved'), every = framesEvery(), area = savedArea(); note.className = 'save-note'; framesPanel.hidden = true;
       store('step4.every', String(every));
       const frames = []; for (let f = 1; f <= S.info.frames; f += every) frames.push(f);
-      const stamp = exportName('x', 'png').match(/(\d{8}-\d{6})\.png$/)[1], folder = 'frames_' + viewKind().replace(/^picture_/, '').replace(/_frame\d+$/, '') + '_every_' + every + '_' + stamp, width = String(S.info.frames).length;
+      const stamp = exportName('x', 'png').match(/(\d{8}-\d{6})\.png$/)[1], folder = 'frames_' + viewWord() + (area ? '_area' : '') + '_every_' + every + '_' + stamp, width = String(S.info.frames).length;
       $('save-frames').disabled = true;
       try {
         let reply = null, combined = null, layout = null;
         for (let i = 0; i < frames.length; i++) {
           note.textContent = 'Saving frame ' + frames[i] + ' (' + (i + 1) + ' of ' + frames.length + ')…';
-          const canvas = await viewCanvas(frames[i], true);
+          const canvas = await viewCanvas(frames[i], true, area);
           reply = await api('export', Object.assign({ folder, name: 'frame_' + String(frames[i]).padStart(width, '0'), png: canvas.toDataURL('image/png') }, pictureOptions()));
           // the same labelled frame, as one tile of the combined picture
           if (!combined) { layout = combinedLayout(frames.length, canvas.width, canvas.height); combined = document.createElement('canvas'); combined.width = layout.width; combined.height = layout.height; const c = combined.getContext('2d'); c.fillStyle = '#000'; c.fillRect(0, 0, layout.width, layout.height); c.imageSmoothingQuality = 'high'; }
           combined.getContext('2d').drawImage(canvas, layout.gap + (i % layout.cols) * (layout.tw + layout.gap), layout.gap + Math.floor(i / layout.cols) * (layout.th + layout.gap), layout.tw, layout.th);
         }
         if (combined && frames.length > 1) { note.textContent = 'Saving the combined picture…'; await api('export', Object.assign({ folder, name: 'all_frames_combined', png: combined.toDataURL('image/png') }, pictureOptions())); }
-        await api('export', { folder, name: 'about_these_frames', metadata: Object.assign(viewMetadata(), { frames, every, combined_picture: combined && frames.length > 1 ? { file: 'all_frames_combined', columns: layout.cols, rows: layout.rows, tile_pixels: [layout.tw, layout.th] } : null, outlines_shown: S.outlines, outline_colours: S.results ? { responded: ON_PICTURE.responded, did_not_respond: ON_PICTURE.not, excluded_or_unscorable: ON_PICTURE.other } : { your_cells: '#ffffff' }, picture: pictureOptions() }) });
+        await api('export', { folder, name: 'about_these_frames', metadata: Object.assign(viewMetadata(), { frames, every, combined_picture: combined && frames.length > 1 ? { file: 'all_frames_combined', columns: layout.cols, rows: layout.rows, tile_pixels: [layout.tw, layout.th] } : null, picture: pictureOptions() }, areaRecord(area), outlineRecord()) });
         note.textContent = 'Saved ' + plural(frames.length, 'frame') + (frames.length > 1 ? ' and one combined picture' : '') + ' in plots/' + reply.folderName + ' ';
         const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open plots folder'; open.addEventListener('click', () => api('open', { what: 'plots' }).catch(() => { })); note.appendChild(open);
       } catch (error) { note.className = 'save-note bad'; note.textContent = 'Stopped: ' + badSave(error); }
       finally { $('save-frames').disabled = false; }
-    });
-    // how pictures are saved: format, size, resolution, TIFF compression (kept with Fiji's preferences)
-    const saveBoxes = { format: 'save-format', size: 'save-size', dpi: 'save-dpi', compression: 'save-compression' };
-    const showSaveOptions = () => {
-      for (const key of Object.keys(saveBoxes)) $(saveBoxes[key]).value = String(Save[key]);
-      $('save-compression-label').hidden = Save.format !== 'tiff';
-      const size = inches(), wide = S.info ? Math.round(S.info.width * pictureScale()) : 0;
-      $('save-pixels').textContent = wide ? 'Pictures and frames ' + wide + ' px wide' + (size && wide < Math.round(size[0] * Save.dpi) ? ' (4× the recording, the most it allows).' : '.') : '';
     };
+    // The pair is one picture: saved or downloaded as a picture of the cells is ("how": saveToFolder or save), in the format and
+    // resolution of Options. Its record names both frames, in place of the frame on screen, and the gray levels the view's
+    // frames are shown between.
+    const savePair = async (how) => {
+      const note = $('picture-saved'), baseline = pairFrame('baseline'), peak = pairFrame('peak'), area = savedArea(), times = frameTimes(), named = (f) => ({ frame: f, time_s: finite(times[f - 1]) ? times[f - 1] : null });
+      framesPanel.hidden = true; note.className = 'save-note'; note.textContent = 'Preparing…';
+      try {
+        const shown = await api('range?mode=' + S.view), picture = async () => (await pairCanvas(baseline, peak, area)).toDataURL('image/png');
+        picture.area = area; picture.barred = true; picture.shows = { frame: undefined, time_s: undefined, baseline: named(baseline), peak: named(peak), brightness_range: shown.ranges };
+        await how(picture, viewKind(area, 'baseline_frame' + baseline + '_peak_frame' + peak), 'picture-saved');
+      } catch (error) { note.className = 'save-note bad'; note.textContent = 'Not saved: ' + badSave(error); }
+    };
+    $('frames-go').addEventListener('click', () => (framesWay() === 'pair' ? savePair(saveToFolder) : saveEvery())); $('frames-download').addEventListener('click', () => savePair(save));
+    // how pictures are saved: format, size, resolution, TIFF compression (kept with Fiji's preferences)
     for (const key of Object.keys(saveBoxes)) $(saveBoxes[key]).addEventListener('change', () => { Save[key] = key === 'dpi' ? Number($(saveBoxes[key]).value) : $(saveBoxes[key]).value; store('step4.' + key, String(Save[key])); showSaveOptions(); });
     for (const button of document.querySelectorAll('.save-options-toggle')) button.addEventListener('click', (event) => {
       const panel = $('save-options'), open = panel.hidden || panel.dataset.by !== String(Array.from(document.querySelectorAll('.save-options-toggle')).indexOf(button));
       panel.hidden = !open; if (!open) return;
-      panel.dataset.by = String(Array.from(document.querySelectorAll('.save-options-toggle')).indexOf(button)); showSaveOptions();
-      const box = anchorOf(button).getBoundingClientRect(); panel.style.left = Math.max(8, Math.min(window.innerWidth - 316, box.right - 300)) + 'px'; panel.style.top = ''; panel.style.bottom = '';
-      if (box.top > window.innerHeight / 2) panel.style.bottom = (window.innerHeight - box.top + 6) + 'px'; else panel.style.top = (box.bottom + 6) + 'px';
+      panel.dataset.by = String(Array.from(document.querySelectorAll('.save-options-toggle')).indexOf(button)); showSaveOptions(); openBeside(panel, button);
       event.stopPropagation();
     });
     document.addEventListener('click', (event) => { const panel = $('save-options'); if (!panel.hidden && !panel.contains(event.target) && !event.target.classList.contains('save-options-toggle')) panel.hidden = true; });
@@ -1994,7 +2769,7 @@
     $('all-call-columns').addEventListener('change', () => table('table-calls', S.results.tables.calls));
     $('response-window').addEventListener('change', () => { S.window = $('response-window').value; updateWindow(); });
     $('metrics-table').addEventListener('change', showMetricTable);
-    $('below-zero').addEventListener('change', () => { S.withoutBelowZero = $('below-zero').checked; showTiles(); });
+    $('below-zero').addEventListener('change', () => { S.withoutBelowZero = $('below-zero').checked; showTiles(); Plot.dirty = true; drawPlot(); });   // the plot leaves the same cells out
     $('group').addEventListener('change', () => { S.group = Number($('group').value); listCells(); });
     // The Cell box. A full name, typed or picked from its list, opens that cell at once; a number alone opens it on Enter.
     // An empty box is no cell, and its ✕ empties it. Text that names no cell in the Show list is put back to the cell that is open.
@@ -2006,36 +2781,62 @@
       box.addEventListener('keydown', (event) => { if (event.key === 'Enter') { settle(true, true); event.preventDefault(); } else if (event.key === 'Escape') { event.preventDefault(); box.value = S.cell ? shortName(S.cell) : ''; box.blur(); } });
       box.addEventListener('focus', () => box.select()); }
     $('previous').addEventListener('click', () => stepCell(-1)); $('next').addEventListener('click', () => stepCell(1));
-    $('every').addEventListener('change', () => { S.every = $('every').checked; Plot.dirty = true; drawPlot(); legend(); });
+    $('every').addEventListener('change', () => { S.every = $('every').checked; Plot.dirty = true; drawPlot(); });
+    $('thresholds').addEventListener('change', () => { S.thresholds = $('thresholds').checked; Plot.dirty = true; drawPlot(); });
     $('view').addEventListener('change', () => { play(false); S.view = $('view').value; S.viewChosen = true; updateTransport(); requestFrame(); });
-    $('outlines').addEventListener('change', () => { S.outlines = $('outlines').checked; drawPicture(); });
-    $('zoom-cell').addEventListener('click', zoomToCell); $('zoom-all').addEventListener('click', () => { Pic.zoom = 1; Pic.panX = Pic.panY = 0; drawPicture(); });
+    $('outlines').addEventListener('change', () => { S.outlines = $('outlines').checked; $('outline-colours').disabled = $('number-cells').disabled = !S.outlines; drawPicture(); });   // colours and numbers belong to outlines that are drawn
+    $('zoom-cell').addEventListener('click', zoomToCell); $('zoom-all').addEventListener('click', () => setView(1));
+    $('zoom-in').addEventListener('click', () => zoomStep(1)); $('zoom-out').addEventListener('click', () => zoomStep(-1)); $('zoom-region').addEventListener('click', () => setRegion(!Pic.region));
     $('play').addEventListener('click', () => play(!S.timer)); $('speed').addEventListener('change', () => { if (S.timer) play(true); });
     $('time').addEventListener('input', () => setFrame(Number($('time').value), true));
     $('frame-back').addEventListener('click', () => setFrame(S.frame - 1, true)); $('frame-forward').addEventListener('click', () => setFrame(S.frame + 1, true));
-    $('order').addEventListener('change', () => { S.order = $('order').value; drawHeatmap(); });
-    $('palette').addEventListener('change', () => { S.palette = $('palette').value; drawHeatmap(); });
-    $('range').addEventListener('change', () => { S.range = $('range').value; drawHeatmap(); });
-    $('tall').addEventListener('change', () => { S.tall = $('tall').checked; drawHeatmap(); });
+    // the heatmap's lists and tick boxes: how they stand on the page is how the heatmap opens, so the page has one place for these defaults
+    for (const [id, key] of [['order', 'order'], ['palette', 'palette'], ['range', 'range'], ['row-names', 'rowNames'], ['hide-excluded', 'hideExcluded']]) {
+      const box = $(id), read = () => { S[key] = box.type === 'checkbox' ? box.checked : box.value; }; read(); box.addEventListener('change', () => { read(); drawHeatmap(); });
+    }
     $('save-plot').addEventListener('click', () => save(plotPicture, plotKind(), 'plot-saved')); $('save-heatmap').addEventListener('click', () => save(heatmapPicture, 'heatmap', 'heatmap-saved'));
 
-    const picture = $('picture');
-    picture.addEventListener('wheel', (event) => { if (!(event.ctrlKey || event.metaKey)) return; event.preventDefault(); const box = picture.getBoundingClientRect(), mx = event.clientX - box.left, my = event.clientY - box.top, before = place(picture.clientWidth, picture.clientHeight);
-      const ix = (mx - before.x) / before.z, iy = (my - before.y) / before.z; Pic.zoom = Math.max(1, Math.min(16, Pic.zoom * Math.pow(1.0015, -event.deltaY)));
-      if (Pic.zoom === 1) Pic.panX = Pic.panY = 0; else { const after = place(picture.clientWidth, picture.clientHeight); Pic.panX += mx - (after.x + ix * after.z); Pic.panY += my - (after.y + iy * after.z); } drawPicture(); }, { passive: false });
-    // What was open when a click (or the first click of a double-click) began.
-    picture.addEventListener('mousedown', (event) => { Pic.drag = { x: event.clientX, y: event.clientY }; Pic.moved = false; if (event.detail < 2) Pic.held = { cell: S.cell, mode: S.plotMode }; });
-    window.addEventListener('mousemove', (event) => { if (!Pic.drag) return; if (Math.abs(event.clientX - Pic.drag.x) + Math.abs(event.clientY - Pic.drag.y) > 3) Pic.moved = true;
-      if (Pic.moved) { Pic.panX += event.clientX - Pic.drag.x; Pic.panY += event.clientY - Pic.drag.y; Pic.drag = { x: event.clientX, y: event.clientY }; drawPicture(); } });
-    window.addEventListener('mouseup', () => { Pic.drag = null; Plot.scrubbing = false; });
-    // A click on a cell opens it; a click on empty space shows no cell. A drag (pan) is not a click.
+    // The picture. Zooming is at the pointer: scrolling over the picture scrolls the page, and with Ctrl or Cmd held it zooms. A
+    // pinch on a trackpad arrives as wheel events marked Ctrl with no Ctrl key held, in small steps that give the change of scale
+    // as exp(−deltaY / 100): taken at that, the picture follows the fingers. Safari sends a pinch as gesture events with the scale itself.
+    const picture = $('picture'), stage = $('picture-stage');
+    window.addEventListener('keydown', (event) => { if (event.key === 'Control') Pic.ctrl = true; }, true); window.addEventListener('keyup', (event) => { if (event.key === 'Control') Pic.ctrl = false; }, true); window.addEventListener('blur', () => { Pic.ctrl = false; });
+    picture.addEventListener('wheel', (event) => { if (!(event.ctrlKey || event.metaKey)) return; event.preventDefault(); const p = panelPoint(event);
+      const pinch = event.ctrlKey && !event.metaKey && !Pic.ctrl && event.deltaMode === 0 && Math.abs(event.deltaY) < 50;
+      zoomAt(Pic.zoom * (pinch ? Math.exp(-event.deltaY / 100) : Math.pow(1.0015, -event.deltaY)), p.x, p.y); }, { passive: false });
+    picture.addEventListener('gesturestart', (event) => { event.preventDefault(); Pic.pinch = Pic.zoom; });
+    picture.addEventListener('gesturechange', (event) => { event.preventDefault(); if (Pic.pinch) { const p = panelPoint(event); zoomAt(Pic.pinch * event.scale, p.x, p.y); } });
+    picture.addEventListener('gestureend', (event) => { event.preventDefault(); Pic.pinch = null; });
+    // A press that moves more than 3 pixels is a drag, never a click. Zoomed in, it moves the picture; with "Zoom to region" on,
+    // or Shift held, it draws a rectangle and the view zooms to it. What was open when a click (or the first click of a double-click) began is kept.
+    picture.addEventListener('mousedown', (event) => { if (event.button) return; const p = panelPoint(event);
+      Pic.drag = { x: event.clientX, y: event.clientY, band: Pic.region || event.shiftKey ? [p.x, p.y] : null }; Pic.moved = false; if (event.detail < 2) Pic.held = { cell: S.cell, mode: S.plotMode }; });
+    window.addEventListener('mousemove', (event) => { const drag = Pic.drag; if (!drag) return;
+      if (!Pic.moved && Math.abs(event.clientX - drag.x) + Math.abs(event.clientY - drag.y) <= 3) return;
+      Pic.moved = true; tip('');
+      if (drag.band) { const p = panelPoint(event); Pic.band = [drag.band[0], drag.band[1], Math.max(0, Math.min(picture.clientWidth, p.x)), Math.max(0, Math.min(picture.clientHeight, p.y))]; drawPicture(); return; }
+      const z = place(picture.clientWidth, picture.clientHeight).z, dx = event.clientX - drag.x, dy = event.clientY - drag.y; drag.x = event.clientX; drag.y = event.clientY;
+      if (Pic.zoom > 1) setView(Pic.zoom, Pic.cx - dx / z, Pic.cy - dy / z); });
+    window.addEventListener('mouseup', () => { const drag = Pic.drag; Pic.drag = null; Plot.scrubbing = false; if (!drag || !Pic.moved) return;
+      const band = Pic.band; Pic.band = null; if (band && zoomToBand(band)) setRegion(false); else drawPicture(); });   // the button turns itself off once the view has zoomed
+    // A click on a cell opens it; a click on empty space shows no cell. A drag is not a click.
     picture.addEventListener('click', (event) => { if (Pic.moved) return; const i = cellAt(event), name = i >= 0 ? S.info.names[i] : null; if (name || S.cell) chooseCell(name); });   // (the open cell clicked again: the zoomed view centres on it)
     // A double-click shows the whole picture. On empty space it keeps the cell that was open: its first click had cleared it.
     picture.addEventListener('dblclick', (event) => { const held = Pic.held;
       if (held && held.cell && !S.cell && cellAt(event) < 0) { pick(held.cell); if (S.plotMode !== held.mode) setPlotMode(held.mode); }
-      Pic.zoom = 1; Pic.panX = Pic.panY = 0; drawPicture(); });
-    picture.addEventListener('mousemove', (event) => { if (Pic.drag) return; const i = cellAt(event); tip(i >= 0 ? fullName(S.info.names[i]) + (callOf(S.info.names[i]) ? ' · ' + callOf(S.info.names[i]) : '') : '', event.clientX, event.clientY); });
-    picture.addEventListener('mouseleave', () => tip(''));
+      setView(1); });
+    picture.addEventListener('mousemove', (event) => { Pic.pointer = panelPoint(event); if (Pic.drag) return; const i = cellAt(event); tip(i >= 0 ? fullName(S.info.names[i]) + (callOf(S.info.names[i]) ? ' · ' + callOf(S.info.names[i]) : '') : '', event.clientX, event.clientY); });
+    picture.addEventListener('mouseleave', () => { Pic.pointer = null; tip(''); });
+    // The first times the pointer comes onto the picture, a line beside the controls says how to zoom and move with the pointer alone.
+    // It goes when the pointer leaves, or after 8 s. A pointer that only crosses the picture does not use up one of the times.
+    { const hint = $('view-hint'); let shown = null, read = null; hint.textContent = 'Pinch or ' + (/Mac|iPhone|iPad/.test(navigator.platform) ? 'Cmd' : 'Ctrl') + ' + scroll to zoom. Drag to move.';
+      stage.addEventListener('mouseenter', () => { Pic.over = true; if (!S.info || Pic.hinted >= HINT_TIMES) return; hint.hidden = false; clearTimeout(shown); clearTimeout(read);
+        read = setTimeout(() => { Pic.hinted++; store('step4.viewhint', String(Pic.hinted)); }, HINT_READ); shown = setTimeout(() => { hint.hidden = true; }, 8000); });
+      stage.addEventListener('mouseleave', () => { Pic.over = false; hint.hidden = true; clearTimeout(shown); clearTimeout(read); }); }
+    // The small map: a press or a drag in it puts that point of the recording in the middle of the view.
+    { const map = $('view-map'), move = (event) => { const box = map.getBoundingClientRect(); setView(Pic.zoom, (event.clientX - box.left) / box.width * S.info.width, (event.clientY - box.top) / box.height * S.info.height); };
+      map.addEventListener('pointerdown', (event) => { if (event.button) return; event.preventDefault(); try { map.setPointerCapture(event.pointerId); } catch (unsupported) { } move(event); });
+      map.addEventListener('pointermove', (event) => { if (event.buttons & 1) move(event); }); }
 
     const plot = $('plot');
     plot.addEventListener('pointermove', (event) => {
@@ -2059,11 +2860,16 @@
     const heatmap = $('heatmap');
     heatmap.addEventListener('click', (event) => { const at = heatmapAt(event); if (at) { chooseCell(at.name); if (at.inside) setFrame(at.frame + 1, true); showTab('review'); } });
     heatmap.addEventListener('mousemove', (event) => { const at = heatmapAt(event); if (!at) { tip(''); return; } const trace = S.results.traces[at.name], v = trace ? trace[at.frame] : null;
-      tip(fullName(at.name) + (callOf(at.name) ? ' · ' + callOf(at.name) : '') + (at.inside ? ' · ' + (at.gap ? 'acquisition gap; nearest frame' : finite(v) ? v.toFixed(3) : 'no value') + ' at ' + S.results.time[at.frame].toFixed(1) + ' s' : ''), event.clientX, event.clientY); });
+      tip(fullName(at.name) + (callOf(at.name) ? ' · ' + callOf(at.name) : '') + (belowZero(at.name) ? ' · below zero' : '') + (at.inside ? ' · ' + (at.gap ? 'acquisition gap; nearest frame' : finite(v) ? v.toFixed(3) : 'no value') + ' at ' + S.results.time[at.frame].toFixed(1) + ' s' : ''), event.clientX, event.clientY); });
     heatmap.addEventListener('mouseleave', () => tip(''));
 
-    document.addEventListener('keydown', (event) => { const tag = (event.target.tagName || '').toLowerCase(); if (tag === 'input' || tag === 'select' || tag === 'textarea' || $('panel-review').hidden || Fig.open) return;
-      if (event.key === 'Escape' && S.cell && !event.defaultPrevented) { chooseCell(null); event.preventDefault(); }
+    document.addEventListener('keydown', (event) => { const tag = (event.target.tagName || '').toLowerCase(), field = tag === 'input' || tag === 'select' || tag === 'textarea'; if ($('panel-review').hidden || Fig.open) return;
+      // With the pointer over the picture, + and − zoom about it and 0 shows the whole picture: not while typing or choosing from a list, and not with Ctrl or Cmd, which is the browser's own zoom.
+      if (Pic.over && Object.prototype.hasOwnProperty.call(ZOOM_KEYS, event.key) && !(field && !['checkbox', 'radio', 'range'].includes(event.target.type)) && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        const by = ZOOM_KEYS[event.key], p = Pic.pointer || {}; if (by) zoomStep(by, p.x, p.y); else setView(1); event.preventDefault(); return; }
+      if (field) return;
+      if (event.key === 'Escape' && (Pic.region || Pic.band) && !event.defaultPrevented) { Pic.drag = null; setRegion(false); event.preventDefault(); }   // Esc leaves "Zoom to region" and keeps the cell
+      else if (event.key === 'Escape' && S.cell && !event.defaultPrevented) { chooseCell(null); event.preventDefault(); }
       else if (event.key === 'ArrowLeft') { stepCell(-1); event.preventDefault(); } else if (event.key === 'ArrowRight') { stepCell(1); event.preventDefault(); } else if (event.key === ' ' && S.info && S.info.hasMovie && S.view !== 'picture' && tag !== 'button') { play(!S.timer); event.preventDefault(); } });
     window.addEventListener('resize', redraw);
     if (window.ResizeObserver) { new ResizeObserver(redraw).observe($('panel-review')); new ResizeObserver(() => drawHeatmap()).observe($('heatmap-box')); }
@@ -2072,5 +2878,5 @@
 
   wire();
   start().catch((problem) => { $('lost').classList.add('on'); $('status').textContent = problem.message; });
-  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, FIGURE_DEFAULT, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, exportMetadata, heatmapAt };   // for the browser test
+  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, STYLE, place, viewArea, savedArea, viewCanvas, pairCanvas, scaleBarLength, pictureKey, cellNumber, plotCells, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, legendLayout, exportMetadata, heatmapAt, heatmapData, pictureRecord };   // for the browser test
 })();

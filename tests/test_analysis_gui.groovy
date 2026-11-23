@@ -149,6 +149,11 @@ try {
         assert original.getRoi()==null
         assert ui.heatmap.names==['Cell001','Cell005','Cell002','Cell003','Cell004','Cell006'] && ui.heatmap.calls[0]=='Responded' && ui.heatmap.calls[2]=='Did not respond'
         assert ui.heatmap.limit()==1d && ui.heatmap.preferredSize.height>=6*ui.heatmap.ROW
+        // A cell below zero (ΔF/F₀ under −1) goes last within its group and sets no colour limit, as on the Step 4 page.
+        double[] steadyTrace=ui.traces.Cell001;ui.traces.Cell001=steadyTrace.collect{-4d} as double[];ui.orderHeatmap()
+        assert ui.heatmap.names[0..2]==['Cell005','Cell001','Cell002'] && ui.heatmap.limit()==1d : 'A cell below zero must not lead its group or set the colour limit'
+        ui.traces.Cell001=steadyTrace;ui.orderHeatmap()
+        assert ui.heatmap.names[0..1]==['Cell001','Cell005']
         ui.heatmapOrder.selectedIndex=1
         assert ui.heatmap.names==(1..6).collect{String.format('Cell%03d',it)}
         ui.tabs.selectedIndex=2;ui.heatmap.choose(4)
