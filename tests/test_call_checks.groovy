@@ -24,6 +24,9 @@ for(int y=0;y<ch;y++)for(int x=0;x<cw;x++){int best=Integer.MAX_VALUE;for(int v=
 assert Rings.distances(new boolean[12],4,3)==null : 'nothing to measure a distance to'
 assert Rings.widths(0.645d,0.645d,'micron') as List==[1d,10d,22d,2d] && Rings.widths(0.3225d,0.3225d,'µm') as List==[2d,20d,44d,4d] : 'widths are kept in micrometres'
 assert Rings.widths(1d,1d,'pixel') as List==[1d,10d,22d,2d] && Rings.widths(0.645d,0.645d,null) as List==[1d,10d,22d,2d] && Rings.widths(0.4d,0.8d,'micron') as List==[1d,10d,22d,2d] : 'no usable pixel size: the pixel values as they are'
+assert Rings.widths(Double.NaN,0.645d,'micron') as List==[1d,10d,22d,2d] && Rings.widths(0.645d,Double.NaN,'micron') as List==[1d,10d,22d,2d] && Rings.widths(Double.POSITIVE_INFINITY,1d,'micron') as List==[1d,10d,22d,2d] : 'a pixel size that is not a number is no pixel size'
+assert Rings.scaleOf(0.645d,0.645d,'micron')=='micrometres' && Rings.scaleOf(0.645d,0.7d,'micron')=='not square' && Rings.scaleOf(0.645d,Double.NaN,'µm')=='not square' && Rings.scaleOf(Double.NaN,0.645d,'micron')=='no size' && Rings.scaleOf(0.645d,0.645d,'pixel')=='no size'
+assert Steps.micrometres('micron') && Steps.micrometres('microns') && Steps.micrometres('um') && Steps.micrometres('\u00B5m') && !Steps.micrometres('pixel') && !Steps.micrometres(null) : 'one test of the unit, for the scale bar and the rings'
 assert Rings.NAMES.size()==25 && Rings.NAMES[0]=='near_right' && Rings.NAMES[7]=='near_upper_right' && Rings.NAMES[15]=='far_upper_right' && Rings.NAMES[16]=='core' && Rings.NAMES[18]=='rim_lower_right'
 int[] alone=Steps.pixelsOf(disc(120,100,15),W,H),beside=Steps.pixelsOf(disc(154,100,15),W,H)
 def nearest={int i,int[] to->int x=i%W,y=i.intdiv(W);double best=Double.MAX_VALUE;for(int k:to){int dx=k%W-x,dy=k.intdiv(W)-y;best=Math.min(best,(double)(dx*dx+dy*dy))};Math.sqrt(best)}
@@ -105,14 +108,15 @@ if(commands.get(null)==null)commands.set(null,new Hashtable(['PNG...':'ij.plugin
 // What Step 1 leaves for Measure, without its two filters that need Fiji's menus: the all-frames picture here is the mean of
 // the frames minus the level of the glass.
 def prepared={ImagePlus imp->
-    def steps=Steps.newInstance();steps.movie=imp;steps.n=N;steps.w=W;steps.h=H
+    int pw=imp.getWidth(),ph=imp.getHeight()
+    def steps=Steps.newInstance();steps.movie=imp;steps.n=N;steps.w=pw;steps.h=ph
     steps.say('Recording: '+imp.getTitle());steps.motionShifts=Motion.shifts(imp.getStack(),N)
     float[] mean=View.mean(imp.getStack(),1,N);steps.rest=mean.clone()
-    float[] level=new float[W*H];for(int i=0;i<level.length;i++)level[i]=mean[i]-100f
-    steps.allPic=new ImagePlus('all_frames',new FloatProcessor(W,H,level));steps.flat=level.clone()
-    def mask=new ByteProcessor(W,H);byte[] m=(byte[])mask.getPixels();for(int i=0;i<m.length;i++)if(level[i]>Steps.BRIGHT_ABOVE)m[i]=(byte)255
+    float[] level=new float[pw*ph];for(int i=0;i<level.length;i++)level[i]=mean[i]-100f
+    steps.allPic=new ImagePlus('all_frames',new FloatProcessor(pw,ph,level));steps.flat=level.clone()
+    def mask=new ByteProcessor(pw,ph);byte[] m=(byte[])mask.getPixels();for(int i=0;i<m.length;i++)if(level[i]>Steps.BRIGHT_ABOVE)m[i]=(byte)255
     new ij.plugin.filter.RankFilters().rank(mask,(double)Steps.BRIGHT_GROW,ij.plugin.filter.RankFilters.MAX)
-    boolean[] bright=new boolean[W*H];for(int i=0;i<m.length;i++)bright[i]=m[i]!=0
+    boolean[] bright=new boolean[pw*ph];for(int i=0;i<m.length;i++)bright[i]=m[i]!=0
     steps.bright=bright
     steps
 }
@@ -129,10 +133,11 @@ File values=new File(still.prefix+'ring_and_core_gray_values.csv.gz'),pixels=new
 assert values.isFile() && pixels.isFile() && movement.isFile() && !new File(values.path+'.part').exists() : 'Measure saves what it measured around the cells beside the tables'
 def pixelRows=Csv.read(pixels)
 assert pixelRows[0]==Checks.PIXEL_HEADER && pixelRows[0][0..2]==['Cell','ROI_sha256','Area_pixels'] && pixelRows[0][3..27]==Rings.NAMES && pixelRows.drop(1)*.getAt(0)==names as List
+assert pixelRows[0][28..-1]==['Near_ring_sectors_usable','Raw_table_sha256','Ring_and_core_values_sha256','Pixel_size_um','Near_ring_from_px','Near_ring_to_px','Far_ring_to_px','Other_outline_margin_px']
 def registered=Measurement.registry(rois,rois,new int[rois.length],still.steps,'test')
 pixelRows.drop(1).eachWithIndex{row,int c->
     assert row[1]==registered[c+1][5] && (row[2] as int)==rois[c].getContainedPoints().length : 'the outline is named as the ROI registry names it'
-    assert row[pixelRows[0].indexOf('Raw_table_sha256')]==Installer.digest(new File(still.prefix+'gray_values_raw.csv').bytes) && row[pixelRows[0].indexOf('Gray_values_sha256')]==Installer.digest(values.bytes) : 'the files say which raw table they belong to'
+    assert row[pixelRows[0].indexOf('Raw_table_sha256')]==Installer.digest(new File(still.prefix+'gray_values_raw.csv').bytes) && row[pixelRows[0].indexOf('Ring_and_core_values_sha256')]==Installer.digest(values.bytes) : 'the files say which raw table they belong to'
     assert row[pixelRows[0].indexOf('Pixel_size_um')]=='0.645' && row[-4..-1]==['1.0','10.0','22.0','2.0']
 }
 List head=new java.util.zip.GZIPInputStream(new FileInputStream(values)).withCloseable{new BufferedReader(new InputStreamReader(it,'UTF-8')).readLines()}
@@ -158,7 +163,43 @@ assert new File(root,'plain/plain_ring_and_core_gray_values.csv.gz').bytes==valu
 // without the field's movement the record does not name its file
 String still2=Checks.record(ringsOf,'still_',false)
 assert still2.contains('still_ring_and_core_pixels.csv. The movement of the field was not measured.') && !still2.contains('field_movement') && Checks.record(ringsOf,'still_')==around[0]
+// micrometre pixels that are not square: said as such, and the pixel values are used
+String oblong=Checks.record(Rings.newInstance(masks as int[][],W,H,0.645d,0.7d,'micron'),'still_')
+assert oblong.contains('The pixels of the recording are not square, so the widths are the pixel values as they are.') && !oblong.contains('no pixel size') && !oblong.contains('(')
+// a table that is not finished leaves nothing behind
+def unfinished=new File(root,'unfinished');unfinished.mkdirs();def half=Rings.newInstance(masks as int[][],W,H,0.645d,0.645d,'micron')
+half.open(new File(unfinished,'x_ring_and_core_gray_values.csv.gz'),names);half.frame(1,still.movie.getStack().getProcessor(1))
+assert unfinished.list().size()==1 && unfinished.list()[0]==~/x_ring_and_core_gray_values\.csv\.gz\.[0-9a-f]{8}\.part/ : unfinished.list()
+half.abandon();assert unfinished.list().size()==0
+def leftOver=new File(root,'left');leftOver.mkdirs();[Checks.VALUES,Checks.PIXELS,Checks.MOVEMENT].each{new File(leftOver,'x_'+it).text='old'};Checks.removeBeside(new File(leftOver,'x_').path)
+assert leftOver.list().size()==0 : 'what an earlier measurement left is taken away, the field movement with it'
+// a picture too small to measure the movement on: no movement file, and the record says it was not measured
+assert Motion.measurable(W,H,N) && Motion.measurable(196,320,N) && !Motion.measurable(192,320,N) && !Motion.measurable(420,192,N) && !Motion.measurable(W,H,2)
+def small=new ImagePlus('small',still.movie.getStack().crop(0,0,0,160,160,N));small.setCalibration(still.movie.getCalibration().copy())
+def smallSteps=prepared(small)
+assert smallSteps.motionShifts.every{it[0]==0d&&it[1]==0d} : 'Step 1 gives zeros, not a measurement, on a small picture'
+Roi[] smallRois=[rois[0]] as Roi[];String[] smallNames=[names[0]] as String[]
+def smallFolder=new File(root,'small');smallFolder.mkdirs();smallSteps.measureAndSave(smallRois,smallNames,new File(smallFolder,'small_').path)
+String smallLine=new File(smallFolder,'small_what_was_done.txt').readLines('UTF-8').find{it.startsWith('Around each cell: ')}
+assert !new File(smallFolder,'small_field_movement.csv').exists() && new File(smallFolder,'small_ring_and_core_pixels.csv').isFile() && smallLine.endsWith('small_ring_and_core_pixels.csv. The movement of the field was not measured. Step 4 uses them to flag a possible passing object. No measurement and no call changes.') : smallLine
 println 'PASS: Measure saves the ring and core table, the pixels of each zone with the raw table they belong to, the field movement and one line in the record'
+
+// ---- a failure around the cells never fails Measure: every other file is as without it, and the record says so plainly
+def baseFolder=new File(root,'base');baseFolder.mkdirs()
+String baseSummary=prepared(movie(false)).measureAndSave(rois,names,new File(baseFolder,'rec_').path)
+def others={File folder->folder.listFiles().findAll{it.isFile()&&!(it.name in ['rec_what_was_done.txt','rec_cells_RoiSet.zip'])&&!it.name.contains('ring_and_core')&&!it.name.contains('field_movement')}.collectEntries{[it.name,Installer.digest(it.bytes)]}}
+Map wanted=others(baseFolder);assert wanted.size()>=4
+[(Checks.VALUES):'rec_ring_and_core_gray_values.csv.gz',(Checks.MOVEMENT):'rec_field_movement.csv',(Checks.PIXELS):'rec_ring_and_core_pixels.csv'].each{String kind,String blocked->
+    def broken=new File(root,'broken-'+kind.replace('.','-'));broken.mkdirs()
+    new File(broken,blocked).mkdirs();new File(broken,blocked+'/keep').text='x'   // a folder where the file should go
+    String summary=prepared(movie(false)).measureAndSave(rois,names,new File(broken,'rec_').path)
+    assert summary==baseSummary && others(broken)==wanted : 'Measure goes on and saves the same: '+kind
+    List before=new File(baseFolder,'rec_what_was_done.txt').readLines('UTF-8'),after=new File(broken,'rec_what_was_done.txt').readLines('UTF-8')
+    assert after.findAll{!it.startsWith('Around each cell: ')}==before.findAll{!it.startsWith('Around each cell: ')} && after.count{it.startsWith('Around each cell: ')}==1
+    assert after.find{it.startsWith('Around each cell: ')}=='Around each cell: the rings and the core were not saved: '+blocked+' could not be written. The cell measurements are unchanged.'
+    assert broken.listFiles().findAll{it.isFile()&&(it.name.contains('ring_and_core')||it.name.contains('field_movement')||it.name.endsWith('.part'))}==[] : 'nothing half saved is left: '+broken.list()
+}
+println 'PASS: when the files around the cells cannot be written, Measure saves everything else as it would without them and the record names the file in plain words'
 
 // ---- the checks, read as the page reads them
 def Session=loader.loadClass('CalciumAnalysisSession'),Server=loader.loadClass('CalciumWebServer')
@@ -178,7 +219,7 @@ def checked={Map data,String name->
         def results=call('api/results')[1]
         // read again from the saved file, as when an analysis is opened without running it
         session.load(made);def reread=slurp.parseText(session.resultsJson).checks
-        assert reread.cells==results.checks.cells && reread.file==results.checks.file && reread.ringMeasured==results.checks.ringMeasured : 'the saved checks read back the same'
+        assert reread.cells==results.checks.cells && reread.file==results.checks.file && reread.ringMeasured==results.checks.ringMeasured && reread.note==results.checks.note : 'the saved checks read back the same, the note with them'
         return results
     } finally {server.stop()}
 }
@@ -229,20 +270,70 @@ assert Checks.savedAround(still.prefix,(names as List).reverse(),null,Installer.
 def closed=checked(still.findAll{it.key!='movie'},'SimpleCa-fourth')
 assert !closed.checks.ringMeasured && closed.checks.note=='Not checked for a passing object: ring and core were not measured and the recording is not open.' && !values.exists()
 def closedRows=Csv.read(new File(still.folder,'still_call_checks_SimpleCa-fourth.csv')).drop(1)
-assert closedRows.every{it[rows[0].indexOf('Passing_object_check')]=='not checked'&&it[rows[0].indexOf('Ring_measured')]=='no'&&it[rows[0].indexOf('Detail')].contains('ring and core were not measured and the recording is not open')}
+assert closedRows.every{it[rows[0].indexOf('Passing_object_check')]=='not checked'&&it[rows[0].indexOf('Ring_measured')]=='no'&&it[rows[0].indexOf('Not_checked_because')]=='ring and core were not measured and the recording is not open'}
 assert closed.checks.cells[cellOf.crossed].text=='' && closed.checks.cells[cellOf.crossed].firstFrame==55 && !closed.checks.cells[cellOf.crossed].checked && closed.checks.cells[cellOf.blips].text=='short separate crossings'
+assert closed.checks.cells[cellOf.crossed].why=='ring and core were not measured and the recording is not open' && closed.checks.cells[cellOf.crossed].detail=='' && closed.checks.cells[cellOf.blips].detail=='3 crossings, the longest 2 samples' : 'the detail holds the flags only; why apart'
 // another recording open under the same name is not measured
 def other=movie(false);other.getStack().getProcessor(1).add(7)
 def wrong=checked(still+[movie:other],'SimpleCa-fifth')
 assert !wrong.checks.ringMeasured && wrong.checks.note.contains('the open recording does not give the saved gray values') && !values.exists()
 println 'PASS: missing or foreign ring files are measured again when the recording is open, and the check is not made when it is not'
 
+// ---- what the table says when one cell, or the whole analysis, cannot be checked
+File log=new File(root,'analysis.log')
+def sixth=checked(still,'SimpleCa-sixth');assert sixth.checks.ringMeasured && values.bytes==valuesAtMeasure && movement.bytes==movementAtMeasure
+File dir6=new File(still.folder,'SimpleCa-sixth')
+def runRows={Map answered->answered.rows.collectEntries{[it.Cell,it]}}
+// the field movement alone is missing: it is not worked out again, and the note says what that means
+assert movement.delete()
+Map noMove=Checks.run(dir6,still,log);Map noMoveRows=runRows(noMove)
+assert noMove.note=='The movement of the field was not saved, so a moving field is not told from an object.' && !movement.exists() && noMoveRows.values().every{it.Field_movement_measured=='no'&&it.Ring_measured=='yes'}
+assert noMoveRows[cellOf.crossed].Flag=='possible passing object, frames 55 to 62' && !Checks.answer(noMove).cells[cellOf.crossed].movementMeasured && Checks.saved(dir6,still).note==noMove.note
+movement.bytes=movementAtMeasure
+assert Checks.movement(still.prefix,N)!=null && Checks.movement(still.prefix,N-1)==null
+movement.text=movement.text.replaceFirst(/\n2,[^,]*,[^,]*,[^\n]*/,'\n2,NaN,NaN,0.00');assert Checks.movement(still.prefix,N)==null : 'a shift that is not a number: no movement'
+movement.bytes=movementAtMeasure
+// a cell without a usable ring sector is not checked, and says why; the analysis note is not changed by it
+byte[] pixelsKept=pixels.bytes;def edited=Csv.read(pixels);int singleAt=edited.findIndexOf{it[0]==cellOf.single};(3..18).each{edited[singleAt][it]='0'};Csv.write(pixels,edited)
+Map noRing=Checks.run(dir6,still,log);Map noRingRow=runRows(noRing)[cellOf.single]
+assert noRingRow.Passing_object_check=='not checked' && noRingRow.Not_checked_because=='no ring around the cell' && noRingRow.Crossings==3 && noRing.note=='' && Checks.saved(dir6,still).note=='' : noRingRow
+assert runRows(noRing)[cellOf.crossed].Passing_object_check=='checked'
+pixels.bytes=pixelsKept
+// a scored cell without a peak time: its own reason, and its crossings still counted
+File dir7=new File(still.folder,'SimpleCa-seventh');dir7.mkdirs();dir6.listFiles().each{new File(dir7,it.name).bytes=it.bytes}
+def calls7=Csv.read(new File(dir7,'responder_calls.csv'));int peakAt=calls7[0].indexOf('Peak_s');calls7.find{it[1]==cellOf.blips}[peakAt]='';Csv.write(new File(dir7,'responder_calls.csv'),calls7)
+Map noPeak=runRows(Checks.run(dir7,still,log))[cellOf.blips]
+assert noPeak.Not_checked_because=='no peak time' && noPeak.Passing_object_check=='not checked' && noPeak.Flag=='short separate crossings' && noPeak.Crossings==3 && noPeak.Event_first_frame=='' : noPeak
+// an analysis that cannot be checked: a plain reason, never a Java message; the details go to the log
+log.delete()
+def calls8=Csv.read(new File(dir6,'responder_calls.csv'));Csv.write(new File(dir7,'responder_calls.csv'),calls8.collect{it.withIndex().findAll{v,int i->i!=calls8[0].indexOf('Status')}*.getAt(0)})
+assert Checks.run(dir7,still,log).note=='The calls were not checked: the calls table has no Cell or Status column.'
+new File(dir7,'responder_calls.csv').bytes=new File(dir6,'responder_calls.csv').bytes
+new File(dir7,'analysis_manifest.csv').text=new File(dir6,'analysis_manifest.csv').text.replace('baseline_end,40','baseline_end,NaN')
+assert Checks.run(dir7,still,log).note=='The calls were not checked: the saved baseline frames do not match the recording.' : 'a baseline that is not a number is refused, not taken as frames'
+new File(dir7,'analysis_manifest.csv').bytes=new File(dir6,'analysis_manifest.csv').bytes
+new File(dir7,'normalized_traces.csv').text='Time,a\n0\n'
+Map unread=Checks.run(dir7,still,log)
+assert unread.note=='The calls were not checked: the saved analysis could not be read.' && unread.rows==[] && log.text.startsWith('Checks on the calls, the saved analysis: java.io.IOException') : log.text
+List traceLines=new File(dir6,'normalized_traces.csv').readLines('UTF-8')
+new File(dir7,'normalized_traces.csv').text=traceLines.take(3).join('\n')+'\n'
+assert Checks.run(dir7,still,log).note=='The calls were not checked: the analysis has fewer than 3 frames.'
+new File(dir7,'normalized_traces.csv').text=([traceLines[0]]+traceLines.drop(1).collect{it.replaceFirst(/^[^,]*/,'5')}).join('\n')+'\n'
+assert Checks.run(dir7,still,log).note=='The calls were not checked: the saved traces have no usable times.'
+// measuring around the cells fails at Step 4: said plainly, the exception in the log, nothing half saved
+log.delete();[values,pixels].each{it.delete()};values.mkdirs();new File(values,'keep').text='x'
+Map unsaved=Checks.run(dir6,still,log)
+assert unsaved.note=='Not checked for a passing object: ring and core were not measured and could not be saved now.' && !pixels.exists() && log.text.startsWith('Checks on the calls, around each cell: java.nio.file') : unsaved.note
+assert !still.folder.list().any{it.endsWith('.part')}
+new File(values,'keep').delete();values.delete()
+println 'PASS: a cell without a ring or a peak time, missing movement, an unreadable analysis and a failed measurement are each said in plain words'
+
 // ---- the field moved near the response: said instead of a passing object
 def joltRows=Csv.read(new File(jolt.prefix+'field_movement.csv')).drop(1)
 assert joltRows.findAll{Double.parseDouble(it[1])>=8d}*.getAt(0)==['46','47'] : joltRows.findAll{Double.parseDouble(it[1])>=2.5d}
 def shaken=checked(jolt,'SimpleCa-jolt').checks.cells
 assert shaken[cellOf.crossed].text=='field moved, frames 46 to 47' && shaken[cellOf.crossed].rule=='field moved' && shaken[cellOf.crossed].firstFrame==55 : shaken[cellOf.crossed]
-assert shaken[cellOf.crossed].detail==~/displaced up to 1\d\.\d px; otherwise possible passing object, frames 55 to 62: seen outside at the left .*/ : shaken[cellOf.crossed].detail
+assert shaken[cellOf.crossed].detail==~/the field was up to 1\d\.\d px from where it was over the F0 frames, at frames 46 to 47; otherwise possible passing object, frames 55 to 62: seen outside at the left .*/ : shaken[cellOf.crossed].detail
 assert shaken[cellOf.edge].text=='rise on the lower right edge, not in the cell, frames 60 to 90' : 'a movement more than the span before the event leaves the flag: '+shaken[cellOf.edge]
 assert shaken[cellOf.left].text=='' && shaken[cellOf.blips].text=='short separate crossings'
 println 'PASS: a field that moved within the span of the event is named instead of a passing object'
@@ -281,5 +372,29 @@ assert Passing.crossings(time,y,0d,1d,0.4d,5d,19d,1.5d) as List==[5,3] && Passin
 assert Passing.crossings(time,y,0.1d,2d,0.2d,5d,19d,1.5d) as List==[5,3] && Passing.crossings(time,y,0.1d,2d,0.21d,5d,19d,1.5d) as List==[0,0] : 'the rise is counted from the baseline in units of the reference, as the engine does'
 double[] gaps=time.clone();(11..<20).each{gaps[it]+=5d};assert Passing.crossings(gaps,y,0d,1d,0.4d,5d,30d,1.5d) as List==[6,2] : 'a gap in time ends a crossing'
 double[] holes=y.clone();holes[11]=Double.NaN;assert Passing.crossings(time,holes,0d,1d,0.4d,5d,19d,1.5d) as List==[6,2]
+double[] holey=up.clone();holey[30]=Double.NaN
+assert Passing.check(holey,ground,none,0,19,55,10)==null && Passing.check(up,(ground.clone() as double[]).with{it[3]=Double.NaN;it},none,0,19,55,10)==null : 'a gray value that is not a number: no event, not a wrong one'
+float[][] nanZone=with([(4):entering,(0):leaving]);nanZone[4][10]=Float.NaN
+assert Passing.check(up,ground,nanZone,0,19,55,10).rule=='' : 'a zone with a value that is not a number is not used'
+float[][] flatZero=new float[25][];(0..<25).each{flatZero[it]=new float[n];Arrays.fill(flatZero[it],120f)};flatZero[17+1]=(0..<n).collect{f->f in 50..59 ? 200f : 120f} as float[];flatZero[1]=(0..<n).collect{f->f in 50..59 ? 260f : 120f} as float[]
+Map exact=Passing.check(up,ground,flatZero,0,19,55,10);assert exact.rule=='on the edge' && !exact.detail.contains('NaN') && !exact.detail.contains('Infinity') : exact
+assert Passing.frames(35,35)=='frame 35' && Passing.frames(35,36)=='frames 35 to 36'
 println 'PASS: both rules, the event and the crossings follow their written definitions on plain numbers'
+
+// ---- the field-movement guard on plain shifts
+def shifts={Closure place->(0..<N).collect{int f->place(f+1) as double[]} as double[][]}
+// the field sat 9 px to the left over the F0 frames and stays put after them, so the event is where the field sits for most of the recording, but not where it was over the F0 frames
+double[][] drift=shifts({int f->f<=40 ? [-9d,0d] : [0d,0d]})
+Map fromF0=Motion.movedNear(drift,1,40,45,72)
+assert fromF0==[first:45,last:72,runs:[[45,72]],largest:9d,from:'F0'] && Motion.displacement(drift,0d,0d)[44..71].every{it<8d} : 'counted from the recording alone it would not be seen'
+assert Checks.movedText(fromF0)=='the field was up to 9.0 px from where it was over the F0 frames, at frames 45 to 72'
+// the F0 frames themselves moved: counted from where the field sits for most of the recording
+double[][] smeared=shifts({int f->f<=40 ? [(f%2==0 ? 10d : -10d),0d] : (f in 50..52 ? [9d,0d] : [0d,0d])})
+Map fromMost=Motion.movedNear(smeared,1,40,45,72);assert fromMost.from=='recording' && fromMost.runs==[[50,52]] && Checks.movedText(fromMost)=='the field was up to 9.0 px from where it sits for most of the recording, at frames 50 to 52'
+// a slow slide that never goes 8 px from either place but moves 8 px or more within the frames around the event
+double[][] slide=shifts({int f->f<45 ? [0d,0d] : f<=72 ? [-4.5d+9d*(f-45)/27d,0d] : [4.5d,0d]})
+Map within=Motion.movedNear(slide,1,40,45,72);assert within.from=='between' && within.runs==[] && within.first==47 && within.last==71 && Checks.movedText(within)=='the field moved 8.3 px between frames 47 and 71' : within
+assert Motion.movedNear(shifts({[0d,0d]}),1,40,45,72)==null && Motion.movedNear(drift,1,40,1,40)==null && Motion.movedNear(drift,1,40,80,120).runs==[[80,120]]
+assert Checks.runsText([[46,46]])=='frame 46' && Checks.runsText([[46,47],[60,60]])=='frames 46 to 47 and 60' && Checks.runsText([[1,2],[5,5],[9,12]])=='frames 1 to 2, 5 and 9 to 12'
+println 'PASS: the field is counted as moved from where it was over the F0 frames, from most of the recording when those moved, or between two frames near the event'
 System.exit(0)

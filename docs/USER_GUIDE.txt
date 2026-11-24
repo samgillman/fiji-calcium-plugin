@@ -74,18 +74,26 @@ movie. It never changes a call, a count or a percentage.
         The rise is in the ring just outside one edge and not in the deeper half of the outline.
         It can be an object resting on the edge, or a neighbour without an outline.
   field moved, frames 28 to 35
-        One of the two flags above would have been written, but the field was displaced by 8 pixels
-        or more within 10 seconds before or after the rise. A field that moves gives the same
+        One of the two flags above would have been written, but from 10 seconds before the rise to
+        10 seconds after it the field was 8 pixels or more from where it was over the F0 frames,
+        or moved 8 pixels or more between two of those frames. A field that moves gives the same
         picture as an object, so the row names the movement and the frames it was seen in.
   short separate crossings
         A responder whose rise reached the rise it needs 3 or more separate times in the response
         window, and never for more than 2 samples in a row.
+A stretch of one frame reads "frame 28".
 
-The first three use what Measure and save measures around every cell (Around each cell, under HOW
-THE PICTURES AND NUMBERS ARE MADE). A recording measured with an earlier version has no such
-files. They are then measured when an analysis runs, with the same code, as long as the recording
-is still open in Fiji and gives the saved gray values. Otherwise the passing-object check is not
-made, and every row of the table says "not checked" and why.
+The first three use what Measure and save measures around every cell. How, is under Around each
+cell in HOW THE PICTURES AND NUMBERS ARE MADE. If those files could not be saved at Measure, or were
+taken away since, they are measured when the analysis runs, with the same code, while the
+recording is open in Fiji and gives the saved gray values. Otherwise the passing-object check is
+not made, and every row says "not checked" and why. A recording measured with an earlier version
+has no such files: measure it again to have it checked. Without the field movement file the table
+is made, and the message says that a moving field is not told from an object.
+
+A cell that is not checked says why in the column Not_checked_because, for example "no peak time"
+or "no ring around the cell". Once the engine has finished, the analysis can no longer be
+cancelled: the checks run to the end.
 
 What the check cannot see:
   - It looks only at the largest rise of each cell. An object that makes the call while the
@@ -94,8 +102,9 @@ What the check cannot see:
     eye: 8 of 9 in outlines of 900 pixels or more, 1 of 5 in outlines under 700 pixels.
   - It misses most objects that cross an outline in 2 frames, and objects that come to rest inside
     the outline and stay.
-  - A ring sector that belongs mostly to other outlines is not used. The table gives the number of
-    usable near-ring sectors of 8 and the outline's area for every cell.
+  - A zone with fewer than 12 pixels is not used, for example a sector mostly covered by other
+    outlines or cut by the picture's edge. The table gives the number of usable near-ring sectors
+    of 8 and the outline's area for every cell.
   - A flag is not proof. Of 296 ATP responders 2 were flagged, and neither was an object.
 A cell without a flag is not shown to be free of objects. The page does not show these flags yet;
 they are in the table.
@@ -103,29 +112,37 @@ they are in the table.
 REVIEWING THE CALLS
 A cell the engine scored can be marked the other way after you have looked at it: a responder as
 not a responder, a non-responder as a responder. Each mark needs a reason: Noise, Movement, Passing
-object, Bad outline or Other. Other needs a short note of one line, up to 120 characters. A mark can
-be removed. Excluded and unscorable cells have no call and cannot be marked. The page does not have
-the control yet; the marks are kept and counted by the plugin.
+object, Bad outline or Other. Other needs a short note. A note is one line of plain text, up to 120
+characters, and cannot start with =, +, - or @, which a spreadsheet would read as a formula. A mark
+can be removed. Excluded and unscorable cells have no call and cannot be marked. The page does not
+have the control yet; the marks are kept and counted by the plugin.
 
   Where       ..._reviewed_calls_<analysis>.csv beside the percent table, one row per mark: the
-              cell, the automatic call, the reviewed call, the reason, the note and the time. The
-              file is there only while there is at least one mark. The engine's responder_calls.csv
-              and the analysis folder are never changed.
+              cell, the automatic call, the reviewed call, the reason, the note, the time to the
+              second and, for a mark carried over, the analysis it was made in. The file is there
+              only while there is at least one mark. The engine's responder_calls.csv and the
+              analysis folder are never changed.
   Counted     % responding is given as scored and after review, for all cells, the cells chosen
               blind, those added later and the quiet cells, with and without the cells below zero.
               ..._percent_responding_<analysis>.csv keeps its rows and columns and gains five on
               the right while there are marks: responded_after_review,
               percent_responding_after_review, responded_without_them_after_review,
               percent_without_them_after_review and cells_reclassified. With no marks it is as
-              before. The finish message gives both figures, and so does the Fiji window.
+              before. The finish message gives both figures, and follows every mark; so does the
+              Fiji window, which reads the marks when it loads results and then names its groups
+              "Responded after review" and "Did not respond after review".
+  Saved       A mark is saved together with the percent table, or not at all. If the percent table
+              is open in another program, close it and set the mark again.
   Methods     A sentence from the marks, for example "3 of 143 cells were reclassified after
               manual review: 2 from responder to non-responder (1 noise, 1 passing object) and 1
               from non-responder to responder (other)."
   Re-run      When a new analysis of the same recording finishes, the marks of the most recent
-              earlier analysis that has marks are carried over for every cell whose automatic call
-              and outline are unchanged. The others are dropped, and the finish message lists them,
-              for example "Cell 69: now scored as did not respond", "Cell 12: no longer measured",
-              "Cell 4: outline changed". The earlier analysis keeps its own review file.
+              earlier analysis are carried over for every cell whose automatic call and outline
+              are unchanged. The others are dropped, and the finish message lists them, for
+              example "Cell 69: now scored as did not respond", "Cell 12 of the earlier analysis:
+              no longer measured", "Cell 4: outline changed". The earlier analysis keeps its own
+              review file. If you removed the marks of the most recent analysis, none are carried,
+              and older marks do not come back.
   Checked     Every row names its analysis and the SHA-256 of the responder_calls.csv it was made
               on. A review file that does not match its analysis is not used, and the plugin says
               so; move it out of the folder to review that analysis again.
@@ -269,7 +286,8 @@ In the results folder, in a subfolder named after the recording:
                                                   pixels of each zone, the usable near-ring sectors, and
                                                   the raw table and widths the row belongs to
   ..._field_movement.csv                          how far the field is displaced at every frame, in
-                                                  pixels, with the shift in x and y
+                                                  pixels, with the shift in x and y; only when Step 1
+                                                  could measure the movement
   automatic_outlines/                             only if suggestions were used: the picture given to
                                                   Cellpose, its outlines, its messages, and a table of
                                                   every suggestion with its grade and measurements
@@ -277,8 +295,9 @@ In the results folder, in a subfolder named after the recording:
                                                   picture (0-2 and 0-8 gray levels); see Blind picture
 
 Step 4 adds, for every analysis, a SimpleCa-date-time-id folder and beside it
-..._percent_responding_<analysis>.csv and ..._call_checks_<analysis>.csv (see CHECKS ON THE CALLS),
-and ..._reviewed_calls_<analysis>.csv while the analysis has review marks (see REVIEWING THE CALLS).
+..._percent_responding_<analysis>.csv and ..._call_checks_<analysis>.csv, described under CHECKS ON
+THE CALLS, and ..._reviewed_calls_<analysis>.csv while the analysis has review marks, described
+under REVIEWING THE CALLS.
 
 If the box is ticked, a background-corrected copy of the movie also opens in Fiji (32-bit). It is
 saved only if the second box is ticked; the file is large (about 1.7 GB for 300 frames of 1388 x 1040).
@@ -423,9 +442,11 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        median depth. Rim: the other pixels inside, by sector. Distances are between
                        pixel centres; the picture's border counts as outside. A set under 12 pixels is
                        not used. At 0.645 micrometres per pixel the widths are 1, 10, 22 and 2 pixels,
-                       which is how they were set; a recording without a pixel size in micrometres
-                       takes these pixel values, and what_was_done.txt says so. These numbers are a
-                       record of their own: no cell value, background or call is made from them.
+                       which is how they were set. A recording without a pixel size in micrometres,
+                       or with pixels that are not square, takes these pixel values, and
+                       what_was_done.txt says which. These numbers are a record of their own: no
+                       cell value, background or call is made from them. If they cannot be saved,
+                       everything else is saved as before and what_was_done.txt names the file.
 
 
 HOW THE SUGGESTIONS ARE GRADED
