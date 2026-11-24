@@ -517,14 +517,18 @@
   const CHECK_SHORT = { 'passes through': 'Possible passing object', 'on the edge': 'Rise on the edge', 'field moved': 'Field moved', 'short separate crossings': 'Short separate crossings' };
   /** The checks of one cell, or null (an analysis made before the checks has none). */
   const checksOf = (name) => { const c = S.results && S.results.checks; return (c && c.cells && name && c.cells[name]) || null; };
-  /** The flags the checks gave a cell, one by one: { text, rule }. */
-  const checkFlags = (name) => { const c = checksOf(name); return c && Array.isArray(c.flags) ? c.flags.filter((f) => f && f.text) : []; };
+  /** The checks of one cell as the page shows them: they are about the calls for the primary stimulus, so a control window shows
+   *  none, as in the Fiji window. Every flag on screen, in the flagged list, its filters and counts and the cell panel, comes from here. */
+  const shownChecks = (name) => primaryShown() ? checksOf(name) : null;
+  /** The flags in a cell's checks, one by one: { text, rule }. */
+  const flagsIn = (c) => c && Array.isArray(c.flags) ? c.flags.filter((f) => f && f.text) : [];
+  const checkFlags = (name) => flagsIn(shownChecks(name));
   /** The reason the mark form starts with on a responder, from its first check flag: none for a cell that did not respond. */
   const REASON_OF_RULE = { 'passes through': 'Passing object', 'on the edge': 'Passing object', 'field moved': 'Movement', 'short separate crossings': 'Noise' };
   function startingReason(name, automatic) {
     if (automatic !== 'Responded') return '';
     const reasons = (S.results.review || {}).reasons || [];
-    for (const flag of checkFlags(name)) { const reason = REASON_OF_RULE[flag.rule]; if (reason && reasons.includes(reason)) return reason; }
+    for (const flag of flagsIn(checksOf(name))) { const reason = REASON_OF_RULE[flag.rule]; if (reason && reasons.includes(reason)) return reason; }
     return '';
   }
   /** A cell whose ΔF/F₀ falls below −1: its corrected fluorescence goes below zero, the mark of an F₀ near zero. Flagged
@@ -564,19 +568,22 @@
     if (window.Window_warning) notices.push(window.Window_warning);
     if (!window.Window_warning && S.info.names.some((name) => { const q = S.quality[name] || {}, row = callRow(name); return [q.QC_flags, row.QC_flags].some((t) => String(t || '').includes('DURATION_BELOW_SAMPLE_INTERVAL')); }))
       notices.push('Applies to the whole recording: ' + FLAG_TEXT.DURATION_BELOW_SAMPLE_INTERVAL + '.');
-    // why the cells were not checked for a passing object, once for the analysis (a cell's own reason is in its panel)
-    const unchecked = (S.results.checks && S.results.checks.note) || ''; if (unchecked) notices.push(unchecked);
+    // the note of the checks, once for the analysis, whatever window is shown: why the cells were not checked for a passing object,
+    // or that the field's movement was not saved (a cell's own reason is in its panel)
+    const checks = S.results.checks, note = (checks && checks.note) || ''; if (note) notices.push(note);
     if (S.qualityFlag && !counts.has(S.qualityFlag)) S.qualityFlag = null;
     $('quality-review').hidden = !affected && !notices.length;
-    const onlyUnchecked = !affected && notices.length === 1 && !!unchecked;
-    summary.textContent = affected ? plural(affected, 'cell') + ' flagged' : onlyUnchecked ? 'Passing objects not checked' : 'Timing note';
-    $('quality-lead').textContent = affected ? plural(affected, 'cell') + ' flagged' + (called() ? ', including ' + plural(responders, 'responder') : '') + '.' : onlyUnchecked ? unchecked : 'Review the applied timing.';
+    // when that note is all there is to say, the chip names it and the note leads the list
+    const onlyNote = !affected && notices.length === 1 && !!note;
+    summary.textContent = affected ? plural(affected, 'cell') + ' flagged' : onlyNote ? (checks.ringMeasured ? 'Checks note' : 'Passing objects not checked') : 'Timing note';
+    $('quality-lead').textContent = affected ? plural(affected, 'cell') + ' flagged' + (called() ? ', including ' + plural(responders, 'responder') : '') + '.' : onlyNote ? note : 'Review the applied timing.';
     // Every flagged cell, with its call and what it is flagged for. A click opens the cell; the arrows then step through
     // the flagged cells. With one flag picked below, only its cells are listed.
     const flagged = S.info.names.filter((name) => { const flags = qualityFor(name); return flags.length && (!S.qualityFlag || flags.includes(S.qualityFlag)); });
     const cells = $('table-flagged'); cells.replaceChildren(); $('quality-cells').hidden = !flagged.length;
     if (flagged.length) {
-      const head = cells.createTHead().insertRow(); for (const title of ['Cell', 'Call', 'Flagged for']) { const th = document.createElement('th'); th.textContent = title; head.appendChild(th); }
+      // the call of the window shown: after review on the primary stimulus while marks apply, named as in the metric tables
+      const head = cells.createTHead().insertRow(); for (const title of ['Cell', primaryShown() ? CALL_COLUMN.name : 'Call', 'Flagged for']) { const th = document.createElement('th'); th.textContent = title; head.appendChild(th); }
       const body = cells.createTBody();
       for (const name of flagged) { const tr = body.insertRow(), call = callOf(name) || '', mark = markOf(name); tr.dataset.cell = name; tr.classList.toggle('on', name === S.cell); tr.title = 'Open ' + shortName(name);
         tr.insertCell().textContent = shortName(name); const said = tr.insertCell(); said.innerHTML = '<span class="dot" style="background:' + CALL[kind(call)] + '"></span>' + escape(call); if (mark) said.title = 'Automatic call: ' + mark.automatic;
@@ -908,8 +915,8 @@
     S.results = await api('results'); const r = S.results;
     // the marks carried over when this analysis was run, kept here: Fiji stops giving them once they are all removed
     const carried = r.review && r.review.carried; S.carried = carried && carried.text ? { folder: r.folder, text: carried.text } : null;
-    S.said = null; closeMark();
-    const records = (data) => Object.fromEntries(((data && data.rows) || []).map((row) => [row[data.header.indexOf('Cell')], Object.fromEntries(data.header.map((key, i) => [key, row[i]]))]));
+    S.said = null; S.markSaid = null; closeMark();
+    const records =(data) => Object.fromEntries(((data && data.rows) || []).map((row) => [row[data.header.indexOf('Cell')], Object.fromEntries(data.header.map((key, i) => [key, row[i]]))]));
     S.quality = records(r.tables.quality);
     const windows = r.windows && r.windows.length ? r.windows : [{ key: 'Stimulus::' + (r.counts.Stimulus || 'Stimulus'), role: 'Stimulus', stimulus: r.counts.Stimulus || 'Stimulus' }];
     const selector = $('response-window'); selector.innerHTML = '';
@@ -924,7 +931,7 @@
     for (const key of Object.keys(r.tables || {})) if (!['calls', 'counts'].includes(key) && r.tables[key].header.length) { const o = document.createElement('option'); o.value = key; o.textContent = TABLE_NAMES[key] || key.replace(/_/g, ' '); tables.appendChild(o); }
     tables.value = 'summary'; showMetricTable();
     S.withoutBelowZero = false;   // every cell is counted until the switch says otherwise
-    showCalls(); showCounts(); showTally();
+    showCalls(); showCounts(); showTally(); showMethods();
     for (const id of ['save-plot', 'save-heatmap', 'save-plot-folder', 'save-heatmap-folder', 'edit-plot', 'edit-heatmap', 'data-save', 'data-download', 'metrics-save', 'metrics-download', 'calls-save', 'calls-download', 'counts-save', 'counts-download']) $(id).disabled = false;
     for (const id of ['plot-saved', 'heatmap-saved', 'data-saved', 'metrics-saved', 'calls-saved', 'counts-saved']) $(id).textContent = '';
     if (!$('panel-data').hidden) showData();
@@ -944,6 +951,8 @@
   }
   /** The same tally as a table on the Responder counts tab: every row with all its cells and without those below zero. */
   function showTally() {
+    // the engine's counts under the tally are as saved, before review: while marks apply, a line above them says so
+    $('counts-before').hidden = !marked();
     const t = S.results && S.results.tally; $('tally-box').hidden = !t; if (!t) return;
     const share = (c) => ({ text: shareText(c[0], c[1]), key: c[1] ? c[0] / c[1] : '', num: true }), count = (n) => ({ text: String(n), key: n, num: true });
     // six columns, so the table fits its tab; the saved file has every number in a column of its own. While review marks
@@ -1022,6 +1031,8 @@
       verdict.title = 'Rise and threshold are shown as percentages of local prestimulus fluorescence. The saved call table stores the corresponding fractions.';
     }
     const flags = qualityFor(name).filter((flag) => !isCheck(flag)); $('cell-quality').hidden = !flags.length; $('cell-quality').textContent = flags.map(flagText).join(' · '); $('cell-quality').title = $('cell-quality').textContent;
+    // a refusal belongs to its cell: it goes when another cell is chosen, as in the Fiji window
+    if (S.markSaid && S.markSaid.cell !== name) S.markSaid = null;
     showChecks(name); if (S.marking && S.marking.cell !== name) closeMark(); showMark();
     $('zoom-cell').disabled = !name || !(S.info.hasPicture || S.info.hasMovie);
     for (const row of document.querySelectorAll('tbody tr')) row.classList.toggle('on', row.dataset.cell === name);
@@ -1047,7 +1058,7 @@
    *  look at, in an analysis whose rings were measured, says why. The frames come from the checks, never from the words. */
   function showChecks(name) {
     const box = $('cell-checks'); box.replaceChildren();
-    const c = checksOf(name), checks = S.results && S.results.checks, items = [];
+    const c = shownChecks(name), checks = S.results && S.results.checks, items = [];
     if (c) {
       const frame = Number.isInteger(c.firstFrame) && c.firstFrame >= 1 && c.firstFrame <= S.info.frames ? c.firstFrame : null;
       for (const flag of checkFlags(name)) {
@@ -1081,10 +1092,11 @@
     const name = S.cell, action = S.results ? markAction(name) : null, button = $('mark'), form = $('mark-form'), said = $('mark-said');
     if (S.marking && (!action || action.remove)) closeMark();
     button.hidden = !action || !!S.marking; if (action) button.textContent = action.label; button.disabled = S.reviewing;
-    if (S.marking) { $('mark-save').disabled = S.reviewing || !$('mark-reason').value; $('mark-note').required = $('mark-reason').value === 'Other'; }
-    const problem = S.results && S.results.review && S.results.review.problem;
-    const text = S.markSaid && S.markSaid.cell === name ? S.markSaid.text : problem && name && primaryShown() ? problem : '';
-    said.hidden = !text; said.textContent = text; said.className = 'mark-said ' + (S.markSaid && S.markSaid.cell === name ? 'bad' : 'warn');
+    if (S.marking) { const other = $('mark-reason').value === 'Other'; $('mark-save').disabled = S.reviewing || !$('mark-reason').value; $('mark-note').required = other; $('mark-note').placeholder = other ? '' : 'Optional'; }
+    // a refusal, under the cell it is for; else why the review file is not used, as Fiji gives it. Neither on a control window.
+    const problem = S.results && S.results.review && S.results.review.problem, own = !!S.markSaid && S.markSaid.cell === name && primaryShown();
+    const text = own ? S.markSaid.text : problem && name && primaryShown() ? problem : '';
+    said.hidden = !text; said.textContent = text; said.className = 'mark-said ' + (own ? 'bad' : 'warn');
     form.hidden = !S.marking;
   }
   /** Opens the mark form in place, on the selected cell: the reason it starts with comes from the cell's check flag on a responder. */
@@ -1139,7 +1151,8 @@
     const r = S.results; if (!r || answer.folder !== r.folder) return;
     r.review = answer.review; r.tally = answer.tally;
     S.version = answer.version; if (S.state) S.state.version = answer.version;
-    S.said = answer.message || null; S.marking = null; S.markSaid = null; $('mark-form').hidden = true;
+    // what Fiji said is the status line while marks apply; with none left it is "Done." again, as before any mark (finishLine)
+    S.said = marked() ? (answer.message || null) : null; S.marking = null; S.markSaid = null; $('mark-form').hidden = true;
     refreshReview(); showState();
   }
   /** Draws again, from the review and tally on hand, everything that counts, groups, colours or lists cells by call. The selected
@@ -1150,11 +1163,13 @@
     updateWindow();
     if (keep && S.cell !== keep) pick(keep);
   }
-  /** The Methods sentence of the review, to copy, with how many cells were marked; nothing without marks that changed a call. */
+  /** The Methods sentence of the review, to copy, with how many cells were marked; nothing without marks that changed a call.
+   *  Called whenever the review may have changed (results loaded, a mark), so "Copied" from an earlier sentence goes. */
   function showMethods() {
-    const review = S.results && S.results.review, sentence = (review && review.methods) || '';
+    const review = S.results && S.results.review, sentence = (review && review.methods) || '', note = $('calls-saved');
     $('review-count').hidden = $('copy-methods').hidden = !sentence;
     if (sentence) { $('review-count').textContent = plural(review.changed || 0, 'cell') + ' marked'; $('copy-methods').title = sentence; }
+    if (['Copied', 'Not copied'].includes(note.textContent)) { note.textContent = ''; note.className = 'save-note'; }
   }
   async function copyMethods() {
     const sentence = (S.results && S.results.review && S.results.review.methods) || '', note = $('calls-saved'); if (!sentence) return;
@@ -2528,7 +2543,10 @@
     const stamp = now.getFullYear() + two(now.getMonth() + 1) + two(now.getDate()) + '-' + two(now.getHours()) + two(now.getMinutes()) + two(now.getSeconds());
     return [clean(S.info.recording), kind, /^traces/.test(kind) && S.cell ? (shortName(S.cell) === S.cell ? clean(S.cell) : clean(shortName(S.cell)) + '_' + clean(S.cell).slice(0, 13)) : '', stamp].filter(Boolean).join('_') + '.' + extension;
   }
-  function exportMetadata() {
+  /** What the page showed, kept beside a saved file. @param followsReview whether what is saved follows the review marks: a figure
+   *  or picture of the primary stimulus, the calls table and the metric summary do; the counts, the processed data, the per-cell
+   *  metric tables and anything of a control window do not. */
+  function exportMetadata(followsReview) {
     return { schema: 'simpleca.view-export', schema_version: 1, recording: S.info.recording, plugin_version: S.info.pluginVersion,
       appliedFingerprint: S.results.appliedFingerprint || S.state.appliedFingerprint, appliedProtocol: S.results.appliedProtocol || S.results.protocol,
       manifest: S.results.manifest, settingsPending: hasPending(), displayed_window: S.window, cell: S.cell, group: GROUPS[S.group],
@@ -2536,7 +2554,7 @@
       time_range: Plot.geom ? [Plot.geom.x0, Plot.geom.x1] : [Plot.x0, Plot.x1], time_zoomed: Plot.x0 !== null, palette: S.palette, range: S.range, order: S.order,
       plot: S.plotMode, signal: S.results && isDff() ? 'dF/F0' : S.signal, y_axis: Plot.geom ? [Plot.geom.lo, Plot.geom.hi] : null, y_axis_typed: Plot.y[S.signal] || null, plotted: Plot.geom ? Plot.geom.plotted : [], all_traces_drawn: S.every, thresholds_drawn: S.thresholds, cells_left_out: Array.from(leftOut()),
       // while review marks apply, the calls of the primary stimulus are those after review, as the Fiji window's record says too
-      ...(marked() ? { calls: 'after review', review_file: S.results.review.file, review_sha256: S.results.review.sha256 } : {}) };
+      ...(marked() && followsReview ? { calls: 'after review', review_file: S.results.review.file, review_sha256: S.results.review.sha256 } : {}) };
   }
   /** What a saved figure itself shows, in place of what the page shows: its time and Y range and the means it drew, as the
    *  figure's own drawing (Fig.drawn, made by picture()) has them; the limits typed in the editor are under picture.figure. */
@@ -2791,7 +2809,7 @@
   /** The file kept beside a saved picture, made once the picture is drawn: what the page showed (exportMetadata; before an
    *  analysis, the view and the frame), then what the picture itself shows in place of that (a figure's own ranges and means,
    *  figureShows; picture.shows: the two frames of a pair, not the frame on screen), then how the picture was made. */
-  const savedRecord = (picture) => Object.assign(S.results ? exportMetadata() : viewMetadata(), picture.figure ? figureShows(picture.figure) : {}, picture.shows, { picture: pictureRecord(picture) });
+  const savedRecord = (picture) => Object.assign(S.results ? exportMetadata(primaryShown()) : viewMetadata(), picture.figure ? figureShows(picture.figure) : {}, picture.shows, { picture: pictureRecord(picture) });
   const viewMetadata = () => ({ schema: 'simpleca.view-export', schema_version: 1, recording: S.info.recording, plugin_version: S.info.pluginVersion, view: S.view, frame: S.frame, outlines: S.outlines });
   /** What the colours of the picture mean in the view on screen, then what the outlines mean (outlineKey). Each: [colour, text, is an outline, dashed]. */
   const pictureKey = () => (viewColours().length ? viewColours() : [['#ffffff', 'as recorded']]).concat(outlineKey());
@@ -3136,15 +3154,16 @@
     document.addEventListener('keydown', (event) => { if (Fig.open && event.key === 'Escape') { closeFigure(); event.preventDefault(); event.stopPropagation(); } }, true);   // before the page's own keys
     window.addEventListener('resize', previewFigure);
     // Every table tab has one Export menu: a CSV into the plots folder, with the record of how the page was set beside it
-    // (exportMetadata), or a CSV through the browser. [tab, file name, CSV text]
-    const tableExports = [['metrics', () => $('metrics-table').value === 'summary' ? 'metrics_summary' : 'table_' + $('metrics-table').value, () => csvText(metricRows())],
-      ['calls', () => 'responder_calls', () => csvText(callsRows())], ['counts', () => 'responder_counts', () => csvText(savedRows('counts'))], ['data', dataKind, dataCsv]];
-    for (const [tab, kind, csv] of tableExports) {
+    // (exportMetadata), or a CSV through the browser. [tab, file name, CSV text, whether the table follows the review marks:
+    // the calls table with its reviewed columns and the metric summary do, the saved tables as they are do not]
+    const tableExports = [['metrics', () => $('metrics-table').value === 'summary' ? 'metrics_summary' : 'table_' + $('metrics-table').value, () => csvText(metricRows()), () => $('metrics-table').value === 'summary'],
+      ['calls', () => 'responder_calls', () => csvText(callsRows()), () => true], ['counts', () => 'responder_counts', () => csvText(savedRows('counts')), () => false], ['data', dataKind, dataCsv, () => false]];
+    for (const [tab, kind, csv, followsReview] of tableExports) {
       $(tab + '-download').addEventListener('click', () => download(new Blob([csv()], { type: 'text/csv' }), exportName(kind(), 'csv')));
       $(tab + '-save').addEventListener('click', async () => {
         const note = $(tab + '-saved'); note.className = 'save-note'; note.textContent = 'Saving…';
         try {
-          const reply = await api('export', { name: exportName(kind(), 'csv').replace(/\.csv$/, ''), csv: csv(), metadata: exportMetadata() });
+          const reply = await api('export', { name: exportName(kind(), 'csv').replace(/\.csv$/, ''), csv: csv(), metadata: exportMetadata(followsReview()) });
           note.textContent = 'Saved in ' + reply.folderName + ': ' + reply.saved[0] + ' ';
           const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open folder'; open.addEventListener('click', () => api('open', { what: 'plots' }).catch(() => { })); note.appendChild(open);
         } catch (error) { note.className = 'save-note bad'; note.textContent = 'Not saved: ' + (/fetch/i.test(error.message) ? 'Fiji is not connected.' : error.message); }
@@ -3236,10 +3255,13 @@
       const name = tr.dataset.cell; if (S.group !== 5) showGroup(5); chooseCell(name); showTab('review'); $('quality-review').open = false; });
     $('group').addEventListener('change', () => { if (Number($('group').value) !== 5 && S.qualityFlag) { S.qualityFlag = null; showQuality(); } });
     // The review mark of the selected cell: one button, and in its place a form. Enter saves; Esc cancels and keeps the cell.
+    // A key held down repeats: only its first press counts, so a held Enter never saves and then removes, or opens and then saves.
     $('mark').addEventListener('click', () => { const action = markAction(S.cell); if (action && action.remove) removeMark(); else openMark(); });
+    $('mark').addEventListener('keydown', (event) => { if ((event.key === 'Enter' || event.key === ' ') && event.repeat) event.preventDefault(); });
     $('mark-form').addEventListener('submit', (event) => { event.preventDefault(); saveMark(); });
     $('mark-form').addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeMark(); }
+      if (event.key === 'Enter' && event.repeat) event.preventDefault();
+      else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeMark(); }
       else if (event.key === 'Enter' && event.target.tagName === 'SELECT') { event.preventDefault(); saveMark(); }
       else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') event.stopPropagation();   // they move in the box, not to another cell
     });
@@ -3353,7 +3375,10 @@
       else if (event.key === 'Escape' && S.cell && !event.defaultPrevented) { chooseCell(null); event.preventDefault(); }
       else if (event.key === 'ArrowLeft') { stepCell(-1); event.preventDefault(); } else if (event.key === 'ArrowRight') { stepCell(1); event.preventDefault(); } else if (event.key === ' ' && S.info && S.info.hasMovie && S.view !== 'picture' && tag !== 'button') { play(!S.timer); event.preventDefault(); } });
     window.addEventListener('resize', redraw);
-    if (window.ResizeObserver) { new ResizeObserver(redraw).observe($('panel-review')); new ResizeObserver(() => drawHeatmap()).observe($('heatmap-box')); }
+    if (window.ResizeObserver) { new ResizeObserver(redraw).observe($('panel-review')); new ResizeObserver(() => drawHeatmap()).observe($('heatmap-box'));
+      // the plot also changes size when the cell card above it does (a refusal, the mark form, the mark button going while a run
+      // starts). Drawing sets only the canvas's pixels, not its size on the page, so this never calls itself again.
+      new ResizeObserver(() => { Plot.dirty = true; drawPlot(); }).observe($('plot')); }
   }
   function redraw() { Plot.dirty = true; drawPlot(); drawPicture(); drawHeatmap(); }
 
