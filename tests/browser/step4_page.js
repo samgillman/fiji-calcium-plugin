@@ -563,6 +563,7 @@ const assert = require('assert/strict');
     const faint = fig.lines.filter((l) => l.alpha < 1), others = faint.filter((l) => l.ink === '#8a94a0'), green = faint.filter((l) => l.ink === '#177465'), order = (l) => fig.lines.indexOf(l);
     assert.deepEqual([others.length, green.length], [2, 2]); assert.ok(Math.max(...others.map(order)) < Math.min(...green.map(order)), 'responders are drawn after the others');
     assert.ok(green[0].width > others[0].width && green[0].alpha > others[0].alpha, 'and a little wider and stronger');
+    assert.deepEqual([others[0].alpha, green[0].alpha].map((a) => +a.toFixed(4)), [0.75, 0.9], 'both faded by all four traces drawn (1.5 / √4), a responder half as much again: a lone responder among many is not drawn at full strength');
     const casing = fig.lines.findIndex((l) => l.ink === '#ffffff'), mean = fig.lines.findIndex((l) => l.ink === '#0072b2');
     assert.ok(casing > Math.max(...green.map(order)) && mean === casing + 1 && fig.lines[casing].width > fig.lines[mean].width, 'the mean is drawn last, on a white casing');
     // "Leave out … below zero" reaches the plot: those cells are not drawn, not averaged, and the file beside a figure says so.
@@ -570,7 +571,11 @@ const assert = require('assert/strict');
     assert.equal(now.legend[0], 'all cells ± SEM (n = 3)');
     assert.deepEqual(await page.evaluate(() => window.calciumStep4.Plot.drawn), ['Cell001', 'Cell002', 'Cell006']);
     assert.deepEqual(await page.evaluate(() => window.calciumStep4.exportMetadata().cells_left_out), ['Cell005']);
+    // and the numbers saved with it say so: a file named mean_trace, with mean_of_all_cells, always holds every cell
+    const plotFile = () => page.evaluate(() => { const f = window.calciumStep4; return [f.plotKind(), f.plotNumbers().split('\n')[0]]; });
+    assert.deepEqual(await plotFile(), ['mean_trace_without_below_zero', 'Time_s,mean_of_all_cells_without_below_zero,mean_of_all_cells_without_below_zero_SEM,mean_of_all_cells_without_below_zero_n_cells'], 'a mean without the cells below zero is named so, in the file and its columns');
     await page.uncheck('#below-zero'); assert.equal((await plotNow()).legend[0], 'all cells ± SEM (n = 4)');
+    assert.deepEqual(await plotFile(), ['mean_trace', 'Time_s,mean_of_all_cells,mean_of_all_cells_SEM,mean_of_all_cells_n_cells'], 'with every cell, the names the release saved');
     // One cell has no SEM: no band, no "± SEM", and the swatch shows the band only where one is drawn.
     await page.click('[data-plot=calls]'); now = await plotNow(); fig = await cleanBoth('responders against non-responders with all traces');
     assert.deepEqual(now.legend, ['responded ± SEM (n = 2)', 'did not respond (n = 1)', 'single cells', 'baseline', 'response window']);
@@ -618,7 +623,7 @@ const assert = require('assert/strict');
     await page.click('[data-plot=cell]'); await openCell('Cell001'); await page.uncheck('#every'); now = await plotNow(); fig = await cleanBoth('one cell');
     assert.deepEqual(now.legend, ['Cell001', 'all cells ± SEM (n = 4)', 'required rise', 'baseline', 'response window', 'response']);
     const across = (seen, ink) => seen.lines.filter((l) => l.dashed && l.ink === ink && !inLegend(seen, l.x0, l.y0) && l.y0 === l.y1), valueAt = (seen, y) => seen.hi - (y - seen.top - seen.T) / seen.H * (seen.hi - seen.lo);
-    assert.deepEqual([across(fig, '#177465').length, across(fig, '#ad7423').length, across(fig, '#a46ea0').length, across(fig, '#7c8794').length], [1, 0, 0, 0], 'one threshold line: the required rise');
+    assert.deepEqual([across(fig, '#177465').length, across(fig, '#6a3d9a').length, across(fig, '#a46ea0').length, across(fig, '#7c8794').length], [1, 0, 0, 0], 'one threshold line: the required rise');
     assert.ok(Math.abs(valueAt(fig, across(fig, '#177465')[0].y0) - 0.1) < 0.005 && across(fig, '#177465')[0].x1 - across(fig, '#177465')[0].x0 >= fig.W - 1, 'drawn at its level, across the plot');
     assert.ok(fig.lines.filter((l) => l.dashed && l.ink === '#177465').length === 2, 'the swatch of a dashed line is dashed');   // the line and its swatch
     assert.equal(fig.W + fig.L > 7 * 96 - 20, true, 'the plot runs to the right margin: no room is kept for names beside it');
@@ -629,29 +634,32 @@ const assert = require('assert/strict');
     // The call table says which one set it (Threshold_source). Two levels with one value are one line. The verdict above the plot says
     // what the cell needed and what set that. (The cells of issue 31: noise 12.2 % over a minimum rise of 10 %; noise 7.6 % under it.)
     assert.ok(!(await page.isChecked('#thresholds')) && await page.isEnabled('#thresholds') && await page.isVisible('#thresholds'), 'offered with one cell in ΔF/F₀, and off');
-    await page.click('[data-plot=mean]'); assert.ok(await page.isDisabled('#thresholds'), 'not offered where no thresholds are drawn'); await page.click('[data-plot=cell]');
+    for (const mode of ['mean', 'calls']) { await page.click('[data-plot=' + mode + ']'); assert.ok(await page.isHidden('#thresholds-label'), 'not shown where no thresholds are drawn (' + mode + '): no greyed box'); }
+    await page.click('[data-plot=cell]'); assert.ok(await page.isVisible('#thresholds-label'));
     const withCall = (changes, read) => page.evaluate(async ([changes, read]) => { const f = window.calciumStep4, row = f.S.results.callsByWindow[f.S.window][f.S.cell], kept = Object.assign({}, row); Object.assign(row, changes);
       try { f.pick(f.S.cell); return read === 'verdict' ? document.getElementById('verdict').textContent : null; } finally { if (read) { for (const key of Object.keys(row)) delete row[key]; Object.assign(row, kept); f.pick(f.S.cell); } } }, [changes, read || null]);
     const byNoise = { Baseline_SD: '0.0407', Noise_threshold: '0.1221', Floor_threshold: '0.1', Threshold_increase: '0.1221', Threshold_source: 'Baseline noise' }, byFloor = { Baseline_SD: '0.0253', Noise_threshold: '0.0759', Floor_threshold: '0.1', Threshold_increase: '0.1', Threshold_source: 'Floor' };
     const original = await page.evaluate(() => { const f = window.calciumStep4; return Object.assign({}, f.S.results.callsByWindow[f.S.window][f.S.cell]); });
     assert.match(await withCall(byNoise, 'verdict'), /\(needed 12\.2%, set by its noise\)$/); assert.match(await withCall(byFloor, 'verdict'), /\(needed 10\.0%, the minimum rise\)$/);
     // For a responder the verdict says what the call rests on, from the saved call: the onset, how many frames the rise held and
-    // the latency; the largest rise and its time follow, worded apart from the onset, so a single higher frame before the held
-    // rise (cell 69 of Run2: largest rise at 92.0 s, held from 121.0 s) does not read as a peak before its own response.
-    assert.equal(await withCall({ Onset_s: '120.987414777279', Run_start_s: '120.987414777279', Run_samples: '2', Response_latency_s: '101.989390969276', Peak_s: '91.9904310703278', Peak_increase: '0.405565745971214', Threshold_increase: '0.303418646217159', Threshold_source: 'Baseline noise' }, 'verdict'),
-      'Cell001: Responded · rise held for 2 frames from 121.0 s, 102.0 s after the stimulus · largest rise 40.6% at 92.0 s (needed 30.3%, set by its noise)');
+    // the latency; the largest rise and its time follow. A largest rise outside the rise that held says so: a single higher frame
+    // before it (cell 69 of Run2: largest rise at 92.0 s, held from 121.0 s) is "not held", one after its end "after the held rise".
+    const cell69 = { Onset_s: '120.987414777279', Run_start_s: '120.987414777279', Run_end_s: '121.987', Run_samples: '2', Response_latency_s: '101.989390969276', Peak_s: '91.9904310703278', Peak_increase: '0.405565745971214', Threshold_increase: '0.303418646217159', Threshold_source: 'Baseline noise' };
+    assert.equal(await withCall(cell69, 'verdict'), 'Cell001: Responded · rise held for 2 frames from 121.0 s, 102.0 s after the stimulus · largest rise 40.6% at 92.0 s, not held (needed 30.3%, set by its noise)');
+    assert.match(await withCall(Object.assign({}, cell69, { Peak_s: '121.5' }), 'verdict'), /· largest rise 40\.6% at 121\.5 s \(needed/, 'a largest rise within the held rise needs no word');
+    assert.match(await withCall(Object.assign({}, cell69, { Peak_s: '150' }), 'verdict'), /· largest rise 40\.6% at 150\.0 s, after the held rise \(needed/);
     assert.match(await withCall({}, 'verdict'), /^Cell001: Responded · rise held from 4\.5 s · largest rise/, 'a call saved without run length or latency says what it has');
     assert.equal(await withCall({ Status: 'Did not respond', Reason: 'No sustained threshold crossing', Peak_increase: '0.05' }, 'verdict'), 'Cell001: Did not respond · no sustained threshold crossing · largest rise 5.0% at 6.0 s (needed 10.0%, the minimum rise)', 'a cell that did not respond keeps the engine\'s reason');
     await page.check('#thresholds');
     for (const [call, entries, lines, view] of [
-      [byNoise, ['required rise', 'minimum rise', 'baseline mean'], { '#177465': 0.1221, '#ad7423': 0.1, '#7c8794': 0 }, 'thresholds, the noise set the required rise'],
+      [byNoise, ['required rise', 'minimum rise', 'baseline mean'], { '#177465': 0.1221, '#6a3d9a': 0.1, '#7c8794': 0 }, 'thresholds, the noise set the required rise'],
       [byFloor, ['required rise', 'noise threshold', 'baseline mean'], { '#177465': 0.1, '#a46ea0': 0.0759, '#7c8794': 0 }, 'thresholds, the minimum rise set the required rise'],
       [Object.assign({}, byFloor, { Noise_threshold: '0.1' }), ['required rise', 'baseline mean'], { '#177465': 0.1, '#7c8794': 0 }, 'thresholds, both the same'],
-      [Object.assign({}, byNoise, { Noise_threshold: '0.12210000001' }), ['required rise', 'minimum rise', 'baseline mean'], { '#177465': 0.1221, '#ad7423': 0.1, '#7c8794': 0 }, 'thresholds, the two columns differing in their last digits: the table says which set it, not a comparison'],
-      [Object.assign({}, byNoise, { Threshold_source: '' }), ['required rise', 'minimum rise', 'baseline mean'], { '#177465': 0.1221, '#ad7423': 0.1, '#7c8794': 0 }, 'thresholds, a table without Threshold_source']]) {
+      [Object.assign({}, byNoise, { Noise_threshold: '0.12210000001' }), ['required rise', 'minimum rise', 'baseline mean'], { '#177465': 0.1221, '#6a3d9a': 0.1, '#7c8794': 0 }, 'thresholds, the two columns differing in their last digits: the table says which set it, not a comparison'],
+      [Object.assign({}, byNoise, { Threshold_source: '' }), ['required rise', 'minimum rise', 'baseline mean'], { '#177465': 0.1221, '#6a3d9a': 0.1, '#7c8794': 0 }, 'thresholds, a table without Threshold_source']]) {
       await withCall(call); now = await plotNow(); fig = await cleanBoth(view);
       assert.deepEqual(now.legend, ['Cell001', 'all cells ± SEM (n = 4)'].concat(entries, ['baseline', 'response window', 'response']), view);
-      for (const ink of ['#177465', '#ad7423', '#a46ea0', '#7c8794']) { const drawn = across(fig, ink);
+      for (const ink of ['#177465', '#6a3d9a', '#a46ea0', '#7c8794']) { const drawn = across(fig, ink);
         assert.equal(drawn.length, ink in lines ? 1 : 0, view + ': lines in ' + ink); if (drawn.length) assert.ok(Math.abs(valueAt(fig, drawn[0].y0) - lines[ink]) < 0.005, view + ': the line in ' + ink + ' is at its level'); }
     }
     assert.ok(!fig.texts.some((t) => /3 × SD|×/.test(t.text)), 'the noise threshold is not called "3 × SD"');
@@ -683,6 +691,15 @@ const assert = require('assert/strict');
     assert.ok(fig.lo <= -1.5);
     assert.ok(yTicks(fig).some((t) => t.text.startsWith('−')) && !fig.texts.some((t) => /^-[\d.]+$/.test(t.text)), 'a true minus sign, not a hyphen');
     assert.ok(fig.lines.some((l) => l.ink === '#9aa5b1' && l.dashed), 'a dotted line at zero');
+    // With "Thresholds", a threshold line on zero (the baseline mean of ΔF/F₀) is drawn alone: no dotted zero line mixed into it.
+    await page.check('#thresholds'); fig = await drawing(true);
+    assert.ok(across(fig, '#177465').length === 1 && fig.lines.some((l) => l.dashed && l.y0 === l.y1 && l.ink !== '#9aa5b1' && !inLegend(fig, l.x0, l.y0) && Math.abs(valueAt(fig, l.y0)) < 1e-3) && !fig.lines.some((l) => l.ink === '#9aa5b1' && !inLegend(fig, l.x0, l.y0)), 'with a threshold drawn on zero, no dotted zero line under it');
+    await page.uncheck('#thresholds');
+    // The thresholds are not in the stimulus line's brown.
+    assert.ok(await page.evaluate(() => { const s = window.calciumStep4.STYLE.plot, rgb = (c) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16)), apart = (a, b) => Math.hypot(...rgb(a).map((v, i) => v - rgb(b)[i]));
+      return [s.colourLevelFloor, s.colourLevelNoise, s.colourLevelBaseline].every((c) => apart(c, s.colourStimulus) > 120); }), 'the minimum rise and the other thresholds are told apart from the stimulus line by colour');
+    assert.ok(await page.evaluate(() => { const s = window.calciumStep4.STYLE.plot, rgb = (c) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16)), apart = (a, b) => Math.hypot(...rgb(a).map((v, i) => v - rgb(b)[i]));
+      return apart(s.colourLevelFloor, s.colourLevelBaseline) > 70 && apart(s.colourLevelFloor, s.colourMean) > 70; }), 'and the minimum rise, drawn with the baseline mean under Thresholds, from it and from the mean');
     // Placement in a figure: rows from the Y axis; too narrow, it wraps by whole entries; "Right of the plot" stacks the entries; hidden shows none.
     assert.equal(fig.legendAt[0], fig.L);
     await figureStyle({ width: 3 }); fig = clean(await drawing(true), 'a narrow figure');
@@ -813,14 +830,17 @@ const assert = require('assert/strict');
     const near = (a, b, within) => a.length === b.length && a.every((value, i) => Math.abs(value - b[i]) <= (within === undefined ? 0.5 : within));
     const drag = async (from, to, during) => { await page.mouse.move(from[0], from[1]); await page.mouse.down(); await page.mouse.move(to[0], to[1], { steps: 4 }); const seen = during ? await during() : null; await page.mouse.up(); return seen; };
     let seen = await viewNow(); const plotAt = await page.locator('#plot').boundingBox();
-    // The controls: on the picture's top left corner, small buttons of the page's own shape, each with a tooltip and a name: zoom out,
-    // the zoom level, zoom in, Whole picture, Zoom to region. The whole picture is fitted beside them, never under them.
-    const tools = await page.evaluate(() => { const stage = document.getElementById('picture-stage').getBoundingClientRect(), all = document.getElementById('view-tools').getBoundingClientRect();
-      return { box: [all.left, all.top, all.right, all.bottom], corner: all.left - stage.left <= 8 && all.top - stage.top <= 8 && document.getElementById('picture-stage').contains(document.getElementById('view-tools')),
-        parts: Array.from(document.querySelectorAll('#view-tools button, #view-tools .zoom-level')).map((e) => { const b = e.getBoundingClientRect(); return [e.id, b.width + 'x' + b.height, e.title ? 'tooltip' : '', e.getAttribute('aria-label') || e.textContent].join(' · '); }) }; });
-    assert.ok(tools.corner, 'the zoom and move controls lie on the picture\'s top left corner');
-    assert.deepEqual(tools.parts, ['zoom-out · 28x28 · tooltip · Zoom out', 'zoom-level · 28x28 · tooltip · 1×', 'zoom-in · 28x28 · tooltip · Zoom in', 'zoom-all · 28x28 · tooltip · Whole picture', 'zoom-region · 28x28 · tooltip · Zoom to region']);
-    { const corner = toScreen(seen, 0, 0); assert.ok(corner[0] >= tools.box[2] + 2 || corner[1] >= tools.box[3] + 2, 'the whole picture lies beside the controls, not under them: ' + corner + ' against ' + tools.box); }
+    // The controls: one row on the picture's top left corner, small buttons of the page's own height and corner, each with a tooltip and a
+    // name: zoom out, the zoom level, zoom in, then Whole picture and Zoom to region in words, as Zoom to cell is. The picture lies under
+    // the row, never beneath it.
+    const toolsNow = () => page.evaluate(() => { const stage = document.getElementById('picture-stage').getBoundingClientRect(), all = document.getElementById('view-tools').getBoundingClientRect(), parts = Array.from(document.querySelectorAll('#view-tools button, #view-tools .zoom-level'));
+      return { box: [all.left, all.top, all.right, all.bottom], corner: all.left - stage.left <= 8 && all.top - stage.top <= 8 && document.getElementById('picture-stage').contains(document.getElementById('view-tools')), row: new Set(parts.map((e) => Math.round(e.getBoundingClientRect().top))).size === 1,
+        order: parts.map((e) => Math.round(e.getBoundingClientRect().left)), level: getComputedStyle(document.getElementById('zoom-level')).backgroundColor,
+        parts: parts.map((e) => { const b = e.getBoundingClientRect(); return [e.id, (b.width === 28 ? 'square' : b.width > 60 ? 'words' : b.width) + ' ' + b.height, e.title ? 'tooltip' : '', e.getAttribute('aria-label') || e.textContent].join(' · '); }) }; });
+    const tools = await toolsNow();
+    assert.ok(tools.corner && tools.row && tools.order.every((x, i) => !i || x > tools.order[i - 1]), 'the zoom and move controls lie in one row on the picture\'s top left corner: ' + JSON.stringify(tools));
+    assert.deepEqual(tools.parts, ['zoom-out · square 28 · tooltip · Zoom out', 'zoom-level · square 28 · tooltip · 1×', 'zoom-in · square 28 · tooltip · Zoom in', 'zoom-all · words 28 · tooltip · Whole picture', 'zoom-region · words 28 · tooltip · Zoom to region']);
+    { const corner = toScreen(seen, 0, 0); assert.ok(corner[1] >= tools.box[3] + 2, 'the whole picture lies under the controls, not beneath them: ' + corner + ' against ' + tools.box); }
     assert.deepEqual([seen.zoom, seen.level, seen.cursor, await page.isDisabled('#zoom-out'), await page.isDisabled('#zoom-all'), await page.isEnabled('#zoom-in')], [1, '1×', 'crosshair', true, true, true], 'at 1× there is nothing to zoom out of');
     // The buttons zoom in steps about the middle of the view, from 1× to 16×; Whole picture goes back.
     await page.click('#zoom-in'); seen = await viewNow();
@@ -912,7 +932,22 @@ const assert = require('assert/strict');
       return { box: [b.left, b.top, b.width, b.height], fromCorner: [stage.right - b.right, stage.bottom - b.bottom], frame: [f.x, f.y, f.width, f.height], edge: light(f.x + f.width / 2, f.y + 0.75), around: light(f.x + f.width / 2, Math.max(1, f.y / 2)), area: a.viewArea() }; });
     seen = await viewNow(); let map = await mapNow(); const perPixel = [map.box[2] / seen.iw, map.box[3] / seen.ih];   // the map's pixels to one of the recording, across and down (each side is a whole number of pixels)
     assert.ok(await page.isVisible('#view-map') && map.fromCorner.every((gap) => gap >= 4 && gap <= 12) && Math.abs(map.box[2] / map.box[3] - seen.iw / seen.ih) < 0.03, 'the map is on the bottom right corner, in the picture\'s shape: ' + JSON.stringify(map));
-    const inPanel = [Math.max(0, -seen.x / seen.z), Math.max(0, -seen.y / seen.z), Math.min(seen.iw, (seen.w - seen.x) / seen.z), Math.min(seen.ih, (seen.h - seen.y) / seen.z)];
+    { // Zoomed in, the controls are the same row as at 1×, and nothing of the picture lies under them: the strip stays the panel's own
+      // colour, a click there finds no cell, and the zoom level looks as it does at 1×. The map is faint until the pointer is on it.
+      const now = await toolsNow(), strip = await page.evaluate(() => { const c = document.getElementById('picture'), dpr = c.width / c.clientWidth, top = window.calciumStep4.place(c.clientWidth, c.clientHeight).roomTop, d = c.getContext('2d').getImageData(0, 0, c.width, Math.floor(top * dpr)).data;
+        let other = 0; for (let i = 0; i < d.length; i += 4) if (d[i] !== 0x10 || d[i + 1] !== 0x16 || d[i + 2] !== 0x1c) other++; const b = c.getBoundingClientRect();
+        return { other, top, cell: window.calciumStep4.cellAt({ clientX: b.left + c.clientWidth / 2, clientY: b.top + top - 2 }), faint: getComputedStyle(document.getElementById('view-map')).opacity }; });
+      assert.deepEqual([now.parts.map((part) => part.replace(/ · [\d.]+×$/, '')), now.order, now.level], [tools.parts.map((part) => part.replace(/ · [\d.]+×$/, '')), tools.order, tools.level], 'zoomed in, the controls keep their place, order and look');
+      assert.ok(seen.y < strip.top && strip.other === 0 && strip.cell === -1, 'the picture is not drawn under the controls: ' + JSON.stringify(strip));
+      assert.equal(strip.faint, '0.6', 'the map is faint at rest');
+      // and it never covers the selected cell: where the cell would lie under it, the map moves to the bottom left corner
+      const sweep = await page.evaluate(() => { const a = window.calciumStep4, c = document.getElementById('picture'), m = document.getElementById('view-map'), i = a.S.info.names.indexOf(a.S.cell), b = a.S.bounds[i], was = [a.Pic.zoom, a.Pic.cx, a.Pic.cy], seen = { covered: 0, left: 0, views: 0 };
+        for (let gx = 0; gx <= 10; gx++) for (let gy = 0; gy <= 10; gy++) { a.setView(3, gx / 10 * a.S.info.width, gy / 10 * a.S.info.height); const at = a.place(c.clientWidth, c.clientHeight), box = c.getBoundingClientRect(), r = m.getBoundingClientRect();
+          const cell = [box.left + at.x + b.x0 * at.z, Math.max(box.top + at.roomTop, box.top + at.y + b.y0 * at.z), box.left + at.x + b.x1 * at.z, box.top + at.y + b.y1 * at.z]; seen.views++;
+          if (m.classList.contains('left')) seen.left++; if (cell[2] > r.left && cell[0] < r.right && cell[3] > r.top && cell[1] < r.bottom) seen.covered++; }
+        a.setView(...was); return seen; });
+      assert.ok(sweep.covered === 0 && sweep.left > 0 && sweep.left < sweep.views, 'the map never lies on the selected cell: ' + JSON.stringify(sweep)); }
+    const inPanel = [Math.max(0, -seen.x / seen.z), Math.max(0, (seen.roomTop - seen.y) / seen.z), Math.min(seen.iw, (seen.w - seen.x) / seen.z), Math.min(seen.ih, (seen.h - seen.y) / seen.z)];   // (in view: under the strip of the controls)
     assert.ok(near(map.frame, [inPanel[0] * perPixel[0], inPanel[1] * perPixel[1], (inPanel[2] - inPanel[0]) * perPixel[0], (inPanel[3] - inPanel[1]) * perPixel[1]], 1e-6), 'its frame is the part of the recording in the panel: ' + map.frame);
     assert.ok(near([map.area.x, map.area.y, map.area.width, map.area.height], [inPanel[0], inPanel[1], inPanel[2] - inPanel[0], inPanel[3] - inPanel[1]], 1e-9) && map.edge > 300 && map.around < 150, 'drawn as a light frame, with the field outside it dimmed: ' + [map.edge, map.around]);   // (light summed over red, green and blue; the frame is 1.5 pixels wide, so a pixel on it is at least half white)
     const press = [Math.round(map.box[0] + 0.3 * map.box[2]), Math.round(map.box[1] + 0.5 * map.box[3])], release = [Math.round(map.box[0] + 0.65 * map.box[2]), Math.round(map.box[1] + 0.45 * map.box[3])];
@@ -977,8 +1012,8 @@ const assert = require('assert/strict');
     assert.deepEqual(kept.record.outline_colours, { your_cells: '#ffffff', excluded_or_unscorable: '#ffffff' }); assert.notEqual((await againstRelease()).different, 0, '(and the comparison with the release does tell a plain picture apart)');
     await page.selectOption('#group', '1'); onScreen = await cellsDrawn(false); assert.deepEqual([lines(onScreen), onScreen.chips], [['#ffffff', '#000000', '#5bc0ff'], ['your cells']], 'Show still chooses the cells; with no dashed outline drawn the key is "your cells" alone'); await page.selectOption('#group', '0');
     // Number cells: every outline that is drawn gets its number, the number the page knows the cell by (Cell004: 4), white on a dark
-    // halo, in the middle of the cell and readable (9 to 13 pixels high on screen). The selected cell keeps its name tag. Saved
-    // pictures carry the same numbers, for the selected cell too, which they do not mark.
+    // halo, in the middle of a cell large enough to show it (as every cell of the fixture is) and readable (9 to 13 pixels high on
+    // screen). The selected cell keeps its name tag. Saved pictures carry the same numbers, for the selected cell too, which they do not mark.
     await page.check('#number-cells'); onScreen = await cellsDrawn(false); kept = await cellsDrawn(true); seen = await viewNow();
     assert.deepEqual(onScreen.texts.map((t) => t.text), ['2', '3', '4', '5', '6', 'Cell001']); assert.deepEqual(numbers(kept).map((t) => t.text), ['1', '2', '3', '4', '5', '6']);
     assert.deepEqual(await page.evaluate(() => { const a = window.calciumStep4; return a.S.info.names.map(a.cellNumber).concat(a.cellTyped('4', true)); }), ['1', '2', '3', '4', '5', '6', 'Cell004'], 'the number that opens the cell when typed into the Cell box');
@@ -987,6 +1022,15 @@ const assert = require('assert/strict');
       assert.ok(near([label.x, label.y], spot, 0.01) && label.high > 8.99 && label.high < 13.01, 'the number ' + label.text + ' is in the middle of its cell, at a readable size: ' + JSON.stringify(label)); }
     for (const label of numbers(kept)) { const b = boundsOf[Number(label.text) - 1], scale = kept.size[0] / seen.iw; assert.ok(near([label.x / scale, label.y / scale], [(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2], 0.01) && label.high / scale > 9.99, 'in a saved picture too: ' + JSON.stringify(label)); }
     assert.deepEqual([kept.record.cells_numbered, kept.record.outlines_shown], [true, true]);
+    // A cell too small to show its number with its outline around it has the number beside it, off the outline; numbers never lie on
+    // one another. The same rule saved. (cell 5 made a few pixels across, a neighbour of cell 4)
+    const shrunk = await page.evaluate(() => { const a = window.calciumStep4, was = a.S.bounds.map((b) => Object.assign({}, b)), c = a.S.centres[4]; a.S.bounds[4] = { x0: c[0] - 1.5, x1: c[0] + 1.5, y0: c[1] - 1.5, y1: c[1] + 1.5 }; return was; });
+    onScreen = await cellsDrawn(false); kept = await cellsDrawn(true); await page.evaluate((was) => { window.calciumStep4.S.bounds = was; }, shrunk);
+    for (const [drawn, scale, left, top, where] of [[onScreen, seen.z, seen.x, seen.y, 'on screen'], [kept, kept.size[0] / seen.iw, 0, 0, 'saved']]) {
+      const five = numbers(drawn).find((t) => t.text === '5'), c = boundsOf[4], mid = [left + (c.x0 + c.x1) / 2 * scale, top + (c.y0 + c.y1) / 2 * scale], halo = 0.3 * five.high;
+      assert.ok(Math.abs(five.x - mid[0]) >= (five.wide + halo) / 2 + 1.5 * scale - 0.01 || Math.abs(five.y - mid[1]) >= five.high / 2 + 1.5 * scale - 0.01, where + ': the number of a small cell lies beside it: ' + JSON.stringify([five, mid]));
+      const all = numbers(drawn); for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) { const a = all[i], b = all[j];
+        assert.ok(Math.abs(a.x - b.x) >= (a.wide + b.wide) / 2 - 0.01 || Math.abs(a.y - b.y) >= a.high - 0.01, where + ': no number on another: ' + JSON.stringify([a, b])); } }
     // Numbers that would lie on one another are moved apart, and no number runs off the picture.
     const crowded = await page.evaluate(() => { const a = window.calciumStep4, was = a.S.centres; a.S.centres = was.map((c, i) => (i === 1 || i === 2 ? [125, 110] : i === 3 ? [a.S.info.width - 1, a.S.info.height - 1] : c)); return was; });   // two cells with one middle, clear of the others; and one in the picture's corner
     onScreen = await cellsDrawn(false); kept = await cellsDrawn(true); await page.evaluate((was) => { window.calciumStep4.S.centres = was; }, crowded);
@@ -1115,7 +1159,7 @@ const assert = require('assert/strict');
     { const k = 1000 / zoomedArea.width, high = Math.round(1000 * zoomedArea.height / zoomedArea.width), one = areaMade.images[0];
       assert.deepEqual([areaMade.size[0], wholeMade.size[0], areaFrame.size], [1000, 1000, [1000, high]], 'as wide as a picture of the whole field, in the shape of the area');
       assert.ok(areaMade.images.length === 1 && near(one.from, [zoomedArea.x, zoomedArea.y, zoomedArea.width, zoomedArea.height], 1e-9) && near(one.to, [0, 0, 1000, high], 1e-6), 'drawn from the recording\'s own pixels of that area: ' + JSON.stringify(one));
-      assert.equal(one.smoothed, !(zoomedArea.zoom > 3), 'smoothed as the page shows it at that zoom'); assert.equal(wholeMade.images[0].smoothed, true);
+      assert.equal(one.smoothed, false, 'an enlarged area keeps the recording\'s pixels as squares, whatever the zoom on screen'); assert.equal(wholeMade.images[0].smoothed, true, 'the whole field is drawn as it always was');
       assert.ok(areaMade.cuts.length === 1 && near(areaMade.cuts[0].box, [0, 0, 1000, high], 1e-6) && wholeMade.cuts.length === 0, 'outlines end cleanly at the edge of the area: ' + JSON.stringify(areaMade.cuts));
       assert.deepEqual(outlinesOf(areaMade).map((s) => [s.ink, s.dashed, +s.width.toFixed(4)]), outlinesOf(wholeMade).map((s) => [s.ink, s.dashed, +s.width.toFixed(4)]), 'the outlines keep their pens'); assert.ok(near([outlinesOf(areaMade)[0].width], [7.2], 1e-6));
       const inside = boundsOf.map((b, i) => [i + 1, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2]).filter(([, x, y]) => x >= zoomedArea.x && x <= zoomedArea.x + zoomedArea.width && y >= zoomedArea.y && y <= zoomedArea.y + zoomedArea.height);
@@ -1145,8 +1189,8 @@ const assert = require('assert/strict');
     await page.uncheck('#number-cells');
     // The pixels of a saved area are the recording's: the same as in a picture of the whole field. Checked without outlines, clear of the
     // frame's label and of the scale bar, against a frame of the whole field saved at the recording's own size: each of its pixels
-    // in the area is a square of 5 × 5 in the picture of the area (seen at 5×, where the page shows pixels as squares). Seen at 2×, where
-    // the page smooths, the picture of the area is smoothed too.
+    // in the area is a square of 5 × 5 in the picture of the area, whether it was seen at 5× (where the page shows pixels as squares) or
+    // at 2× (where the page smooths): the saved picture enlarges the recording 5 times either way, and an enlarged pixel is not smoothed.
     const saveAs = (size, dpi) => page.evaluate(([size, dpi]) => { for (const [id, value] of [['save-size', size], ['save-dpi', dpi]]) { const box = document.getElementById(id); box.value = value; box.dispatchEvent(new Event('change', { bubbles: true })); } }, [size, dpi]);
     await page.uncheck('#outlines'); await saveAs('screen', '150');
     const squares = await page.evaluate(async () => { const a = window.calciumStep4, part = { x: 20, y: 45, width: 50, height: 30 }, whole = await a.viewCanvas(12, true), result = { whole: [whole.width, whole.height] };
@@ -1156,7 +1200,7 @@ const assert = require('assert/strict');
         result[zoom] = { size: [cut.width, cut.height], compared, different, lit }; }
       return result; });
     assert.deepEqual([squares.whole, squares[5].size], [[250, 150], [250, 150]]); assert.ok(squares[5].different === 0 && squares[5].lit > 5000 && squares[5].lit < squares[5].compared - 5000, 'a saved area is the same crop of the recording, pixel for pixel: ' + JSON.stringify(squares));
-    assert.ok(squares[2].different > 1000 && squares[2].different < squares[2].compared / 3, 'an area seen at a zoom the page smooths is smoothed (the squares\' edges are blended): ' + JSON.stringify(squares[2]));
+    assert.ok(squares[2].different === 0 && squares[2].lit > 5000, 'also an area seen at 2×: its pixels are squares with hard edges, not blended: ' + JSON.stringify(squares[2]));
     await page.check('#outlines'); await saveAs('8x6', '300');
     // Through the Export menu, zoomed in. With "Whole picture": the file is the whole field, its name does not say area, and its record
     // says "whole picture". With "Area on screen": the name says area, the picture has the area's shape, and the record gives the area in
@@ -1305,13 +1349,18 @@ const assert = require('assert/strict');
       try { if (figure) f.figureCanvas('heatmap', 96); else window.dispatchEvent(new Event('resize')); } finally { Object.assign(P, was); }
       seen.texts = window.asWritten(seen.texts); const d = figure ? f.Fig.drawn : f.Heat.geom;
       return Object.assign(seen, { top: figure ? d.top : 0, L: d.L, T: d.T, W: d.W, H: d.H, rows: d.names, named: d.named, groups: d.groups, low: d.low, high: d.high, below: d.below, above: d.above, x0: d.x0, x1: d.x1,
-        key: d.items.map((i) => i.text), keyAt: d.key ? [d.key.x, d.key.y, d.key.layout.height / d.key.layout.rowHeight] : null, numbers: d.bar ? d.bar.numbers.map((n) => n.text) : null, barX: d.bar ? d.bar.x : null });
+        key: d.items.map((i) => i.text), keyAt: d.key ? [d.key.x, d.key.y, d.key.layout.height / d.key.layout.rowHeight] : null, numbers: d.bar ? d.bar.numbers.map((n) => n.text) : null, barX: d.bar ? d.bar.x : null, times: d.times, strip: d.strip, flag: d.flag });
     }, figure);
     const heatStyle = (changes) => page.evaluate((changes) => { const f = window.calciumStep4; Object.assign(f.Fig.heatmap, f.STYLE.heatmap, changes); }, changes || {});   // the built-in look, with these entries changed
     const heatRows = () => page.evaluate(() => window.calciumStep4.Heat.geom.names);
     await heatStyle();
     // The built-in look: 7 × 5 in; the picture fills the width, with a narrow colour bar at the right as tall as the picture.
     assert.deepEqual(await page.evaluate(() => { const s = window.calciumStep4.STYLE.heatmap, c = window.calciumStep4.figureCanvas('heatmap', 100); return [s.width, s.height, c.width, c.height]; }), [7, 5, 700, 500]);
+    // Export stays at the right end of the first row of the heatmap's controls; where the row is too narrow, the choices wrap, not Export.
+    for (const width of [1440, 1024]) { await page.setViewportSize({ width, height: 900 }); await settledPaint();
+      assert.ok(await page.evaluate(() => { const box = (sel) => document.querySelector(sel).getBoundingClientRect(), exp = box('#export-heatmap > summary');
+        return Math.abs(exp.top - box('#order').top) <= 2 && exp.left >= box('#range').right && exp.left >= box('#hide-excluded').right; }), width + ' px: Export stays at the end of the first row of the heatmap\'s controls'); }
+    await page.setViewportSize({ width: 1440, height: 900 }); await settledPaint();
     await page.selectOption('#order', 'call'); let heat1 = await heatDrawing(true), heatPage = await heatDrawing(false);
     assert.ok(heat1.W / (7 * 96) > 0.7 && 7 * 96 - (heat1.L + heat1.W) < 90, 'the picture fills the figure: ' + [heat1.L, heat1.W]);
     const barBoxes = heat1.boxes.filter((b) => Math.abs(b.x - heat1.barX) < 0.01 && b.h <= 1.5);
@@ -1319,6 +1368,11 @@ const assert = require('assert/strict');
     // Rows sorted by call: the largest rise on top of each group; a cell below zero last in its group; cells without a trace last.
     assert.deepEqual(heat1.rows, ['Cell001', 'Cell005', 'Cell002', 'Cell006', 'Cell003', 'Cell004']);
     assert.deepEqual(heatPage.rows, heat1.rows, 'the page and the figure have the same rows');
+    { // One rule numbers the time axis of the time course and of the heatmap, on the page and saved: the same round times, no more than about six.
+      const plotTimes = await page.evaluate(() => { const f = window.calciumStep4, g = f.Plot.geom; f.figureCanvas('plot', 96); return { x: [g.x0, g.x1], page: g.times, figure: f.Fig.drawn.times }; });
+      assert.deepEqual(plotTimes.x, [heatPage.x0, heatPage.x1], '(the plot shows the whole recording)');
+      assert.deepEqual([heatPage.times, heat1.times, plotTimes.figure], [plotTimes.page, plotTimes.page, plotTimes.page], 'the heatmap is numbered along time as the time course is: ' + JSON.stringify([heatPage.times, heat1.times, plotTimes]));
+      assert.ok(plotTimes.page.length >= 3 && plotTimes.page.length <= 8, 'about six numbers: ' + plotTimes.page); }
     // (Cell005 is below zero; with the larger rise it would lead its group, and it still comes last in it)
     assert.deepEqual(await page.evaluate(() => { const f = window.calciumStep4, row = f.S.results.callsByWindow[f.S.window].Cell005, was = row.Peak_increase; row.Peak_increase = '2';
       try { window.dispatchEvent(new Event('resize')); return f.Heat.geom.names.slice(0, 2); } finally { row.Peak_increase = was; window.dispatchEvent(new Event('resize')); } }), ['Cell001', 'Cell005'], 'a cell below zero goes last within its group');
@@ -1333,6 +1387,16 @@ const assert = require('assert/strict');
     // Groups: the rows of one call together. Nothing is written or drawn beside the rows but the axis title, "Cells": no brackets, no
     // counts, no row counter that reads like cell numbers. The strip shows the groups, and the key says how many cells each holds.
     assert.deepEqual(heat1.groups, [{ kind: 'responded', first: 0, n: 2 }, { kind: 'not', first: 2, n: 1 }, { kind: 'other', first: 3, n: 3 }]);
+    // The strip: one solid bar for each group of rows, with no gaps between its rows; the mark of the cells below zero likewise; a group
+    // of one cell is never shorter than stripLeast, centred on its row, so it can be found. (the boxes filled in the strip's and the mark's columns)
+    const stripBars = (seen, at) => seen.boxes.filter((b) => Math.abs(b.x - (seen.L - at)) < 0.01).map((b) => ({ y: b.y - seen.top - seen.T, h: b.h, ink: b.ink }));
+    for (const seen of [heat1, heatPage]) { const rowH = seen.H / seen.rows.length, bars = stripBars(seen, seen.strip).sort((a, b) => a.y - b.y);
+      assert.deepEqual(bars.map((b) => [Math.round(b.y / rowH), Math.round(b.h / rowH)]), [[0, 2], [2, 1], [3, 3]], 'one bar for each group: ' + JSON.stringify(bars));
+      assert.deepEqual(stripBars(seen, seen.flag).map((b) => [Math.round(b.y / rowH), Math.round(b.h / rowH)]), [[1, 1]], 'and one for the run of cells below zero'); }
+    await heatStyle({ stripLeast: 60 }); { const seen = await heatDrawing(true), rowH = seen.H / seen.rows.length, bars = stripBars(seen, seen.strip), one = bars.find((b) => Math.abs(b.h - 60 * 96 / 72) < 0.01);
+      assert.ok(rowH < 60 * 96 / 72 && one && Math.abs(one.y + one.h / 2 - 2.5 * rowH) < 0.01, 'a group of one row is drawn at least stripLeast high, centred on its row: ' + JSON.stringify([rowH, bars]));
+      assert.equal(bars.indexOf(one), bars.length - 1, 'and on top of the longer runs beside it'); assert.ok(bars.every((b) => b.y >= -0.01 && b.y + b.h <= seen.H + 0.01), 'inside the picture\'s height'); }
+    await heatStyle();
     const besideRows = (seen, t) => t.x < seen.L && t.y > seen.top + seen.T && t.y < seen.top + seen.T + seen.H, beside = (seen) => seen.texts.filter((t) => besideRows(seen, t)).sort((a, b) => a.y - b.y).map((t) => t.text);
     const besideLines = (seen) => seen.lines.filter((l) => l.x1 < seen.L && l.y1 > seen.top + seen.T && l.y0 < seen.top + seen.T + seen.H);
     for (const seen of [heat1, heatPage]) { assert.deepEqual(beside(seen), ['Cells'], 'left of the picture: the axis title and nothing else'); assert.deepEqual(besideLines(seen), [], 'and no line is drawn there: no brackets'); }
@@ -1370,6 +1434,14 @@ const assert = require('assert/strict');
     await heatStyle({ barMin: -0.37, barMax: 0.83 }); heat1 = await heatDrawing(true);
     assert.deepEqual([heat1.low, heat1.high], [-0.37, 0.83]); assert.deepEqual(heat1.numbers.slice(0, 2), ['≥ 0.83', '≤ −0.37'], 'limits that are not round numbers are written in full, with their marks'); assert.deepEqual(barEnds(heat1), [0, Math.round(heat1.H)]);
     await heatStyle({ barMin: -2, barMax: 3 }); assert.deepEqual((await heatDrawing(true)).numbers.slice(0, 2), ['3', '−2'], 'no mark at an end that nothing lies beyond');
+    // The numbers of the colour bar are a full line apart: a round number within a line of an end is not written, on the page and in a
+    // figure alike (as Run1's "≥ 0.12" against "0.1" was). (the gaps between neighbouring numbers, in heights of their text)
+    const barGaps = (seen) => { const bar = seen.texts.filter((t) => t.x > seen.barX && t.y >= seen.top + seen.T - 1 && t.y <= seen.top + seen.T + seen.H + 1).sort((a, b) => a.y - b.y);
+      return bar.slice(1).map((t, i) => (t.y - bar[i].y) / (t.size * Math.abs(Number(t.m.split(',')[3])))); };
+    for (const [style, where] of [[{ barMin: -0.6, barMax: 0.12, height: 3 }, 'a figure with ends close to round numbers'], [{ barMin: -0.6, barMax: 0.12 }, 'a 7 × 5 in figure'], [null, 'the page']]) {
+      let seen; if (style) { await heatStyle(style); seen = await heatDrawing(true); } else { await heatStyle(); seen = await heatDrawing(false); }
+      const gaps = barGaps(seen); assert.ok(gaps.length >= 1 && gaps.every((gap) => gap >= 2 - 1e-6), where + ': the colour bar\'s numbers are a line apart: ' + JSON.stringify([seen.numbers, gaps]));
+      if (style) assert.deepEqual(seen.numbers.slice(0, 2), ['≥ 0.12', '≤ −0.6'], 'and both ends are written'); }
     await heatStyle({ barMin: 2, barMax: 1 }); heat1 = await heatDrawing(true); assert.deepEqual([heat1.low, heat1.high], [0, 1], 'a minimum above the maximum is not a range: the automatic one stays');
     await heatStyle(); await page.selectOption('#palette', 'plasma'); heat1 = await heatDrawing(true);
     assert.deepEqual([heat1.low, heat1.numbers[1]], [0, '≤ 0.0'], 'a palette that starts at zero says in the figure, too, that values below zero take its first colour'); await page.selectOption('#palette', 'signed');
@@ -1478,17 +1550,21 @@ const assert = require('assert/strict');
     assert.equal(tipOf('Peak'), 'Saved as Peak_dFF0, Response_Amplitude', 'twins by definition share a row');
     assert.deepEqual(rowOf('Largest rise').slice(0, 5), ['Largest rise', '%', 'response window, of the local level', '66.7 ± 33.3%', '3'], 'from the calls when there are no window metrics');
     assert.deepEqual(rowOf('F₀').slice(3, 5), ['10.00 ± 0.00', '4'], 'gray levels with 2 decimals; the two excluded cells are not in All cells');
-    assert.deepEqual(rowOf('Onset').slice(3), ['4.25 ± 0.25', '2', '4.25 ± 0.25', '2', '–', '0'], 'the onset is the timing of a response'); assert.equal(tipOf('Onset'), 'Saved as Onset_s, Run_start_s');
+    assert.deepEqual(rowOf('Onset').slice(3), ['', '', '4.25 ± 0.25', '2', '', ''], 'the onset is the timing of a response: given once, under Responded'); assert.equal(tipOf('Onset'), 'Saved as Onset_s, Run_start_s');
     assert.ok(await page.locator('#table-metrics').evaluate((t) => [...t.tBodies[0].rows].every((r) => [...r.cells].slice(3).every((c) => c.classList.contains('num')))), 'a dash stands right like the numbers of its column');
     assert.equal(await page.locator('#metrics-table').evaluate((s) => getComputedStyle(s).maxWidth), 'none', 'the list of tables is not cut off ("Summary: mean ± SEM of each metri…")');
-    for (const name of ['Time to peak', 'Time to 50% of peak', 'Rise time', 'FWHM']) { assert.match(rowOf(name)[2], /^whole recording/, name + ' is named for the whole recording'); assert.equal(rowOf(name)[7], '–', name + ' is not given for cells that did not respond'); }
+    for (const name of ['Time to peak', 'Time to 50% of peak', 'Rise time', 'FWHM']) { assert.match(rowOf(name)[2], /^whole recording/, name + ' is named for the whole recording'); assert.deepEqual([rowOf(name)[3], rowOf(name)[7]], ['', ''], name + ' is given once, not again under All cells or for cells that did not respond'); }
     assert.ok(!summary.rows.some((row) => row[0] === 'Window AUC'), 'a column this analysis did not save is not a row on screen');
     assert.match(await text('#metric-help'), /cells that responded/); assert.ok(await page.isHidden('#all-metric-columns-label'));
     const long = await page.evaluate(() => window.calciumStep4.metricSummary().long), groupsOf = (await page.evaluate(() => window.calciumStep4.S.results.chosenBlind)) ? 5 : 3;
     assert.deepEqual(long[0], ['Metric', 'Unit', 'Measured', 'Saved_as', 'Group', 'Mean', 'SD', 'SEM', 'N_cells'], 'the saved summary keeps its columns');
     assert.equal(long.length - 1, (await page.evaluate(() => window.calciumStep4.SUMMARY_ROWS.length)) * groupsOf, 'and has the same rows for every recording');
-    assert.deepEqual(long.find((row) => row[0] === 'Window AUC' && row[4] === 'All cells').slice(3), ['', 'All cells', '', '', '', 0], 'a metric not saved has no cells, not no row');
-    assert.equal(long.find((row) => row[0] === 'Largest rise' && row[4] === 'All cells')[5], 200 / 3, 'in the unit it is shown in, at full precision');
+    assert.deepEqual(long.find((row) => row[0] === 'Window area under the curve' && row[4] === 'All cells').slice(1), ['ΔF/F₀ × s', 'response window, signed', '', 'All cells', '', '', '', 0], 'a metric not saved has no cells, not no row; one unit for both areas');
+    { const rise = long.find((row) => row[0] === 'Peak rise' && row[4] === 'All cells');
+      assert.deepEqual(rise.slice(0, 3).concat(rise.slice(5, 6)), ['Peak rise', 'fraction of baseline', 'response window', 2 / 3], 'in the saved unit and words, at full precision: a fraction stays a fraction'); }
+    assert.deepEqual(long.find((row) => row[0] === 'Signal-to-noise' && row[4] === 'All cells').slice(0, 3), ['Signal-to-noise', 'peak ÷ baseline SD', 'whole recording'], 'the saved summary keeps its words');
+    assert.ok(long.some((row) => row[0] === 'Raw baseline SD') && long.some((row) => row[0] === 'Area under the curve'), 'two names made unique');
+    assert.equal(new Set(long.slice(1).map((row) => row[0] + '|' + row[4])).size, long.length - 1, 'Metric and Group are a key');
     assert.ok(await page.locator('#metrics-table option').evaluateAll((options) => options.every((o) => !/Legacy/.test(o.textContent))), 'the word Legacy is not shown');
     await page.locator('#export-metrics > summary').click(); await page.click('#metrics-save');
     await page.waitForFunction(() => /^Saved in plots: /.test(document.getElementById('metrics-saved').textContent));
@@ -1589,8 +1665,11 @@ const assert = require('assert/strict');
     assert.equal(await page.textContent('#figure-name'), 'Plot figure'); assert.match(await page.textContent('#figure-pixels'), /^2100 × 1200 pixels/);
     assert.ok(await page.evaluate(() => { const b = document.getElementById('figure-preview').getBoundingClientRect(), s = document.getElementById('figure-stage').getBoundingClientRect(); return Math.abs(b.width / b.height - 7 / 4) < 0.01 && b.left >= s.left && b.right <= s.right && b.top >= s.top && b.bottom <= s.bottom; }), 'the preview has the figure\'s shape and fits beside the boxes');
     assert.deepEqual(await oddShapes(), [], 'the editor\'s boxes have the page\'s height and corner');
+    assert.deepEqual(await page.evaluate(() => { const rows = Array.from(document.querySelectorAll('#figure-controls .row')).filter((r) => r.offsetParent), edges = new Set(), units = new Set();
+      for (const row of rows) { const box = row.querySelector('select, input:not([type=checkbox])'), unit = row.querySelector('.unit i'); if (!box) continue; const b = box.getBoundingClientRect(); edges.add(Math.round(b.width) + ' wide, right at ' + Math.round(b.right)); if (unit) units.add(unit.getBoundingClientRect().left > b.right); }
+      return [edges.size, Array.from(units)]; }), [1, [true]], 'every box of the editor has one width and one right edge, the units outside it');
     assert.ok(await page.evaluate(() => Array.from(document.body.children).every((part) => part.id === 'figure-editor' || part.tagName === 'SCRIPT' || part.inert)), 'the page behind the editor is out of reach');
-    assert.equal(await page.inputValue('#figure-title'), '', 'a figure has no title until one is typed'); assert.equal(await page.getAttribute('#figure-title', 'placeholder'), 'none'); assert.equal(await page.inputValue('#figure-yTitle'), 'ΔF/F₀'); assert.equal(await page.getAttribute('#figure-yMax', 'placeholder'), 'auto');
+    assert.equal(await page.inputValue('#figure-title'), '', 'a figure has no title until one is typed'); assert.equal(await page.getAttribute('#figure-title', 'placeholder'), 'No title', 'an empty title box does not read as a title set to "none"'); assert.equal(await page.inputValue('#figure-yTitle'), 'ΔF/F₀'); assert.equal(await page.getAttribute('#figure-yMax', 'placeholder'), 'auto');
     assert.deepEqual(await page.evaluate(() => { const S = window.calciumStep4.S, has = (id) => !!document.getElementById('figure-' + id); return { mode: S.plotMode, every: S.every, cell: has('cellWidth'), levels: has('levels'), traces: has('traceWidth'), calls: has('colourResponded'), mean: has('colourMean') }; }),
       { mode: 'mean', every: true, cell: false, levels: false, traces: true, calls: true, mean: true }, 'boxes are offered for what the plot on screen shows: the mean and all traces, no single cell');
     assert.ok(await page.isHidden('#figure-save-compression'), 'TIFF compression shows with TIFF');
@@ -1617,8 +1696,16 @@ const assert = require('assert/strict');
     await page.waitForFunction(async () => { const kept = (await (await fetch('api/session', { cache: 'no-store' })).json()).prefs['step4.figure.plot']; return !!kept && JSON.parse(kept).font === 'times' && JSON.parse(kept).grid === true; });   // Fiji keeps it for the next recording
     const figureFiles = new Promise((resolve, reject) => { const got = [], timeout = setTimeout(() => { page.off('download', listener); reject(new Error('Expected the figure and how it was made')); }, 10000);
       const listener = (download) => { got.push(download); if (got.length === 2) { clearTimeout(timeout); page.off('download', listener); resolve(got); } }; page.on('download', listener); });
+    shown = await previewNow(); await page.selectOption('#figure-sem', 'none'); await page.waitForFunction((was) => document.getElementById('figure-preview').toDataURL() !== was, shown);
     await page.click('#figure-download'); const figureNames = [];
     for (const download of await figureFiles) { figureNames.push(download.suggestedFilename()); await download.saveAs(path.join(out, 'figure_' + download.suggestedFilename())); }
+    { // the file beside a figure describes the figure, not the page: its own Y and time range and the means it drew, without "± SEM" when no band is drawn
+      const record = JSON.parse(fs.readFileSync(path.join(out, 'figure_' + figureNames.find((n) => n.endsWith('.metadata.json'))), 'utf8')), drew = await page.evaluate(() => { const d = window.calciumStep4.Fig.drawn; return { kind: d.kind, x: [d.x0, d.x1], y: [d.lo, d.hi], plotted: d.plotted }; });
+      assert.equal(drew.kind, 'plot'); assert.deepEqual(record.y_axis, drew.y, 'the Y range drawn in the figure'); assert.equal(record.y_axis[1], 3, 'with the Y max typed in the editor');
+      assert.deepEqual(record.time_range, drew.x, 'the time range drawn in the figure'); assert.deepEqual(record.plotted, drew.plotted, 'the means the figure drew');
+      assert.ok(record.plotted.length && record.plotted.every((label) => !/SEM/.test(label)), 'no SEM band, so no "± SEM"'); assert.equal(record.picture.figure.sem, 'none');
+      assert.notDeepEqual(record.y_axis, await page.evaluate(() => [window.calciumStep4.Plot.geom.lo, window.calciumStep4.Plot.geom.hi]), 'not the page\'s own Y range'); }
+    await page.selectOption('#figure-sem', 'band');
     const figurePng = fs.readFileSync(path.join(out, 'figure_' + figureNames.find((n) => n.endsWith('.png'))));
     assert.deepEqual([figurePng.readUInt32BE(16), figurePng.readUInt32BE(20)], [1800, 1500], 'the saved figure has the size set in the editor');
     const figureMade = JSON.parse(fs.readFileSync(path.join(out, 'figure_' + figureNames.find((n) => n.endsWith('.metadata.json'))), 'utf8')).picture;

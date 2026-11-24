@@ -656,19 +656,30 @@
   /** The calls of the primary stimulus, by cell: what the per-cell metrics and the summary are split by. */
   const primaryCalls = () => { const r = S.results, w = primaryWindow(); return (w && r.callsByWindow && r.callsByWindow[w.key]) || r.calls || {}; };
   /** The rows of the summary, always these and in this order, so that the summaries of different recordings line up: [table,
-   *  saved column]. Columns that are the same by definition (alias) are not rows of their own: "Saved as" names them. The
-   *  response is timed in the response window; the timing of the whole recording's peak is named for the whole recording. */
-  const SUMMARY_ROWS = [['metrics', 'Peak_dFF0'], ['windowMetrics', 'Peak_increase'], ['metrics', 'SNR'], ['metrics', 'AUC'], ['windowMetrics', 'Window_AUC_fraction_s'],
-    ['metrics', 'Baseline_SD'], ['metrics', 'F0'], ['metrics', 'Baseline_SD_raw'],
-    ['windowMetrics', 'Onset_s'], ['windowMetrics', 'Response_latency_s'], ['windowMetrics', 'Confirmation_s'], ['windowMetrics', 'Run_end_s'], ['windowMetrics', 'Run_duration_s'], ['windowMetrics', 'Peak_latency_s'],
-    ['metrics', 'Time_to_Peak'], ['metrics', 'Time_to_25_Peak'], ['metrics', 'Time_to_50_Peak'], ['metrics', 'Time_to_75_Peak'], ['metrics', 'Rise_Time'], ['metrics', 'Rise_Rate_10_90_dFF0_per_s'],
-    ['metrics', 'FWHM'], ['metrics', 'FWHM_Lower_Bound'], ['metrics', 'Half_Width']];
+   *  saved column, then the Metric, Unit and Measured text of the saved summary]. Columns that are the same by definition
+   *  (alias) are not rows of their own: "Saved as" names them. The response is timed in the response window; the timing of
+   *  the whole recording's peak is named for the whole recording. The screen takes its words from the column dictionary; the
+   *  saved summary keeps the words and the saved units (fractions stay fractions) it has always had, with two names made
+   *  unique (window area, raw baseline SD) and one unit for both areas, so that summaries saved by any release stack. */
+  const SUMMARY_ROWS = [['metrics', 'Peak_dFF0', 'Peak', DFF, 'whole recording'], ['windowMetrics', 'Peak_increase', 'Peak rise', 'fraction of baseline', 'response window'],
+    ['metrics', 'SNR', 'Signal-to-noise', 'peak ÷ baseline SD', 'whole recording'], ['metrics', 'AUC', 'Area under the curve', AREA, 'whole recording, signed'],
+    ['windowMetrics', 'Window_AUC_fraction_s', 'Window area under the curve', AREA, 'response window, signed'],
+    ['metrics', 'Baseline_SD', 'Baseline SD', DFF, 'F₀ frames'], ['metrics', 'F0', 'F₀', GRAY, 'F₀ frames'], ['metrics', 'Baseline_SD_raw', 'Raw baseline SD', GRAY, 'F₀ frames'],
+    ['windowMetrics', 'Onset_s', 'Onset time', SEC, 'from recording start'], ['windowMetrics', 'Response_latency_s', 'Latency', SEC, 'from the stimulus'],
+    ['windowMetrics', 'Confirmation_s', 'Response confirmed', SEC, 'from recording start'], ['windowMetrics', 'Run_end_s', 'Response end', SEC, 'from recording start'],
+    ['windowMetrics', 'Run_duration_s', 'Response duration', SEC, 'above the threshold'], ['windowMetrics', 'Peak_latency_s', 'Peak latency', SEC, 'from the stimulus'],
+    ['metrics', 'Time_to_Peak', 'Peak time', SEC, 'from recording start'], ['metrics', 'Time_to_25_Peak', '25 % of peak reached', SEC, 'from recording start'],
+    ['metrics', 'Time_to_50_Peak', '50 % of peak reached', SEC, 'from recording start'], ['metrics', 'Time_to_75_Peak', '75 % of peak reached', SEC, 'from recording start'],
+    ['metrics', 'Rise_Time', 'Rise time', SEC, '10 % to 90 % of peak'], ['metrics', 'Rise_Rate_10_90_dFF0_per_s', 'Rise rate', RATE, '10 % to 90 % of peak'],
+    ['metrics', 'FWHM', 'FWHM', SEC, 'width at half of peak'], ['metrics', 'FWHM_Lower_Bound', 'FWHM, lower bound', SEC, 'still above half at the end'], ['metrics', 'Half_Width', 'Half-width', SEC, 'FWHM ÷ 2']];
   /** Mean, SD, SEM and number of cells of every metric: for all cells that were not excluded, by response call, and by how the
    *  cells were chosen when that was recorded. Worked out here from the saved per-cell tables, which are not changed.
    *  - The rows are SUMMARY_ROWS; the saved file has every one of them (no cells where a column was not saved), the screen
    *    those that were saved. A response-window column comes from the window metrics, or from the calls when there are none.
-   *  - The timing and shape of a response are summarised over the cells that responded.
-   *  - On screen the two kinds of choosing are columns only when both have cells; n has a column of its own. */
+   *  - The timing and shape of a response are summarised over the cells that responded. On screen such a row gives its value
+   *    once, under Responded: All cells would repeat it and Did not respond has no cells.
+   *  - On screen the two kinds of choosing are columns only when both have cells; n has a column of its own; a fraction is in %.
+   *  - The saved file holds every value as saved (a fraction stays a fraction), at full precision. */
   function metricSummary() {
     const r = S.results, tags = r.chosenBlind || null, primary = primaryWindow(), called = primaryCalls(), status = (n) => (called[n] || {}).Status;
     const left = (n) => status(n) === 'Excluded' || (S.quality[n] || {}).Status === 'Excluded';
@@ -685,21 +696,23 @@
       return null;
     };
     const long = [['Metric', 'Unit', 'Measured', 'Saved_as', 'Group', 'Mean', 'SD', 'SEM', 'N_cells']], wide = [];
-    for (const [kind, saved] of SUMMARY_ROWS) {
+    for (const [kind, saved, ...file] of SUMMARY_ROWS) {
       const words = columnWords(kind, saved), found = source(kind, saved), scale = words.fraction ? 100 : 1, decimals = words.decimals != null ? words.decimals : DECIMALS[words.unit];
       const names = found ? [saved].concat(twinsOf(kind, saved).filter((twin) => found.data.header.includes(twin))) : [saved], values = new Map();
       if (found) { const cell = found.data.header.indexOf('Cell'), c = found.data.header.indexOf(saved);
-        for (const row of found.rows) { const v = row[c] === '' || row[c] == null ? NaN : Number(row[c]); if (isFinite(v)) values.set(row[cell], scale * v); } }
+        for (const row of found.rows) { const v = row[c] === '' || row[c] == null ? NaN : Number(row[c]); if (isFinite(v)) values.set(row[cell], v); } }
       const stats = groups.map(([group, belongs]) => {
         const xs = []; for (const [cell, x] of values) if (belongs(cell) && (!words.response || status(cell) === 'Responded')) xs.push(x);
         const k = xs.length, mean = k ? xs.reduce((a, b) => a + b, 0) / k : NaN, sd = k > 1 ? Math.sqrt(xs.reduce((a, b) => a + (b - mean) * (b - mean), 0) / (k - 1)) : NaN;
         return { group, k, mean, sd, sem: k > 1 ? sd / Math.sqrt(k) : NaN };
       });
-      for (const s of stats) long.push([words.name, words.unit, words.measured, found ? names.join('; ') : '', s.group, s.k ? s.mean : '', s.k > 1 ? s.sd : '', s.k > 1 ? s.sem : '', s.k]);
+      for (const s of stats) long.push([...file, found ? names.join('; ') : '', s.group, s.k ? s.mean : '', s.k > 1 ? s.sd : '', s.k > 1 ? s.sem : '', s.k]);
       if (!found) continue;
       const line = [{ text: words.name, title: 'Saved as ' + names.join(', ') + (words.fraction ? ', as fractions' : '') }, { text: words.unit }, { text: words.measured }];
       for (const s of stats.filter((s) => shown.some((g) => g[0] === s.group))) {
-        line.push(s.k ? { text: decimal(s.mean, decimals, false) + (s.k > 1 ? ' ± ' + decimal(s.sem, decimals, false) : '') + (words.unit === PCT ? '%' : ''), title: 'Mean ' + s.mean + (s.k > 1 ? ', SD ' + s.sd + ', SEM ' + s.sem : ''), key: s.mean, num: true } : { text: '–', key: '', num: true });
+        if (words.response && (s.group === 'All cells' || s.group === 'Did not respond')) { line.push({ text: '', key: '', num: true }, { text: '', key: '', num: true }); continue; }
+        const mean = scale * s.mean, sd = scale * s.sd, sem = scale * s.sem;
+        line.push(s.k ? { text: decimal(mean, decimals, false) + (s.k > 1 ? ' ± ' + decimal(sem, decimals, false) : '') + (words.unit === PCT ? '%' : ''), title: 'Mean ' + mean + (s.k > 1 ? ', SD ' + sd + ', SEM ' + sem : ''), key: mean, num: true } : { text: '–', key: '', num: true });
         line.push({ text: String(s.k), key: s.k, num: true });
       }
       wide.push(line);
@@ -843,7 +856,7 @@
     for (const w of windows) { const o = document.createElement('option'); o.value = w.key; o.textContent = w.stimulus + (w.role === 'Control' ? ' · control' : ' · primary'); selector.appendChild(o); }
     if (!windows.some((w) => w.key === S.window)) S.window = windows[0].key; selector.value = S.window;
     document.body.classList.add('has-results');
-    for (const id of ['result-tiles', 'plot-card', 'group-label', 'window-select-label', 'every-label', 'thresholds-label']) $(id).hidden = false;
+    for (const id of ['result-tiles', 'plot-card', 'group-label', 'window-select-label', 'every-label']) $(id).hidden = false;   // ("Thresholds": drawPlot)
     $('window-select-label').hidden = !(S.results.windows && S.results.windows.length > 1);
     for (const tab of document.querySelectorAll('.tab')) tab.disabled = false;
     const tables = $('metrics-table'); tables.innerHTML = '';
@@ -930,7 +943,9 @@
       const basis = row.Status === 'Responded' ? heldRise(row) : '';
       const parts = ['<span class="dot" style="background:' + CALL[kind(row.Status)] + '"></span><b>' + escape(shortName(name)) + ': ' + escape(row.Status || '') + '</b>', escape(basis || (row.Reason || '').toLowerCase())];
       const rise = number(row.Peak_increase), at = number(row.Peak_s), need = number(row.Threshold_increase), setBy = { noise: ', set by its noise', floor: ', the minimum rise' }[requiredBy(row)] || '';
-      if (isFinite(rise)) parts.push('largest rise ' + decimal(100 * rise, 1, true) + (isFinite(at) ? ' at ' + decimal(at, 1) + ' s' : '') + (isFinite(need) ? ' (needed ' + decimal(100 * need, 1, true) + setBy + ')' : ''));
+      // a responder's largest rise that lies outside the rise that held says so, so that its time does not read against the onset
+      const held = row.Status === 'Responded' ? [heldStart(row), number(row.Run_end_s)] : [NaN, NaN], apart = !isFinite(at) ? '' : at < held[0] - 1e-9 ? ', not held' : at > held[1] + 1e-9 ? ', after the held rise' : '';
+      if (isFinite(rise)) parts.push('largest rise ' + decimal(100 * rise, 1, true) + (isFinite(at) ? ' at ' + decimal(at, 1) + ' s' + apart : '') + (isFinite(need) ? ' (needed ' + decimal(100 * need, 1, true) + setBy + ')' : ''));
       verdict.innerHTML = parts.filter(Boolean).join(' · ');
       verdict.title = 'Rise and threshold are shown as percentages of local prestimulus fluorescence. The saved call table stores the corresponding fractions.';
     }
@@ -942,8 +957,9 @@
   }
   /** The rise a response call rests on, from the saved call: "rise held for 2 frames from 121.0 s, 102.0 s after the stimulus"
    *  (onset, run length and latency). Empty when the call saved no onset. */
+  const heldStart = (row) => number(row.Onset_s !== undefined && row.Onset_s !== '' ? row.Onset_s : row.Run_start_s);
   function heldRise(row) {
-    const onset = number(row.Onset_s !== undefined && row.Onset_s !== '' ? row.Onset_s : row.Run_start_s), frames = number(row.Run_samples), after = number(row.Response_latency_s);
+    const onset = heldStart(row), frames = number(row.Run_samples), after = number(row.Response_latency_s);
     if (!isFinite(onset)) return '';
     return 'rise held ' + (isFinite(frames) ? 'for ' + plural(Math.round(frames), 'frame') + ' ' : '') + 'from ' + decimal(onset, 1) + ' s' + (isFinite(after) ? ', ' + decimal(after, 1) + ' s after the stimulus' : '');
   }
@@ -1172,25 +1188,21 @@
    *  the keys (in the steps of ZOOM_STEPS; ZOOM_KEYS says which key steps which way, 0 for the whole picture), the wheel, a
    *  pinch, a drag, a rectangle, the small map, "Zoom to cell" and the cell that is picked. */
   const ZOOM_MOST = 16, ZOOM_STEPS = [1, 1.5, 2, 3, 4, 6, 8, 12, 16], ZOOM_KEYS = { '+': 1, '=': 1, '-': -1, '_': -1, '0': 0 };
-  /** The room the picture is fitted into: the panel less a strip, TOOLS pixels wide, for the controls on its top left corner.
-   *  The strip runs along the top or down the left side, whichever leaves the whole picture larger: { left, top } gives its
-   *  width on that side, and the controls are laid out to match (showView). So the whole picture never lies under them. */
+  /** The room the picture is shown in: the panel less a strip TOOLS pixels high along the top, where the controls lie in one
+   *  row in every view and at every zoom. The picture is drawn in the room only (drawPicture), so nothing of it, no cell
+   *  and no outline, ever lies under the controls. */
   const TOOLS = 36;
-  function viewRoom(w, h) {
-    const iw = S.info.width, ih = S.info.height, beside = Math.min((w - TOOLS - 8) / iw, (h - 8) / ih), under = Math.min((w - 8) / iw, (h - TOOLS - 8) / ih);
-    return beside >= under ? { left: TOOLS, top: 0 } : { left: 0, top: TOOLS };
-  }
   /** Where the picture lies in a panel of w × h: its left top corner (x, y) and the pixels of the screen to one of its own (z);
-   *  with these, the middle of the room it is fitted into (midX, midY) and that room's size (wide, high).
+   *  with these, the top of the room it is shown in (roomTop), the middle of that room (midX, midY) and its size (wide, high).
    *  Along each side: while the picture fits into the room, it sits in the middle of it. Larger, the point asked for is in
    *  the middle as far as this limit allows: an edge of the picture comes into the room by no more than the picture is
    *  larger than the room, and never past the middle. So the picture cannot be dragged out of view, yet a cell at its edge
    *  can be brought clear of the controls and of the map. */
   function place(w, h) {
-    const iw = S.info.width, ih = S.info.height, room = viewRoom(w, h), wide = w - room.left, high = h - room.top, fitted = Math.max(0.01, Math.min((wide - 8) / iw, (high - 8) / ih)), z = fitted * Pic.zoom;
+    const iw = S.info.width, ih = S.info.height, wide = w, high = Math.max(1, h - TOOLS), fitted = Math.max(0.01, Math.min((wide - 8) / iw, (high - 8) / ih)), z = fitted * Pic.zoom;
     const along = (from, free, size, centre) => { if (size <= free - 8 + 1e-6) return from + (free - size) / 2;
       const slack = Math.min(free / 2 - 4, size - free + 8); return Math.max(from + free - 4 - size - slack, Math.min(from + 4 + slack, from + free / 2 - centre * z)); };
-    return { x: along(room.left, wide, iw * z, Pic.cx == null ? iw / 2 : Pic.cx), y: along(room.top, high, ih * z, Pic.cy == null ? ih / 2 : Pic.cy), z, fitted, midX: room.left + wide / 2, midY: room.top + high / 2, wide, high };
+    return { x: along(0, wide, iw * z, Pic.cx == null ? iw / 2 : Pic.cx), y: along(TOOLS, high, ih * z, Pic.cy == null ? ih / 2 : Pic.cy), z, fitted, roomTop: TOOLS, midX: wide / 2, midY: TOOLS + high / 2, wide, high };
   }
   /** Sets the view and draws it. The zoom is kept from 1 to ZOOM_MOST and the point in the middle where place() allows it,
    *  and that point is remembered as it came out, so a drag against an edge turns back at once. Zoomed in, the frame on screen
@@ -1214,9 +1226,9 @@
     const canvas = $('picture'), at = place(canvas.clientWidth, canvas.clientHeight), next = by > 0 ? ZOOM_STEPS.find((z) => z > Pic.zoom * 1.02) : ZOOM_STEPS.slice().reverse().find((z) => z < Pic.zoom / 1.02);
     zoomAt(next || (by > 0 ? ZOOM_MOST : 1), px == null ? at.midX : px, py == null ? at.midY : py);
   }
-  /** The part of the recording that is in the panel, in the recording's pixels and never beyond the picture: { x, y, width, height }. */
+  /** The part of the recording that is in view, under the strip of the controls, in the recording's pixels and never beyond the picture: { x, y, width, height }. */
   function viewArea() {
-    const canvas = $('picture'), w = canvas.clientWidth, h = canvas.clientHeight, at = place(w, h), x = Math.max(0, -at.x / at.z), y = Math.max(0, -at.y / at.z);
+    const canvas = $('picture'), w = canvas.clientWidth, h = canvas.clientHeight, at = place(w, h), x = Math.max(0, -at.x / at.z), y = Math.max(0, (at.roomTop - at.y) / at.z);
     return { x, y, width: Math.max(0, Math.min(S.info.width, (w - at.x) / at.z) - x), height: Math.max(0, Math.min(S.info.height, (h - at.y) / at.z) - y) };
   }
   /** The part of the recording a saved picture or frame shows. null: the whole picture ("Area" says so, or all of it is on
@@ -1246,11 +1258,10 @@
     const button = $('zoom-region'); button.classList.toggle('on', on); button.setAttribute('aria-pressed', on ? 'true' : 'false'); drawPicture();
   }
   /** What the controls on the picture say about its view: the zoom level, which buttons can do anything, the cursor (a hand
-   *  where a drag moves the picture, a cross where it draws a rectangle) and the small map; which way the controls lie
-   *  (viewRoom); and, where a picture is saved, that "Area" now makes a difference. */
+   *  where a drag moves the picture, a cross where it draws a rectangle) and the small map; and, where a picture is saved,
+   *  that "Area" now makes a difference. */
   function showView(image, w, h) {
     const zoomed = Pic.zoom > 1, text = (Pic.zoom >= 10 ? Math.round(Pic.zoom) : +Pic.zoom.toFixed(1)) + '×', stage = $('picture-stage');
-    $('view-corner').classList.toggle('down', viewRoom(w, h).left > 0);
     if ($('zoom-level').textContent !== text) $('zoom-level').textContent = text;
     $('zoom-out').disabled = $('zoom-all').disabled = !zoomed; $('zoom-in').disabled = Pic.zoom >= ZOOM_MOST;
     stage.classList.toggle('zoomed', zoomed); stage.classList.toggle('region', Pic.region || !!Pic.band); stage.classList.toggle('moving', zoomed && !!Pic.drag && Pic.moved && !Pic.drag.band);
@@ -1258,20 +1269,23 @@
     drawMap(image, w, h);
   }
   /** The small map, shown while the picture is zoomed in: the whole field as the panel shows it now, dimmed outside a frame
-   *  around the part that is in the panel. A click or a drag in it moves the view there (wire). Its longer side is about a
-   *  quarter of the panel's shorter one. Pic.map keeps the frame as drawn, in the map's own pixels. */
+   *  around the part that is in view. A click or a drag in it moves the view there (wire). Its longer side is about a
+   *  quarter of the panel's shorter one. It lies on the bottom right corner, faint until the pointer is on it, and on the
+   *  bottom left while the selected cell would lie under it. Pic.map keeps the frame as drawn, in the map's own pixels. */
   function drawMap(image, w, h) {
     const map = $('view-map'), shown = Pic.zoom > 1 && !!image; map.hidden = !shown; Pic.map = null; if (!shown) return;
     const iw = S.info.width, ih = S.info.height, long = Math.round(Math.max(64, Math.min(128, 0.26 * Math.min(w, h))));
     const mw = iw >= ih ? long : Math.max(1, Math.round(long * iw / ih)), mh = iw >= ih ? Math.max(1, Math.round(long * ih / iw)) : long;
     if (map.style.width !== mw + 'px') map.style.width = mw + 'px'; if (map.style.height !== mh + 'px') map.style.height = mh + 'px';
+    const selected = S.cell ? S.info.names.indexOf(S.cell) : -1, at = place(w, h), b = selected >= 0 ? S.bounds[selected] : null, gap = 8 + 4;
+    map.classList.toggle('left', !!b && at.x + b.x1 * at.z > w - gap - mw && at.y + b.y1 * at.z > h - gap - mh && at.x + b.x0 * at.z < w && at.y + b.y0 * at.z < h);
     const { ctx } = fit(map), area = viewArea(), x = area.x * mw / iw, y = area.y * mh / ih, fw = area.width * mw / iw, fh = area.height * mh / ih;
     ctx.imageSmoothingEnabled = true; ctx.drawImage(image, 0, 0, mw, mh);
     ctx.fillStyle = 'rgba(16,22,28,0.55)'; ctx.fillRect(0, 0, mw, y); ctx.fillRect(0, y + fh, mw, mh - y - fh); ctx.fillRect(0, y, x, fh); ctx.fillRect(x + fw, y, mw - x - fw, fh);
     ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5; ctx.strokeRect(x + 0.75, y + 0.75, Math.max(1, fw - 1.5), Math.max(1, fh - 1.5));
     Pic.map = { x, y, width: fw, height: fh };
   }
-  /** Zoomed in this far, the recording's pixels are drawn as squares, not smoothed: on screen, and in a saved picture of the area on screen. */
+  /** Zoomed in this far, the recording's pixels are drawn as squares on screen, not smoothed. (A saved area has its own rule: paintView.) */
   const pixelsShown = (zoom) => zoom > 3;
   /** The pens the cells are drawn with, in pixels: on screen, where a pixel is one of the screen at any zoom; and in a saved
    *  picture, where it is one of a recording 1388 wide and grows with a wider one. For each kind of outline, its dark halo
@@ -1290,12 +1304,12 @@
   /** A cell's number, as the page counts cells: the number at the end of its shown name ("Cell 12": 12; "Cell007": 7), which
    *  also opens the cell when typed into the Cell box. A name that ends in no number is written whole. */
   const cellNumber = (name) => { const m = shortName(name).match(/(\d+)\s*$/); return m ? String(Number(m[1])) : shortName(name); };
-  /** Draws the cells on a picture: every outline that is shown and, with "Number cells", its number in the middle of it,
-   *  white on a dark halo, a little over half as high as a typical cell is wide (within the pen's limits). One drawing for
-   *  the screen and for a saved picture. ctx is in the recording's pixels, with round line joins; unit is the length there
-   *  of one pixel of the pen (PENS); "except" is a cell left out (the selected one, which the screen draws in its own way);
-   *  "part" is the part of the recording the picture shows ({ x, y, width, height }; all of it when not given): a cell
-   *  whose middle lies in it is numbered, and the numbers stay inside it. Leaves no dashes set. */
+  /** Draws the cells on a picture: every outline that is shown and, with "Number cells", its number, white on a dark halo, a
+   *  little over half as high as a typical cell is wide (within the pen's limits), in the cell or beside it (placeLabels).
+   *  One drawing for the screen and for a saved picture. ctx is in the recording's pixels, with round line joins; unit is
+   *  the length there of one pixel of the pen (PENS); "except" is a cell left out (the selected one, which the screen draws
+   *  in its own way); "part" is the part of the recording the picture shows ({ x, y, width, height }; all of it when not
+   *  given): a cell whose middle lies in it is numbered, and the numbers stay inside it. Leaves no dashes set. */
   function paintCells(ctx, pen, unit, except, part) {
     const drawn = [], box = part || { x: 0, y: 0, width: S.info.width, height: S.info.height }, within = (c) => c[0] >= box.x && c[0] <= box.x + box.width && c[1] >= box.y && c[1] <= box.y + box.height;
     S.paths.forEach((path, i) => { const look = i === except ? null : outlineLook(i); if (!look) return; drawn.push(i);
@@ -1305,34 +1319,42 @@
     if (!S.numberCells || !drawn.length) return;
     const high = Math.max(pen.number[0], Math.min(pen.number[1], 0.55 * S.cellSize / unit)) * unit;
     ctx.save(); ctx.font = '600 ' + high + 'px ' + getComputedStyle(document.body).fontFamily; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.strokeStyle = 'rgba(0,0,0,0.8)'; ctx.lineWidth = 0.3 * high; ctx.fillStyle = '#ffffff';
-    const labels = drawn.filter((i) => S.centres[i].every(finite) && within(S.centres[i])).map((i) => { const text = cellNumber(S.info.names[i]); return { text, x: S.centres[i][0], y: S.centres[i][1], wide: ctx.measureText(text).width + 0.3 * high, home: S.centres[i] }; });
-    spreadLabels(labels, high, box);
+    const reach = (i) => { const b = S.bounds[i]; return b ? [(b.x1 - b.x0) / 2, (b.y1 - b.y0) / 2] : [0, 0]; };
+    const labels = drawn.filter((i) => S.centres[i].every(finite) && within(S.centres[i])).map((i) => { const text = cellNumber(S.info.names[i]); return { text, x: S.centres[i][0], y: S.centres[i][1], wide: ctx.measureText(text).width + 0.3 * high, home: S.centres[i], reach: reach(i) }; });
+    placeLabels(labels, high, box);
     for (const label of labels) { ctx.strokeText(label.text, label.x, label.y); ctx.fillText(label.text, label.x, label.y); }
     ctx.restore();
   }
-  /** Moves the numbers of neighbouring cells apart where they would lie on one another, and keeps every number inside the
-   *  picture ("box": the part of the recording it shows). Each label: its place (x, y, at first the middle of its cell,
-   *  "home"), its width; "high" is the height of them all. Two that overlap are pushed apart by half the overlap each,
-   *  along the side where less of them overlaps; a few rounds settle a crowd. No number goes further from its cell than
-   *  its own height. */
-  function spreadLabels(labels, high, box) {
-    const keep = (label) => { const far = Math.hypot(label.x - label.home[0], label.y - label.home[1]); if (far > high) { label.x = label.home[0] + (label.x - label.home[0]) * high / far; label.y = label.home[1] + (label.y - label.home[1]) * high / far; }
-      label.x = Math.max(box.x + label.wide / 2, Math.min(box.x + box.width - label.wide / 2, label.x)); label.y = Math.max(box.y + 0.6 * high, Math.min(box.y + box.height - 0.6 * high, label.y)); };
-    labels.forEach(keep);
-    for (let round = 0, moved = true; round < 8 && moved; round++) {
-      moved = false;
-      for (let i = 0; i < labels.length; i++) for (let j = i + 1; j < labels.length; j++) {
-        const a = labels[i], b = labels[j], dx = b.x - a.x, dy = b.y - a.y, overX = (a.wide + b.wide) / 2 - Math.abs(dx), overY = high - Math.abs(dy); if (overX <= 0 || overY <= 0) continue;
-        if (overX < overY) { const by = overX / 2 * (dx < 0 ? -1 : 1); a.x -= by; b.x += by; } else { const by = overY / 2 * (dy < 0 ? -1 : 1); a.y -= by; b.y += by; }
-        keep(a); keep(b); moved = true;
-      }
+  /** A cell is large enough to show its number in its middle, with its outline still to be seen around it. */
+  const LABEL_ROOM = 1.25;
+  const holdsLabel = (label, high) => 2 * label.reach[0] >= LABEL_ROOM * label.wide && 2 * label.reach[1] >= LABEL_ROOM * high;
+  /** Places the numbers of the cells so that none lies on another and each stays inside the picture ("box": the part of the
+   *  recording it shows). Each label: its cell's middle (home), the half width and half height of its outline (reach), its
+   *  own width; "high" is the height of them all. A number goes in the middle of a cell that holds it (holdsLabel); for a
+   *  smaller cell, or where that place is taken, beside the cell: right, left, above, below, then a corner. Of these it
+   *  takes the first that lies on no number placed before it and on no other cell; failing that, the first on no number;
+   *  failing that, the one that overlaps numbers least. Cells that hold their number go first, and keep its middle while no
+   *  number is there. One rule on screen and saved. */
+  function placeLabels(labels, high, box) {
+    const gap = 0.15 * high, placed = [];
+    const inside = (x, y, label) => [Math.max(box.x + label.wide / 2, Math.min(box.x + box.width - label.wide / 2, x)), Math.max(box.y + high / 2, Math.min(box.y + box.height - high / 2, y))];
+    const over = (x, y, label, other, wide, tall) => Math.max(0, (label.wide + wide) / 2 - Math.abs(x - other[0])) * Math.max(0, (high + tall) / 2 - Math.abs(y - other[1]));
+    const onLabels = (x, y, label) => placed.reduce((sum, o) => sum + over(x, y, label, [o.x, o.y], o.wide, high), 0);
+    const onCells = (x, y, label) => labels.reduce((sum, o) => sum + (o === label ? 0 : over(x, y, label, o.home, 2 * o.reach[0], 2 * o.reach[1])), 0);
+    for (const label of labels.slice().sort((a, b) => holdsLabel(b, high) - holdsLabel(a, high))) {
+      const [cx, cy] = label.home, dx = label.reach[0] + gap + label.wide / 2, dy = label.reach[1] + gap + high / 2;
+      const spots = (holdsLabel(label, high) ? [[cx, cy]] : []).concat([[cx + dx, cy], [cx - dx, cy], [cx, cy - dy], [cx, cy + dy], [cx + dx, cy - dy], [cx - dx, cy - dy], [cx + dx, cy + dy], [cx - dx, cy + dy]])
+        .map(([x, y]) => { const at = inside(x, y, label); return { x: at[0], y: at[1], labels: onLabels(at[0], at[1], label), cells: onCells(at[0], at[1], label) }; });
+      const best = (holdsLabel(label, high) && spots[0].labels <= 1e-9 ? spots[0] : null) || spots.find((s) => s.labels <= 1e-9 && s.cells <= 1e-9) || spots.find((s) => s.labels <= 1e-9) || spots.reduce((a, b) => (b.labels < a.labels - 1e-9 ? b : a));
+      label.x = best.x; label.y = best.y; placed.push(label);
     }
   }
   function drawPicture() {
     const canvas = $('picture'); if (!S.info || !(S.info.hasPicture || S.info.hasMovie) || !canvas.clientWidth) return;
     const { ctx, w, h } = fit(canvas); ctx.fillStyle = '#10161C'; ctx.fillRect(0, 0, w, h);
     const image = Pic.shown || Pic.base; pictureChips(); showView(image, w, h); if (!image) return;
-    const at = place(w, h); ctx.imageSmoothingEnabled = !pixelsShown(Pic.zoom); ctx.drawImage(image, at.x, at.y, S.info.width * at.z, S.info.height * at.z);
+    const at = place(w, h); ctx.save(); ctx.beginPath(); ctx.rect(0, at.roomTop, w, h - at.roomTop); ctx.clip();   // in the room only: the strip of the controls stays clear
+    ctx.imageSmoothingEnabled = !pixelsShown(Pic.zoom); ctx.drawImage(image, at.x, at.y, S.info.width * at.z, S.info.height * at.z);
     const selected = S.cell ? S.info.names.indexOf(S.cell) : -1;
     ctx.save(); ctx.translate(at.x, at.y); ctx.scale(at.z, at.z); ctx.lineJoin = 'round';
     paintCells(ctx, PENS.screen, 1 / at.z, selected);
@@ -1340,7 +1362,7 @@
     ctx.restore();
     if (selected >= 0) {
       const b = S.bounds[selected], name = shortName(S.cell); ctx.font = '600 12px ' + getComputedStyle(document.body).fontFamily;
-      const tw = ctx.measureText(name).width, x = Math.max(4, Math.min(w - tw - 12, at.x + b.x1 * at.z + 6)), y = Math.max(16, Math.min(h - 8, at.y + b.y0 * at.z + 12));
+      const tw = ctx.measureText(name).width, x = Math.max(4, Math.min(w - tw - 12, at.x + b.x1 * at.z + 6)), y = Math.max(at.roomTop + 16, Math.min(h - 8, at.y + b.y0 * at.z + 12));
       ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.beginPath(); ctx.roundRect(x - 4, y - 13, tw + 8, 18, 6); ctx.fill(); ctx.fillStyle = '#fff'; ctx.fillText(name, x, y);
     }
     if (Pic.band) {   // the rectangle being drawn for "Zoom to region"
@@ -1348,11 +1370,13 @@
       ctx.fillStyle = 'rgba(91,192,255,0.16)'; ctx.fillRect(x, y, wide, high); ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 3; ctx.strokeRect(x, y, wide, high);
       ctx.setLineDash([5, 4]); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.2; ctx.strokeRect(x, y, wide, high); ctx.setLineDash([]);
     }
+    ctx.restore();
   }
   /** A point of the pointer in the panel's own pixels. */
   const panelPoint = (event) => { const box = $('picture').getBoundingClientRect(); return { x: event.clientX - box.left, y: event.clientY - box.top }; };
   function cellAt(event) {
     const canvas = $('picture'), at = place(canvas.clientWidth, canvas.clientHeight), p = panelPoint(event), x = (p.x - at.x) / at.z, y = (p.y - at.y) / at.z, ctx = canvas.getContext('2d');
+    if (p.y < at.roomTop) return -1;   // the strip of the controls shows no cell
     ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
     let found = -1; for (let i = 0; i < S.paths.length && found < 0; i++) if (ctx.isPointInPath(S.paths[i], x, y)) found = i;
     ctx.restore(); return found;
@@ -1423,7 +1447,7 @@
       baseline: true, colourBaseline: '#edf0f4', window: true, windowBar: 2.25, colourWindow: '#e9a84c',
       // the selected cell's call. Its required rise, a dashed line (levels); the "Thresholds" box of the page adds the other
       // threshold and the baseline mean, thinner (referenceLevels)
-      levels: true, levelWidth: 0.75, requiredWidth: 1.35, levelDash: [3.75, 3], colourLevelBaseline: '#7c8794', colourLevelFloor: '#ad7423', colourLevelNoise: '#a46ea0', colourLevelRequired: CALL.responded.toLowerCase(),
+      levels: true, levelWidth: 0.75, requiredWidth: 1.35, levelDash: [3.75, 3], colourLevelBaseline: '#7c8794', colourLevelFloor: '#6a3d9a', colourLevelNoise: '#a46ea0', colourLevelRequired: CALL.responded.toLowerCase(),
       // and the run that counted, a band: never narrower than runWidth, with a tick at the top of the plot where it starts, so
       // that a run of two or three frames can be seen
       run: true, colourRun: '#d5eedd', runWidth: 2.25, runTick: 4.5 }),
@@ -1432,8 +1456,9 @@
       xMin: null, xMax: null, xStep: null, barMin: null, barMax: null,
       // the colour bar: narrow, at the right, as tall as the picture; a row without a trace, and a pause in the recording
       bar: true, barWidth: 8, colourMissing: '#e5e5e5',
-      // beside the rows: a strip with each row's call and a mark for a cell below zero; between the groups of rows, a white line
-      strip: true, stripWidth: 3, flagWidth: 1.5, colourOther: CALL.other.toLowerCase(), colourFlag: '#1f2933', divider: 1.5, colourDivider: '#ffffff',
+      // beside the rows: a strip with each row's call and a mark for a cell below zero, each a solid bar over its run of rows and
+      // never shorter than stripLeast, so a group of one cell can be found; between the groups of rows, a white line
+      strip: true, stripWidth: 3, flagWidth: 1.5, stripLeast: 3, colourOther: CALL.other.toLowerCase(), colourFlag: '#1f2933', divider: 1.5, colourDivider: '#ffffff',
       // above the picture: the stimulus label, the baseline and the response window as thin bars. Over it: the stimulus line, dark on a
       // palette with white in it and light on the others
       marks: true, colourBaseline: '#b8c2cc', colourOnLight: 'rgba(31,41,51,0.55)', colourOnDark: 'rgba(255,255,255,0.75)',
@@ -1444,7 +1469,7 @@
   for (const key of ['axisWidth', 'tickLength', 'stimulusText', 'stimulusWidth', 'stimulusDash', 'colourStimulus', 'colourWindow', 'windowBar', 'colourResponded', 'colourNot']) STYLE.heatmap[key] = STYLE.plot[key];
   /** The entries that are lengths in points; a painter gets them in pixels. */
   const STYLE_POINTS = ['text', 'titleText', 'axisWidth', 'tickLength', 'zeroDash', 'meanWidth', 'casing', 'cellWidth', 'traceWidth', 'responderWidth', 'stimulusWidth', 'stimulusDash', 'windowBar', 'levelWidth', 'requiredWidth', 'levelDash',
-    'runWidth', 'runTick', 'barWidth', 'stripWidth', 'flagWidth', 'divider'];
+    'runWidth', 'runTick', 'barWidth', 'stripWidth', 'flagWidth', 'stripLeast', 'divider'];
   /** What the page sets differently from a saved figure, the plot and the heatmap alike: its ink and its own font. "page" also
    *  tells a painter to keep what it drew for the pointer (Plot.geom and the rest) and to mark the selected cell. */
   const PAGE_STYLE = { plot: { page: true, ink: '#3e4c59', font: 'page' } }; PAGE_STYLE.heatmap = PAGE_STYLE.plot;
@@ -1458,7 +1483,8 @@
   }
   const PAGE_LOOK = lookOf(Object.assign({}, STYLE.plot, PAGE_STYLE.plot)), PAGE_HEAT = lookOf(Object.assign({}, STYLE.heatmap, PAGE_STYLE.heatmap));
   /** How strongly single cells are drawn when the style leaves it automatic: fainter the more there are, so a hundred cells
-   *  stay a light cloud under the mean and a handful stay readable. Responders, counted on their own, get half as much again. */
+   *  stay a light cloud under the mean and a handful stay readable. n is every single cell drawn, both kinds; a responder gets
+   *  half as much again, so it shows in the cloud without outshining the mean. */
   const traceFade = (n) => Math.max(0.06, Math.min(0.8, 1.5 / Math.sqrt(Math.max(1, n))));
   const responderFade = (n) => Math.min(0.9, 1.5 * traceFade(n));
   // ---------------------------------------------------------------- the traces
@@ -1531,12 +1557,18 @@
    *  without "± SEM" where no band is drawn, as for one cell: "responded (n = 1)". */
   const meanLabel = (series, band) => counted(series.name + (band ? ' ± SEM' : ''), series.n);
   const shade = (hex, alpha) => { const c = rgb(hex); return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + alpha + ')'; };
-  const plotKind = () => (S.plotMode === 'cell' ? 'traces' : S.plotMode === 'calls' ? 'responders_vs_nonresponders' : 'mean_trace' + (S.group ? '_' + GROUPS[S.group].toLowerCase().replace(/[^a-z0-9]+/g, '_') : '')) + (isDff() ? '' : S.signal === 'raw' ? '_raw_gray_values' : S.signal === 'rawdff' ? '_dFF0_of_raw' : '_gray_levels');
-  /** The numbers behind the plot as a table: time, each mean line with its SEM and number of cells, and the selected cell. */
+  /** Whether "Leave out … below zero" takes cells out of the means the plot shows: a cell left out that would be in them. */
+  const meansLeaveOut = () => { const T = shownTraces(), group = S.plotMode === 'calls' ? 0 : S.group; return Array.from(leftOut()).some((name) => T[name] && inGroup(callOf(name), group, name)); };
+  /** What a saved plot is called, in its file name; a plot whose means leave out the cells below zero says so ("_without_below_zero"),
+   *  so that a file named mean_trace always holds the mean of every cell of its group, as the release saved it. */
+  const plotKind = () => (S.plotMode === 'cell' ? 'traces' : S.plotMode === 'calls' ? 'responders_vs_nonresponders' : 'mean_trace' + (S.group ? '_' + GROUPS[S.group].toLowerCase().replace(/[^a-z0-9]+/g, '_') : '')) + (isDff() ? '' : S.signal === 'raw' ? '_raw_gray_values' : S.signal === 'rawdff' ? '_dFF0_of_raw' : '_gray_levels')
+    + (meansLeaveOut() ? '_without_below_zero' : '');
+  /** The numbers behind the plot as a table: time, each mean line with its SEM and number of cells (named for the cells below zero
+   *  when they are left out of it: mean_of_all_cells_without_below_zero), and the selected cell. */
   function plotNumbers() {
     const r = S.results, series = plotSeries(), own = S.plotMode === 'cell' && S.cell && shownTraces()[S.cell] ? shownTraces()[S.cell] : null;
-    const clean = (text) => String(text).replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    const head = ['Time_s']; for (const s of series) head.push(clean(s.short), clean(s.short) + '_SEM', clean(s.short) + '_n_cells'); if (own) head.push(S.cell);
+    const clean = (text) => String(text).replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, ''), without = meansLeaveOut() ? '_without_below_zero' : '';
+    const head = ['Time_s']; for (const s of series) head.push(clean(s.short) + without, clean(s.short) + without + '_SEM', clean(s.short) + without + '_n_cells'); if (own) head.push(S.cell);
     const rows = [head.join(',')];
     for (let i = 0; i < r.time.length; i++) {
       const row = [r.time[i]]; for (const s of series) row.push(finite(s.mean[i]) ? s.mean[i] : '', finite(s.sem[i]) ? s.sem[i] : '', s.n);
@@ -1717,6 +1749,11 @@
   const TICKS_MOST = 60;
   const steppedTicks = (lo, hi, step, auto) => { if (!finite(step) || step <= 0 || (hi - lo) / step > TICKS_MOST) return auto;
     const values = []; for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-9; v += step) values.push(Math.abs(v) < step * 1e-9 ? 0 : +v.toPrecision(12)); return { values, step }; };
+  /** The numbers along a time axis W pixels long by a look, one rule for the time course and the heatmap, on the page and in a
+   *  figure: one about every 90 pixels of 12-pixel text, and no more than TIME_TICKS, so that the two pictures of one recording
+   *  are numbered alike (a spacing typed in the editor is kept). */
+  const TIME_TICKS = 6;
+  const timeTicks = (x0, x1, W, look) => steppedTicks(x0, x1, look.xStep, ticks(x0, x1, Math.max(2, Math.min(TIME_TICKS, Math.floor(W / (90 * look.px / 12))))));
   /** Strokes one trace: its samples joined in time, with a break where a sample is missing or the recording paused. */
   function strokeTrace(ctx, time, values, X, Y, gapLimit) {
     ctx.beginPath(); let pen = false;
@@ -1767,11 +1804,11 @@
   /** Draws the time course into a w × h area by a look: the page's (PAGE_LOOK) or a saved figure's, the same drawing for both.
    *  On the page this is everything but the time cursor and the hovered trace, drawn once and reused while the cursor moves.
    *  The only words it writes are the axis titles, the tick labels, the stimulus label and the legend.
-   *  Returns where things went (plotLayout), the axis ranges and the legend's entries. */
+   *  Returns where things went (plotLayout), the axis ranges, the time ticks, the legend's entries and the means drawn. */
   function paintTraces(ctx, w, h, look) {
     const u = (n) => n * look.px / 12, r = S.results, shown = shownTraces(), time = r.time, gapLimit = samplingSupport().gap;
     const { x0, x1, full0, full1, parts, lo, hi, items, ys, g } = plotPlan(ctx, w, h, look), spans = parts.spans, { L, T, W, H } = g;
-    const xs = steppedTicks(x0, x1, look.xStep, ticks(x0, x1, Math.max(2, Math.floor(W / u(90)))));
+    const xs = timeTicks(x0, x1, W, look);
     const X = (t) => L + (t - x0) / (x1 - x0) * W, Y = (v) => T + (hi - v) / (hi - lo) * H, crisp = (at) => Math.round(at) + 0.5;
     if (look.background) { ctx.fillStyle = look.background; ctx.fillRect(0, 0, w, h); }
     const inside = (draw) => { ctx.save(); ctx.beginPath(); ctx.rect(L, T, W + 1, H + 1); ctx.clip(); draw(); ctx.restore(); };
@@ -1784,7 +1821,8 @@
       if (spans.baseline) band(spans.baseline, look.colourBaseline, 0);
       if (spans.run) band(spans.run, look.colourRun, look.runWidth);
       if (look.grid) for (const v of ys.values) across(crisp(Y(v)), look.colourGrid, look.axisWidth);
-      if (lo < 0 && hi > 0 && (isDff() || S.signal === 'rawdff')) across(crisp(Y(0)), look.colourZero, look.axisWidth, look.zeroDash);
+      // (not under a threshold line that lies on zero, the baseline mean of ΔF/F₀: two dash patterns on one line read as neither)
+      if (lo < 0 && hi > 0 && (isDff() || S.signal === 'rawdff') && !parts.levels.some((level) => Math.abs(Y(level.value) - Y(0)) < 1)) across(crisp(Y(0)), look.colourZero, look.axisWidth, look.zeroDash);
     });
     // marks of time, in the strip above the plot: the response window, a thin bar; the stimulus, a thin dashed line with its
     // label above it. Nothing of this lies on the traces.
@@ -1801,8 +1839,9 @@
       ctx.lineJoin = 'round'; ctx.lineCap = 'round';
       if (parts.traces.length) {
         const responded = (name) => callOf(name) === 'Responded', yes = parts.traces.filter(responded), no = parts.traces.filter((name) => !responded(name));
-        ctx.strokeStyle = look.colourTrace; ctx.lineWidth = look.traceWidth; ctx.globalAlpha = look.traceOpacity == null ? traceFade(no.length) : look.traceOpacity; for (const name of no) line(shown[name]);
-        ctx.strokeStyle = look.colourResponded; ctx.lineWidth = look.responderWidth; ctx.globalAlpha = look.responderOpacity == null ? responderFade(yes.length) : look.responderOpacity; for (const name of yes) line(shown[name]);
+        const all = parts.traces.length;   // both kinds faded by every trace drawn: a lone responder among a hundred cells is as faint as they are, only a little stronger
+        ctx.strokeStyle = look.colourTrace; ctx.lineWidth = look.traceWidth; ctx.globalAlpha = look.traceOpacity == null ? traceFade(all) : look.traceOpacity; for (const name of no) line(shown[name]);
+        ctx.strokeStyle = look.colourResponded; ctx.lineWidth = look.responderWidth; ctx.globalAlpha = look.responderOpacity == null ? responderFade(all) : look.responderOpacity; for (const name of yes) line(shown[name]);
         ctx.globalAlpha = 1;
       }
       for (const s of parts.series) if (bandDrawn(s, look)) {   // one shape per unbroken stretch, so a band has no seams
@@ -1830,16 +1869,17 @@
     writeText(ctx, centred(ctx, look.xTitle == null ? 'Time (s)' : look.xTitle, L + W / 2, w, look), L + W / 2, g.titleY, look);
     ctx.save(); ctx.translate(u(6) + look.px / 2, T + H / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'middle'; writeText(ctx, centred(ctx, look.yTitle == null ? signalName() : look.yTitle, T + H / 2, h, look), 0, 0, look); ctx.restore();
     if (g.legend) drawLegend(ctx, g.legend.layout, g.legend.x, g.legend.y, look);
-    const drew = Object.assign(g, { x0, x1, lo, hi, full0, full1, items });
+    const drew = Object.assign(g, { x0, x1, lo, hi, full0, full1, items, times: xs.values, plotted: parts.series.map((s) => meanLabel(s, bandDrawn(s, look))) });
     if (look.page) { Plot.geom = drew; Plot.drawn = parts.traces; Plot.series = parts.series; }   // the page's cursor and hover read these; a figure leaves them alone
     return drew;
   }
   function drawPlot() {
     const canvas = $('plot'), r = S.results; $('plot-empty').hidden = !!r;
     // What the page says beside the plot, not in it, set before the canvas is measured (the note takes a line from it): that the
-    // selected cell has no trace to draw; and "Thresholds" is offered where there are thresholds, with one cell in ΔF/F₀.
+    // selected cell has no trace to draw; and "Thresholds" is there only where there are thresholds, with one cell in ΔF/F₀
+    // (not a greyed box in the views where it would do nothing).
     const missing = !!r && traceMissing(); $('cell-note').hidden = !missing; if (missing) $('cell-note').textContent = 'No ΔF/F₀ trace' + (hasTable('corrected') ? ': choose gray levels under Signal' : '');
-    $('thresholds').disabled = !(r && S.plotMode === 'cell' && isDff());
+    $('thresholds-label').hidden = !(r && S.plotMode === 'cell' && isDff());
     if (!canvas.clientWidth) return;
     const { ctx, w, h, dpr } = fit(canvas);
     if (!r) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); return; }
@@ -2033,7 +2073,7 @@
     const labels = labelled ? u(15) : 0, T = Math.round(under + Math.max(labels + (barred ? look.windowBar + u(4) : labelled ? u(2) : 0), titled ? u(9) + look.px : 0));
     const below = look.tickLength + u(3) + look.px + u(5), H = Math.max(10, Math.floor(h - T - below - look.px - u(5))), Y = (v) => T + (d.high - v) / (d.high - d.low) * H;
     // the colour bar's numbers: an end is written in full, whatever the spacing of the round values between
-    const between = ticks(d.low, d.high, Math.max(1, Math.floor(H / u(60)))), edge = (d.high - d.low) * 1e-9, clear = look.px * 1.1;
+    const between = ticks(d.low, d.high, Math.max(1, Math.floor(H / u(60)))), edge = (d.high - d.low) * 1e-9, clear = look.px * 2;   // a round number less than a line of text from an end is not written
     const exact = (v) => { let digits = between.step >= 1 ? 0 : Math.min(6, Math.ceil(-Math.log10(between.step) - 1e-9)); while (digits < 6 && Math.abs(+v.toFixed(digits) - v) > 1e-9 * Math.max(1, Math.abs(v))) digits++; return v.toFixed(digits).replace('-', '−'); };
     const numbers = [{ value: d.high, text: (d.above ? '≥ ' : '') + exact(d.high) }, { value: d.low, text: (d.below ? '≤ ' : '') + exact(d.low) }]
       .concat(between.values.filter((v) => v > d.low + edge && v < d.high - edge).map((value) => ({ value, text: Y(value) - T < clear || T + H - Y(value) < clear ? '' : tickText(value, between.step) })));
@@ -2042,7 +2082,7 @@
       barsY: barred ? T - u(4) - look.windowBar : null, titleY: T + H + below, bar: look.bar ? { x: L + W + u(12), numbers } : null });
   }
   /** Draws the heatmap into a w × h area by a look: the page's (PAGE_HEAT) or a saved figure's, the same drawing for both.
-   *  Returns where things went (heatmapLayout), the rows, the time shown and the colour range. */
+   *  Returns where things went (heatmapLayout), the rows, the time shown and its ticks, and the colour range. */
   function paintHeatmap(ctx, w, h, look, d) {
     const u = (n) => n * look.px / 12, names = d.names, support = samplingSupport();
     const g = heatmapLayout(ctx, w, h, look, d), { L, T, W, H } = g, rowH = H / Math.max(1, names.length), rowY = (c) => T + c * rowH;
@@ -2066,12 +2106,17 @@
       dashed(g.lineTop, T, look.colourStimulus); dashed(T, T + H, d.signed ? look.colourOnLight : look.colourOnDark); ctx.setLineDash([]);
       if (look.stimulusText) stimulusLabel(ctx, look, sx, L, W, g.labelY);
     }
-    // beside the rows: each row's call as a strip, and a mark for a cell below zero
+    // beside the rows: the calls as a strip, and a mark for the cells below zero. Each is one solid bar for each run of rows
+    // alike, with no gaps between its rows, at least stripLeast high (centred on its rows, inside the picture's height); the
+    // longer runs first, so that a short one lies on top of its neighbours.
     ctx.lineCap = 'butt'; ctx.lineJoin = 'miter'; ctx.textBaseline = 'middle'; ctx.textAlign = 'right';
     if (look.strip) {
-      const high = Math.max(1, rowH - (rowH > 3 ? 0.5 : 0));
-      names.forEach((name, c) => { ctx.fillStyle = look[CALL_STYLE[kind(callOf(name))]]; ctx.fillRect(L - g.strip, rowY(c), look.stripWidth, high);
-        if (d.flagged.has(name)) { ctx.fillStyle = look.colourFlag; ctx.fillRect(L - g.flag, rowY(c), look.flagWidth, high); } });
+      const runs = (of) => { const out = []; names.forEach((name, c) => { const k = of(name), last = out[out.length - 1]; if (k == null) return; if (last && last.k === k && last.end === c) last.end = c + 1; else out.push({ k, start: c, end: c + 1 }); });
+        return out.sort((a, b) => (b.end - b.start) - (a.end - a.start)); };
+      const bar = (run, x, wide, colour) => { const y0 = rowY(run.start), y1 = rowY(run.end), high = Math.min(H, Math.max(look.stripLeast, y1 - y0)), y = Math.max(T, Math.min(T + H - high, (y0 + y1 - high) / 2));
+        ctx.fillStyle = colour; ctx.fillRect(x, y, wide, high); };
+      for (const run of runs((name) => kind(callOf(name)))) bar(run, L - g.strip, look.stripWidth, look[CALL_STYLE[run.k]]);
+      for (const run of runs((name) => (d.flagged.has(name) ? 'below' : null))) bar(run, L - g.flag, look.flagWidth, look.colourFlag);
     }
     // cell names: every row when the rows are tall enough for the text, else every Nth, each with a tick to its row
     const every = Math.max(1, Math.ceil(look.px * 1.1 / rowH)), named = [];
@@ -2088,7 +2133,7 @@
       ctx.beginPath(); ctx.moveTo(L + W + u(2), mid); ctx.lineTo(L + W + u(9), mid - u(5)); ctx.lineTo(L + W + u(9), mid + u(5)); ctx.closePath(); ctx.fill();
     }
     // the time axis: a line under the picture, ticks pointing out, numbers with a true minus sign; then the two titles
-    const bottom = T + H + 0.5, xs = steppedTicks(d.x0, d.x1, look.xStep, ticks(d.x0, d.x1, Math.max(2, Math.floor(W / u(90)))));
+    const bottom = T + H + 0.5, xs = timeTicks(d.x0, d.x1, W, look);
     ctx.strokeStyle = ctx.fillStyle = look.ink; ctx.lineWidth = look.axisWidth; ctx.beginPath(); ctx.moveTo(L, bottom); ctx.lineTo(L + W, bottom);
     for (const v of xs.values) { ctx.moveTo(crisp(X(v)), bottom); ctx.lineTo(crisp(X(v)), bottom + look.tickLength); }
     ctx.stroke();
@@ -2105,7 +2150,7 @@
       if (g.barTitle) writeText(ctx, g.barTitle, x, g.labelY, look);
     }
     if (g.key) drawLegend(ctx, g.key.layout, g.key.x, g.key.y, look);
-    return Object.assign(g, { rows: names.length, names, named, groups: d.groups, bounds: support.bounds, x0: d.x0, x1: d.x1, low: d.low, high: d.high, below: d.below, above: d.above });
+    return Object.assign(g, { rows: names.length, names, named, groups: d.groups, bounds: support.bounds, x0: d.x0, x1: d.x1, times: xs.values, low: d.low, high: d.high, below: d.below, above: d.above });
   }
   function drawHeatmap() {
     const canvas = $('heatmap'), box = $('heatmap-box'), r = S.results; $('heatmap-empty').hidden = !!r; if (!r || $('panel-heatmap').hidden) return;
@@ -2258,7 +2303,15 @@
       manifest: S.results.manifest, settingsPending: hasPending(), displayed_window: S.window, cell: S.cell, group: GROUPS[S.group],
       frame: S.frame, time_s: frameTimes()[S.frame - 1], view: S.view, results_folder: S.results.folder || (S.state && S.state.folder) || null,
       time_range: Plot.geom ? [Plot.geom.x0, Plot.geom.x1] : [Plot.x0, Plot.x1], time_zoomed: Plot.x0 !== null, palette: S.palette, range: S.range, order: S.order,
-      plot: S.plotMode, signal: S.results && isDff() ? 'dF/F0' : S.signal, y_axis: Plot.geom ? [Plot.geom.lo, Plot.geom.hi] : null, y_axis_typed: Plot.y[S.signal] || null, plotted: (Plot.series || []).map((s) => meanLabel(s, bandDrawn(s, PAGE_LOOK))), all_traces_drawn: S.every, thresholds_drawn: S.thresholds, cells_left_out: Array.from(leftOut()) };
+      plot: S.plotMode, signal: S.results && isDff() ? 'dF/F0' : S.signal, y_axis: Plot.geom ? [Plot.geom.lo, Plot.geom.hi] : null, y_axis_typed: Plot.y[S.signal] || null, plotted: Plot.geom ? Plot.geom.plotted : [], all_traces_drawn: S.every, thresholds_drawn: S.thresholds, cells_left_out: Array.from(leftOut()) };
+  }
+  /** What a saved figure itself shows, in place of what the page shows: its time and Y range and the means it drew, as the
+   *  figure's own drawing (Fig.drawn, made by picture()) has them; the limits typed in the editor are under picture.figure. */
+  function figureShows(kind) {
+    const drew = Fig.drawn; if (!drew || drew.kind !== kind) return {};
+    const typedTime = Fig[kind].xMin != null || Fig[kind].xMax != null;
+    return kind === 'plot' ? { time_range: [drew.x0, drew.x1], time_zoomed: Plot.x0 !== null || typedTime, y_axis: [drew.lo, drew.hi], plotted: drew.plotted }
+      : { time_range: [drew.x0, drew.x1], time_zoomed: typedTime };
   }
   /** How saved pictures are written. Format, resolution and TIFF compression are one setting for every saved picture, the
    *  figures and the pictures of the cells alike; size is the width of a picture of the cells (a figure has its own). Each has
@@ -2456,7 +2509,7 @@
       } else if (type === 'colour') {   // shown while it is picked, kept when it is chosen
         box = document.createElement('input'); box.type = 'color'; box.value = fig[key]; box.addEventListener('input', () => { fig[key] = box.value; previewFigure(); }); box.addEventListener('change', changed);
       } else if (type === 'text') {   // shown while it is typed, kept when the box is left
-        box = document.createElement('input'); box.type = 'text'; box.maxLength = 80; box.spellcheck = false; box.value = fig[key] == null ? figureOwnText(kind, key) : fig[key]; if (!figureOwnText(kind, key)) box.placeholder = 'none';
+        box = document.createElement('input'); box.type = 'text'; box.maxLength = 80; box.spellcheck = false; box.value = fig[key] == null ? figureOwnText(kind, key) : fig[key]; if (!figureOwnText(kind, key)) box.placeholder = key === 'title' ? 'No title' : 'No label';
         box.addEventListener('input', () => { fig[key] = box.value; previewFigure(); }); box.addEventListener('change', changed);
       } else {   // a number; an empty box is "auto" where the figure can choose. While it is typed the box says whether the
         // figure can use it (figureRefusal). It is taken when the box is left or Enter is pressed, and only whole: "40" is
@@ -2502,10 +2555,10 @@
    *  how the cells were drawn. */
   const pictureRecord = (picture) => Object.assign(picture.figure ? { size: Fig[picture.figure].width + 'x' + Fig[picture.figure].height, figure: Object.assign({ kind: picture.figure }, Fig[picture.figure]) } : Object.assign({ size: Save.size }, areaRecord(picture.area, picture.barred), outlineRecord()),
     picture.figure === 'heatmap' ? { heatmap: heatmapRecord() } : {}, pictureOptions());
-  /** The file kept beside a saved picture: what the page showed (exportMetadata; before an analysis, the view and the frame),
-   *  then what the picture itself shows in place of that (picture.shows: the two frames of a pair, not the frame on
-   *  screen), then how the picture was made. */
-  const savedRecord = (picture) => Object.assign(S.results ? exportMetadata() : viewMetadata(), picture.shows, { picture: pictureRecord(picture) });
+  /** The file kept beside a saved picture, made once the picture is drawn: what the page showed (exportMetadata; before an
+   *  analysis, the view and the frame), then what the picture itself shows in place of that (a figure's own ranges and means,
+   *  figureShows; picture.shows: the two frames of a pair, not the frame on screen), then how the picture was made. */
+  const savedRecord = (picture) => Object.assign(S.results ? exportMetadata() : viewMetadata(), picture.figure ? figureShows(picture.figure) : {}, picture.shows, { picture: pictureRecord(picture) });
   const viewMetadata = () => ({ schema: 'simpleca.view-export', schema_version: 1, recording: S.info.recording, plugin_version: S.info.pluginVersion, view: S.view, frame: S.frame, outlines: S.outlines });
   /** What the colours of the picture mean in the view on screen, then what the outlines mean (outlineKey). Each: [colour, text, is an outline, dashed]. */
   const pictureKey = () => (viewColours().length ? viewColours() : [['#ffffff', 'as recorded']]).concat(outlineKey());
@@ -2554,13 +2607,14 @@
   /** Draws one picture's part of the recording with its top left corner at (x, y) of a sheet: the recording's own pixels,
    *  then the cells as the page draws them (paintCells: the outlines shown, in their colours or plain, and their numbers)
    *  with the pens of a saved picture. The whole picture is drawn as it always was. An area ends cleanly at its edges, and
-   *  its pixels are squares where the page shows them so (pixelsShown). "framed": the whole picture is cut at its edges
-   *  too, as a panel beside another must be. */
+   *  its pixels are squares, not smoothed, wherever the saved file enlarges them (more of its pixels than the recording's
+   *  across the area), whatever the zoom on screen. "framed": the whole picture is cut at its edges too, as a panel beside
+   *  another must be. */
   function paintView(ctx, image, at, x, y, framed) {
     const part = at.part, fx = image.width / S.info.width, fy = image.height / S.info.height;
     ctx.save(); ctx.translate(x, y);
     if (at.cut || framed) { ctx.beginPath(); ctx.rect(0, 0, at.wide, at.high); ctx.clip(); }
-    ctx.imageSmoothingEnabled = !(at.cut && pixelsShown(part.zoom));
+    ctx.imageSmoothingEnabled = !(at.cut && at.wide * at.scale > part.width * fx + 1e-6);
     ctx.drawImage(image, part.x * fx, part.y * fy, part.width * fx, part.height * fy, 0, 0, at.wide, at.high);
     ctx.scale(at.by, at.by); ctx.translate(-part.x, -part.y); paintCells(ctx, PENS.saved, at.unit / at.by, -1, at.cut ? part : undefined);
     ctx.restore();
@@ -2671,7 +2725,7 @@
   async function save(picture, kind, noteId) {
     const note = $(noteId); note.className = 'save-note'; note.textContent = 'Preparing…';
     try {
-      const metadata = JSON.stringify(savedRecord(picture), null, 2), png = await picture();
+      const png = await picture(), metadata = JSON.stringify(savedRecord(picture), null, 2);   // the record of what was drawn: after the drawing
       const reply = await api('convert', Object.assign({ png }, pictureOptions())), name = exportName(kind, reply.extension);
       const bytes = Uint8Array.from(atob(reply.base64), (c) => c.charCodeAt(0));
       download(new Blob([bytes], { type: reply.extension === 'tif' ? 'image/tiff' : 'image/png' }), name);
@@ -2683,8 +2737,8 @@
   async function saveToFolder(picture, kind, noteId, csv) {
     const note = $(noteId); note.className = 'save-note'; note.textContent = 'Saving…';
     try {
-      const metadata = savedRecord(picture), name = exportName(kind, 'png').replace(/\.png$/, '');
-      const reply = await api('export', Object.assign({ name, png: await picture(), csv: csv || null, metadata }, pictureOptions()));
+      const png = await picture(), metadata = savedRecord(picture), name = exportName(kind, 'png').replace(/\.png$/, '');   // the record of what was drawn: after the drawing
+      const reply = await api('export', Object.assign({ name, png, csv: csv || null, metadata }, pictureOptions()));
       note.textContent = 'Saved ' + reply.saved[0] + (csv ? ' + CSV' : '') + ' ';
       const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open folder';
       open.addEventListener('click', () => api('open', { what: 'plots' }).catch((error) => { note.className = 'save-note bad'; note.textContent = error.message; }));
@@ -3060,5 +3114,5 @@
 
   wire();
   start().catch((problem) => { $('lost').classList.add('on'); $('status').textContent = problem.message; });
-  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, STYLE, place, viewArea, savedArea, viewCanvas, pairCanvas, scaleBarLength, pictureKey, cellNumber, plotCells, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, legendLayout, exportMetadata, heatmapAt, heatmapData, pictureRecord, decimal, columnWords, metricSummary, showCalls, showCounts, showMetricTable, COLUMN_WORDS, SUMMARY_ROWS };   // for the browser test
+  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, STYLE, place, setView, viewArea, savedArea, viewCanvas, pairCanvas, scaleBarLength, pictureKey, cellNumber, plotCells, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, legendLayout, exportMetadata, heatmapAt, heatmapData, pictureRecord, decimal, columnWords, metricSummary, showCalls, showCounts, showMetricTable, plotNumbers, plotKind, COLUMN_WORDS, SUMMARY_ROWS };   // for the browser test
 })();

@@ -93,6 +93,9 @@ select { border: 1px solid #C5CED8; border-radius: var(--radius); height: var(--
 .panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
 .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: none; }
 .toolbar label { display: flex; align-items: center; gap: 6px; color: var(--gray-600); } .toolbar label.check { color: inherit; align-items: center; } .toolbar label.check input { margin: 0; }
+/* A toolbar whose choices wrap among themselves, so that its Export stays at the right end of the first row */
+.toolbar.with-choices { align-items: flex-start; flex-wrap: nowrap; } .toolbar.with-choices > .save-note { line-height: var(--control-h); }
+.toolbar > .choices { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 1 1 0; min-width: 0; }
 .toolbar.dark { background: #10161C; color: #C5CED8; padding: 8px 10px; }
 .toolbar.dark button, .toolbar.dark select { background: #1c252e; color: #E6EBF0; border-color: #33404d; }
 .toolbar.dark button:hover:not(:disabled) { background: #26323d; border-color: #5BC0FF; } .toolbar.dark button:disabled { color: #5d6b78; }
@@ -469,12 +472,12 @@ p + .field-warning, p + .field-error { justify-content: flex-start; text-align: 
 .figure-controls { min-height: 0; overflow-y: auto; padding: 2px 14px 14px; border-left: 1px solid var(--gray-100); }
 .figure-controls h3 { margin: 12px 0 2px; font-size: 12px; font-weight: 600; color: var(--gray-600); } .figure-controls h3 span { margin-left: 6px; font-weight: 400; }   /* a few words on what the section is for */
 .figure-controls > .fine { margin: 10px 0 0; }   /* the line that says settings from an earlier session are in use */
-.figure-controls .row { display: grid; grid-template-columns: minmax(0, 1fr) 150px; align-items: center; gap: 8px; margin: 4px 0; min-height: var(--control-h); font-size: 13px; flex-wrap: nowrap; }
+.figure-controls .row { display: grid; grid-template-columns: minmax(0, 1fr) 150px 16px; align-items: center; gap: 8px; margin: 4px 0; min-height: var(--control-h); font-size: 13px; flex-wrap: nowrap; }   /* name, box, unit: every box one width, every unit outside their shared right edge */
 .figure-controls .row[hidden] { display: none; }
 .figure-controls .row .range-note { grid-column: 1 / -1; justify-self: end; margin-top: -3px; }   /* under a number box: why the number is not used, or what is wrong with it */
 .figure-controls .row > span:first-child { white-space: nowrap; color: var(--gray-900); }
 .figure-controls .row > select, .figure-controls .row > input[type=text], .figure-controls .unit input { width: 100%; max-width: none; min-width: 0; }
-.figure-controls .unit { display: grid; grid-template-columns: minmax(0, 1fr) 16px; align-items: center; gap: 6px; } .figure-controls .unit i { font-style: normal; color: var(--gray-600); }
+.figure-controls .unit { display: contents; } .figure-controls .unit i { font-style: normal; color: var(--gray-600); }
 .figure-controls input[type=text] { font: inherit; font-size: 13px; height: var(--control-h); padding: 0 7px; border: 1px solid #C5CED8; border-radius: var(--radius); background: #fff; color: inherit; }
 .figure-controls input[type=text][aria-invalid=true] { border-color: var(--bad); background: #fff1ef; }   /* a number the figure does not use (the page's rule for a marked box, after the editor's own for its boxes) */
 .figure-controls input[type=color] { width: 100%; height: var(--control-h); padding: 3px; font-size: 13px; border: 1px solid #C5CED8; border-radius: var(--radius); background: #fff; cursor: pointer; }
@@ -488,17 +491,18 @@ p + .field-warning, p + .field-error { justify-content: flex-start; text-align: 
    them: they lie along the top, or down the left side (.down) where that leaves the picture larger (viewRoom). The buttons
    are the page's own small ones (height, corner), dark like the bar above the picture; the zoom level between − and + is
    a figure, not a button. */
+/* The picture's controls: one row in the strip along the top of the panel (TOOLS in step4.js), in every view and at every zoom;
+   the picture is drawn under the strip, never beneath the controls. − and + are square; the others say what they do. */
 .view-corner { position: absolute; z-index: 2; top: 4px; left: 4px; right: 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; pointer-events: none; }
-.view-corner.down { flex-direction: row; }
 .view-tools, .zoom-steps { display: flex; align-items: center; gap: 4px; } .view-tools { pointer-events: auto; }
-.view-corner.down .view-tools { flex-direction: column; } .view-corner.down .zoom-steps { flex-direction: column-reverse; }   /* + on top */
 .view-tools button { display: inline-flex; align-items: center; justify-content: center; width: var(--control-h); padding: 0; font-size: 16px; background: #1c252e; color: #E6EBF0; border-color: #4A5866; }
+.view-tools button.word { width: auto; padding: 0 10px; font-size: 13px; white-space: nowrap; }
 .view-tools button:hover:not(:disabled) { background: #26323d; border-color: #5BC0FF; }
 .view-tools button:disabled { color: #5d6b78; border-color: #33404d; }
 .view-tools button.on, .view-tools button.on:hover { background: var(--blue); border-color: #5BC0FF; color: #fff; }
-.view-tools svg { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .zoom-level { width: var(--control-h); height: var(--control-h); display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius); background: #10161C; color: #E6EBF0; font-size: 11px; font-variant-numeric: tabular-nums; }
 .view-hint { margin: 0; padding: 5px 8px; border-radius: var(--radius); background: rgba(16,22,28,.9); color: #E6EBF0; font-size: 12px; line-height: 18px; }
-.stage .view-map { z-index: 2; inset: auto 8px 8px auto; width: auto; height: auto; border-radius: var(--radius-bar); box-shadow: 0 0 0 1px rgba(255,255,255,.65), 0 2px 10px rgba(0,0,0,.6); cursor: pointer; touch-action: none; }
+.stage .view-map { z-index: 2; inset: auto 8px 8px auto; width: auto; height: auto; border-radius: var(--radius-bar); box-shadow: 0 0 0 1px rgba(255,255,255,.65), 0 2px 10px rgba(0,0,0,.6); cursor: pointer; touch-action: none; opacity: .6; transition: opacity 120ms ease; }
+.stage .view-map:hover, .stage .view-map:active { opacity: 1; } .stage .view-map.left { inset: auto auto 8px 8px; }   /* faint until used; on the left while the selected cell lies under its corner */
 .stage.zoomed .movie-message { right: 152px; }   /* clear of the map */
 .toolbar.dark label { color: #c5ced8; }   /* a label on the dark bar is light, as "View" is */
