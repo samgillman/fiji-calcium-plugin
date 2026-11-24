@@ -2091,7 +2091,8 @@ const assert = require('assert/strict');
     // card's whole width, so it is the same with the button and with the form.
     await openCell('Cell001');
     assert.deepEqual(await page.evaluate(() => { const mark = document.getElementById('mark'), card = document.getElementById('cell-card'), verdict = document.getElementById('verdict'), look = getComputedStyle(card);
-      return [mark.previousElementSibling.id, mark.nextElementSibling.id, Math.round(verdict.getBoundingClientRect().width) === Math.round(card.clientWidth - parseFloat(look.paddingLeft) - parseFloat(look.paddingRight)),
+      const id = (e) => e ? e.id : null;
+      return [id(mark.previousElementSibling), id(mark.nextElementSibling), Math.round(verdict.getBoundingClientRect().width) === Math.round(card.clientWidth - parseFloat(look.paddingLeft) - parseFloat(look.paddingRight)),
         mark.getBoundingClientRect().top >= document.getElementById('cell-checks').getBoundingClientRect().bottom - 0.5]; }), ['cell-checks', 'mark-form', true, true], 'the mark button under the call line and the flags');
     const callLine = () => page.evaluate(() => { const box = document.getElementById('verdict').getBoundingClientRect(); return [box.width, box.height]; }), lineBefore = await callLine();
     await page.click('#mark'); assert.deepEqual(await callLine(), lineBefore, 'opening the form leaves the call line as it is');
