@@ -86,8 +86,9 @@ A stretch of one frame reads "frame 28".
 The first three use what Measure and save measures around every cell. How, is under Around each
 cell in HOW THE PICTURES AND NUMBERS ARE MADE. If those files could not be saved at Measure, or were
 taken away since, they are measured when the analysis runs, with the same code, while the
-recording is open in Fiji and gives the saved gray values. Otherwise the passing-object check is
-not made, and every row says "not checked" and why. A recording measured with an earlier version
+recording is open in Fiji, also when it was closed and opened again, and gives the saved gray
+values. Otherwise the passing-object check is not made, and every row says "not checked" and why.
+A recording measured with an earlier version
 has no such files: measure it again to have it checked. Without the field movement file the table
 is made, and the message says that a moving field is not told from an object.
 

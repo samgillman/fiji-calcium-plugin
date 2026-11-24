@@ -117,7 +117,7 @@ assert Settings.percentResponding(dirA,page.session.measurement)==' All cells: 3
 assert slurp.parseText(JsonOutput.toJson(Settings.tally(dirA,page.session.measurement)))==tally
 assert Settings.percentResponding(dirA,page.session.measurement+[chosenBlind:null])==' All cells: 3 of 6 responded (50.0 %), after review 2 of 6 (33.3 %).' : 'with marks all cells are given even when it was not recorded how cells were chosen'
 // the Fiji window's tile, from the same tally
-assert Review.headline(tally,'ATP')==['33 %','ATP: 2 of 6 evaluable cells after review; 3 as scored'] && Review.headline(first.results.tally,'ATP')==null
+assert Review.headline(tally,'ATP')==['33.3 %','ATP: 2 of 6 evaluable cells after review; 3 as scored'] && Review.headline(first.results.tally,'ATP')==null
 println 'PASS: marks both ways change the tally of every group after review and leave it as scored; the percent table gains columns on the right; the Methods sentence counts the marks'
 
 // ---- refused, with a plain message, and nothing changes

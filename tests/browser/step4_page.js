@@ -1539,6 +1539,13 @@ const assert = require('assert/strict');
       ['10.0%', '100.0%', '6.00', '4.50', 'Duration under a frame'], 'rises in % as in the verdict, times with 2 decimals, flags in words');
     assert.equal(at(calls, 'Cell001', 'Largest rise', 'Stimulus').tip, '1', 'pointing at a number shows the saved value');
     assert.deepEqual(at(calls, 'Cell001', 'Required rise set by', 'Stimulus'), { text: 'Minimum rise', tip: 'Saved: Floor' }, 'what set the required rise, in the words of the verdict');
+    assert.deepEqual(await page.evaluate(() => { const f = window.calciumStep4, data = { header: ['Cell', 'Threshold_source', 'Noise_source'],
+      rows: [['Cell001', 'Baseline noise', 'Whole-trace noise'], ['Cell002', 'Baseline noise', 'Noise floor'], ['Cell003', 'Baseline noise', 'Baseline SD'], ['Cell004', 'Floor', 'Whole-trace noise'], ['Cell005', 'Baseline noise', '']] };
+      const column = f.tableColumns('calls', data, true).find((c) => c.saved === 'Threshold_source');
+      const plain = f.tableColumns('calls', { header: ['Cell', 'Threshold_source'], rows: [['Cell001', 'Baseline noise']] }, true).find((c) => c.saved === 'Threshold_source');
+      return data.rows.map((row) => { const s = f.shownCell(column, row, () => 'Responded'); return [s.text, s.title || '']; }).concat([[f.shownCell(plain, ['Cell001', 'Baseline noise'], () => 'Responded').text, '']]); }),
+      [['Whole-trace noise', 'Saved: Baseline noise · Noise_source: Whole-trace noise'], ['Noise floor', 'Saved: Baseline noise · Noise_source: Noise floor'], ['Baseline SD', 'Saved: Baseline noise · Noise_source: Baseline SD'],
+        ['Minimum rise', 'Saved: Floor'], ['Baseline noise', ''], ['Baseline noise', '']], 'the noise that set the required rise is named as the Fiji window names it; a table without Noise_source says Baseline noise');
     assert.ok(await page.locator('#table-calls').evaluate((t) => { const even = t.tBodies[0].rows[1], style = (e) => getComputedStyle(e).backgroundColor;
       return style(even.cells[0]) === style(even) && style(even.cells[0]) !== style(t.tBodies[0].rows[0].cells[0]); }), 'the column that stays put takes the stripe of its row');
     assert.deepEqual(at(calls, 'Cell002', 'Largest rise at, s', 'Stimulus'), { text: '–', tip: 'Saved: 3 · Did not respond' }, 'the timing of a cell that did not respond is a dash, its saved value in the tooltip');

@@ -606,7 +606,7 @@
       ['Input_reference_value', 'Input reference', '', '', { decimals: 3 }], ['Local_reference_value', 'Local reference', '', '', { decimals: 3 }],
       ['Threshold_increase', 'Required rise', PCT, 'of the local level', { fraction: true }], ['Peak_increase', 'Largest rise', PCT, 'response window, of the local level', { fraction: true }],
       ['Floor_threshold', 'Minimum rise threshold', PCT, '', { fraction: true, alias: 'Floor_local_fraction' }], ['Noise_threshold', 'Noise threshold', PCT, '', { fraction: true }], ['Noise_SD_used', 'Noise SD used', PCT, '', { fraction: true }],
-      ['Threshold_source', 'Required rise set by', '', '', { values: { Floor: 'Minimum rise' } }], ['Margin', 'Largest ÷ required', '', '', { decimals: 2 }],
+      ['Threshold_source', 'Required rise set by', '', '', { values: { Floor: 'Minimum rise' }, noise: true }], ['Margin', 'Largest ÷ required', '', '', { decimals: 2 }],
       ['Onset_s', 'Onset', SEC, 'from recording start', { response: true, about: 'The first frame of the held rise' }], ['Run_start_s', 'Run start', SEC, 'from recording start', { response: true, alias: 'Onset_s' }],
       ['Confirmation_s', 'Response confirmed', SEC, 'from recording start', { response: true }], ['Run_end_s', 'Response end', SEC, 'from recording start', { response: true }],
       ['Run_duration_s', 'Response duration', SEC, 'above the required rise', { response: true }], ['Run_samples', 'Frames held', FRAMES, 'above the required rise', { response: true }],
@@ -2179,7 +2179,8 @@
       const words = columnWords(kind, saved), values = data.rows.map((row) => row[index]).filter((v) => v !== '' && v != null && v !== 'NA');
       const numeric = values.length > 0 && values.every((v) => isFinite(Number(v)));
       const decimals = words.decimals != null ? words.decimals : DECIMALS[words.unit] != null ? DECIMALS[words.unit] : values.every((v) => Number.isInteger(Number(v))) ? 0 : 3;
-      return Object.assign({}, words, { index, numeric, decimals });
+      // "Baseline noise" names the noise the row's Noise_source gives, when the table has it (as the Fiji window says it)
+      return Object.assign({}, words, { index, numeric, decimals }, words.noise ? { noiseIndex: data.header.indexOf('Noise_source') } : {});
     };
     const all = data.header.map(describe), joined = FAMILY[kind] === 'cell' && has('Cell');
     let columns = everything || !SHORT[kind] ? all.slice() : SHORT[kind].map((name) => name === CALL_COLUMN ? (joined ? CALL_COLUMN : null) : all.find((c) => c.saved === name)).filter(Boolean);
@@ -2209,6 +2210,8 @@
     if (column.numeric) { const v = Number(raw); return { text: decimal(column.fraction ? 100 * v : v, column.decimals, column.unit === PCT), title: raw, key: v, num: true }; }
     if (column.flags) return { text: raw.split(/[;|,]/).map((flag) => flag.trim()).filter(Boolean).map(flagShort).join(' · ') || '–', title: raw, key: raw };
     if (/^(true|false)$/i.test(raw)) return { text: /^true$/i.test(raw) ? 'yes' : 'no', title: raw, key: raw.toLowerCase() };
+    if (column.noise && raw === 'Baseline noise' && column.noiseIndex >= 0) { const from = row[column.noiseIndex] == null ? '' : String(row[column.noiseIndex]);
+      if (from !== '' && from !== 'NA') return { text: from, title: 'Saved: ' + raw + ' · Noise_source: ' + from, key: from }; }
     if (column.values && column.values[raw]) return { text: column.values[raw], title: 'Saved: ' + raw, key: column.values[raw] };
     return { text: raw, key: raw };
   }
@@ -3116,5 +3119,5 @@
 
   wire();
   start().catch((problem) => { $('lost').classList.add('on'); $('status').textContent = problem.message; });
-  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, STYLE, place, setView, viewArea, savedArea, viewCanvas, pairCanvas, scaleBarLength, pictureKey, cellNumber, plotCells, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, legendLayout, exportMetadata, heatmapAt, heatmapData, pictureRecord, decimal, columnWords, metricSummary, showCalls, showCounts, showMetricTable, plotNumbers, plotKind, COLUMN_WORDS, SUMMARY_ROWS };   // for the browser test
+  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, STYLE, place, tableColumns, shownCell, setView, viewArea, savedArea, viewCanvas, pairCanvas, scaleBarLength, pictureKey, cellNumber, plotCells, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, legendLayout, exportMetadata, heatmapAt, heatmapData, pictureRecord, decimal, columnWords, metricSummary, showCalls, showCounts, showMetricTable, plotNumbers, plotKind, COLUMN_WORDS, SUMMARY_ROWS };   // for the browser test
 })();

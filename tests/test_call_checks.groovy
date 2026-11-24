@@ -204,7 +204,7 @@ println 'PASS: when the files around the cells cannot be written, Measure saves 
 // ---- the checks, read as the page reads them
 def Session=loader.loadClass('CalciumAnalysisSession'),Server=loader.loadClass('CalciumWebServer')
 def slurp=new JsonSlurper()
-def checked={Map data,String name->
+def checked={Map data,String name,Closure before=null->   // before(session): what happens in Fiji before the analysis runs
     def session=Session.newInstance(data.findAll{!(it.key in ['steps','prefix'])});session.runtime.home=new File(root,'runtime')
     File made=analysis(data.folder,data.recording,name);session.performAnalysis={rt,input,settings,out,job->made}
     def server=Server.newInstance(session:session);server.start()
@@ -212,6 +212,7 @@ def checked={Map data,String name->
         if(body!=null){c.requestMethod='POST';c.doOutput=true;c.setRequestProperty('Content-Type','application/json');c.outputStream.withCloseable{it.write(JsonOutput.toJson(body).getBytes('UTF-8'))}}
         int status=c.responseCode;[status,slurp.parseText(new String((status<400?c.inputStream:c.errorStream).bytes,'UTF-8'))]}
     try {
+        if(before!=null)before(session)
         def draft=call('api/session')[1].draft
         def started=call('api/analyze',[draft:draft,confirmed:true]);assert started[0]==200 : started
         long end=System.nanoTime()+60000000000L;while(session.busy&&System.nanoTime()<end)Thread.sleep(20)
@@ -277,7 +278,21 @@ assert closed.checks.cells[cellOf.crossed].why=='ring and core were not measured
 def other=movie(false);other.getStack().getProcessor(1).add(7)
 def wrong=checked(still+[movie:other],'SimpleCa-fifth')
 assert !wrong.checks.ringMeasured && wrong.checks.note.contains('the open recording does not give the saved gray values') && !values.exists()
-println 'PASS: missing or foreign ring files are measured again when the recording is open, and the check is not made when it is not'
+// the recording closed in Fiji and opened again before the analysis runs: the checks measure around the cells on the
+// reopened recording, as every frame reader does (CalciumSteps.live); a lookalike with other pixels is not taken
+[values,pixels].each{if(it.exists())assert it.delete()}
+ij.macro.Interpreter.batchMode=true
+def copyOf={ImagePlus from->def c=from.duplicate();c.setCalibration(from.getCalibration().copy());c.setTitle(from.getTitle());c}
+def first=copyOf(still.movie),reopened=copyOf(still.movie)
+def reopenedRun=checked(still+[movie:first],'SimpleCa-sixth'){session->first.close();first.flush();assert Steps.closed(first);reopened.show()}
+assert reopenedRun.checks.ringMeasured && reopenedRun.checks.note=='' && reopenedRun.checks.cells==results.checks.cells : 'the reopened recording is measured: '+reopenedRun.checks.note
+assert values.bytes==valuesAtMeasure && pixels.bytes==pixelsAtMeasure : 'the reopened recording gives the files Measure saved'
+reopened.close();[values,pixels].each{assert it.delete()}
+def second=copyOf(still.movie),lookalike=copyOf(still.movie);lookalike.getStack().getProcessor(1).add(7)
+def lookalikeRun=checked(still+[movie:second],'SimpleCa-seventh'){session->second.close();second.flush();lookalike.show()}
+assert !lookalikeRun.checks.ringMeasured && lookalikeRun.checks.note=='Not checked for a passing object: ring and core were not measured and the recording is not open.' && !values.exists() : lookalikeRun.checks.note
+lookalike.close();ij.macro.Interpreter.batchMode=false
+println 'PASS: missing or foreign ring files are measured again when the recording is open, and the check is not made when it is not; a recording opened again is measured'
 
 // ---- what the table says when one cell, or the whole analysis, cannot be checked
 File log=new File(root,'analysis.log')
