@@ -24,7 +24,7 @@
   // Movie frames: compressed images are kept for the session (about 40 MB for 300 full-size frames, much less at display size),
   // decoded ones only near the playhead. Keys carry the server's frame version, which changes with the baseline behind
   // "Change from baseline" and the display range, so a stale image is never reused.
-  const Buf = { version: null, blobs: new Map(), bitmaps: new Map(), inflight: new Map(), decoding: new Map(), failed: new Map(), bytes: 0 };
+  const Buf = { version: null, blobs: new Map(), bitmaps: new Map(), inflight: new Map(), decoding: new Map(), failed: new Map(), bytes: 0, closed: '' };   // closed: what Fiji says when the recording was closed there
   const PARALLEL = 4, DECODED_AROUND = 30, MAX_BYTES = 90e6, MAX_FPS = 30;
   Object.defineProperty(Pic, 'loading', { get: () => Buf.inflight.size > 0 || Buf.decoding.size > 0 });
   // The playback clock runs in recording seconds; frames are shown when the playhead reaches their timestamps.
@@ -1078,7 +1078,9 @@
     const job = { w };
     job.promise = (async () => {
       const response = await fetch('api/frame?f=' + f + '&mode=' + mode + '&w=' + w + '&v=' + encodeURIComponent(Buf.version));
+      if (response.status === 410) Buf.closed = (await response.json().catch(() => ({}))).error || '';   // the recording was closed in Fiji
       if (!response.ok) throw new Error('The recording frame could not be loaded.');
+      Buf.closed = '';
       const blob = await response.blob();
       if (key.startsWith(Buf.version + '|')) {
         const old = Buf.blobs.get(key); if (old) Buf.bytes -= old.blob.size;
@@ -1162,7 +1164,7 @@
   function frameFailed(f, mode) {
     if (S.view !== mode || S.frame !== f && !S.timer) return;
     Pic.error = 'The recording frame could not be loaded.'; play(false);
-    movieMessage('Frame ' + f + ' could not load. Keep the recording open in Fiji, then move the slider to retry.', true);
+    movieMessage(Buf.closed || 'Frame ' + f + ' could not load. Keep the recording open in Fiji, then move the slider to retry.', true);
     $('picture-note').textContent = Pic.shownFrame ? 'Last displayed frame: ' + Pic.shownFrame : 'No movie frame loaded';
   }
   function requestFrame() {
@@ -2582,7 +2584,7 @@
   /** The view on screen at frame f, at its full size: a frame of the recording, fetched whole, or the view's still picture. */
   async function viewImage(f) {
     if (still()) { const image = S.view === 'background' ? Pic.background : Pic.base; if (!image) throw new Error('The picture is not loaded yet.'); return image; }
-    const reply = await fetch('api/frame?f=' + f + '&mode=' + S.view + '&v=' + encodeURIComponent(Buf.version || ''), { cache: 'no-store' }); if (!reply.ok) throw new Error('Frame ' + f + ' could not be read.');
+    const reply = await fetch('api/frame?f=' + f + '&mode=' + S.view + '&v=' + encodeURIComponent(Buf.version || ''), { cache: 'no-store' }); if (!reply.ok) throw new Error(reply.status === 410 && (await reply.json().catch(() => ({}))).error || 'Frame ' + f + ' could not be read.');
     return createImageBitmap(await reply.blob());
   }
   /** How a saved picture of the cells is measured out, in one place, for a picture, a frame of a set and a pair of frames.

@@ -174,6 +174,20 @@ try {
     assert Settings.identity(data+[measurementId:'new measurement'])!=session.measurementIdentity
     server.session=Session.newInstance(data+[key:'second']);assert json('api/state')[1].key!=about.key && json('api/state')[1].version==0
     server.session=null;assert json('api/state')[0]==409 && call('').status==200
+    // The recording closed in Fiji: a frame is refused in plain words, without Java text; the same recording opened again is taken.
+    def closing=new ImagePlus('Recording',frames.duplicate());server.session=Session.newInstance(data+[movie:closing,key:'closing'])
+    assert call('api/frame?f=15&mode=raw').status==200
+    closing.close();closing.flush()
+    def gone=call('api/frame?f=15&mode=raw');assert gone.status==410 && slurp.parseText(gone.text)==[error:'The recording is closed in Fiji. Open it again to go on.'] : gone.text
+    ij.macro.Interpreter.batchMode=true;def reopened=new ImagePlus('Recording again',frames.duplicate());reopened.show()
+    try{def back=call('api/frame?f=15&mode=raw');assert back.status==200 && gray(back.bytes,40,60)>gray(back.bytes,100,60) : 'the recording opened again is taken'}
+    finally{reopened.close();ij.macro.Interpreter.batchMode=false}
+    def blank=new ImageStack(250,150);(1..30).each{blank.addSlice(''+it,new ShortProcessor(250,150))};ImagePlus otherPixels=new ImagePlus('Recording',blank)
+    server.session=Session.newInstance(data+[movie:otherPixels,key:'other']);otherPixels.close();otherPixels.flush()
+    ij.macro.Interpreter.batchMode=true;def lookalike=new ImagePlus('Recording',frames.duplicate());lookalike.show()
+    try{assert call('api/frame?f=15&mode=raw').status==410 : 'a recording with other pixels is not taken for it'}finally{lookalike.close();ij.macro.Interpreter.batchMode=false}
+    server.session=null
+    println 'PASS: a frame of a recording closed in Fiji is refused with "The recording is closed in Fiji. Open it again to go on."; the same recording opened again is taken, another one is not'
     // Remeasuring gets a distinct URL and read-only input snapshot; the first page remains reachable.
     def Pages=loader.loadClass('CalciumWebPages'),pages=Pages.newInstance(snapshotRoot:new File(root,'snapshots'))
     def original=new File(root,'measurement.csv');original.text='original measured values'

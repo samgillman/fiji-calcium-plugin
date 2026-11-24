@@ -127,6 +127,8 @@ def main():
     if "--gui" in sys.argv or "--gui-only" in sys.argv:
         for test in ["tests/test_gui.groovy", "tests/test_start_updates.groovy", "tests/test_layout.groovy", "tests/test_cell_editing.groovy", "tests/test_picture_views.groovy", "tests/test_analysis_gui.groovy"]:
             subprocess.run([java, "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", test], cwd=ROOT, env=env, check=True, timeout=60)
+        # One recording, its own outlines: several starts of the plugin, each window built and never shown (no Dock icon on a Mac).
+        subprocess.run([java, "-Dapple.awt.UIElement=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", "tests/test_recording_guard.groovy"], cwd=ROOT, env=env, check=True, timeout=300)
 
 
 if __name__ == "__main__":
