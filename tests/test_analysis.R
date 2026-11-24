@@ -139,3 +139,74 @@ same_fixture(file.path(shared_out,'responder_counts.csv'),file.path(shared,'gold
 stopifnot(nrow(read.csv(file.path(shared_out,'replicate_counts.csv')))==0,
           nrow(read.csv(file.path(shared_out,'unassigned_biological_units.csv')))==1)
 cat('PASS: shared independent golden CSV calls/counts and no fabricated biological unit through the native adapter\n')
+
+# What noise is taken from, through the adapter. A sample_sd protocol keeps the table engine 2.0.0 wrote. A protocol with
+# the whole-trace estimate records engine 2.1.0 and gets the engine's three columns after the existing ones. The manifest
+# names the estimator and carries the engine's sentence. Expected values below are worked out here, not by the engine.
+clock3 <- 0:59
+noise_input <- data.frame(Frame=seq_along(clock3),Time_s=clock3,Steady=100,Jumpy=100)
+noise_input$Steady[clock3>=20 & clock3<=30] <- 150
+# Quiet for the ten baseline samples, then jumping by 15 % from sample to sample: two samples in a row at +15 % and +16 %
+# pass a threshold set by the baseline alone and fail one set by the trace's own frame-to-frame noise.
+jump <- rep(c(-15,15),25)
+jump[c(11,12)] <- c(15,16)
+noise_input$Jumpy[11:60] <- 100+jump
+noise_input$Jumpy[1:10] <- 100+rep(c(-0.1,0.1),5)
+write.csv(noise_input,file.path(root,'noise-input.csv'),row.names=FALSE,na='')
+noise_window <- data.frame(Role='Stimulus',Stimulus='ATP',Baseline_start_s=0,Baseline_end_s=10,Stimulus_onset_s=10,Start_s=10,End_s=59)
+noise_run <- function(folder,protocol,extra=character(),edit=identity) {
+  output <- file.path(root,folder);unlink(output,recursive=TRUE);dir.create(output)
+  writeLines(edit(responder_export_protocol(protocol)),file.path(output,'protocol_input.json'),useBytes=TRUE)
+  settings <- c(sampling_hz='',baseline_start='1',baseline_end='10',recording='Noise field',input_mode='background_corrected_fluorescence',protocol_file='protocol_input.json',extra)
+  config <- file.path(root,paste0(folder,'-settings.tsv'))
+  write.table(data.frame(names(settings),unname(settings)),config,sep='\t',row.names=FALSE,col.names=FALSE,quote=FALSE)
+  list(exit=run_adapter(file.path(root,'noise-input.csv'),config,folder),dir=output)
+}
+read_manifest <- function(dir) { m <- read.csv(file.path(dir,'analysis_manifest.csv'),stringsAsFactors=FALSE);setNames(m$value,m$key) }
+baseline_rule <- responder_protocol_v2('Baseline SD fixture',noise_window,duration_mode='samples',frames=2L)
+trace_rule <- responder_protocol_v2('Whole-trace noise fixture',noise_window,duration_mode='samples',frames=2L,sd_estimator='larger_of_baseline_sd_and_trace_noise')
+stopifnot(unique(baseline_rule$Engine_version)=='2.0.0',unique(trace_rule$Engine_version)=='2.1.0')
+old_kind <- noise_run('noise-baseline-sd',baseline_rule,c(sd_estimator='sample_sd'))
+new_kind <- noise_run('noise-whole-trace',trace_rule,c(sd_estimator='larger_of_baseline_sd_and_trace_noise'))
+stopifnot(old_kind$exit==0,new_kind$exit==0,file.exists(file.path(old_kind$dir,'COMPLETE')),file.exists(file.path(new_kind$dir,'COMPLETE')))
+old_calls <- read.csv(file.path(old_kind$dir,'responder_calls.csv'),check.names=FALSE,na.strings='',stringsAsFactors=FALSE)
+new_calls <- read.csv(file.path(new_kind$dir,'responder_calls.csv'),check.names=FALSE,na.strings='',stringsAsFactors=FALSE)
+added <- c('Whole_trace_noise','Whole_trace_noise_samples','Noise_source')
+# every column of the sample_sd table keeps its place (Condition and Biological_unit included); the three come after them
+stopifnot(!any(added%in%names(old_calls)),identical(names(new_calls)[seq_along(old_calls)],names(old_calls)),
+  identical(names(new_calls)[length(old_calls)+1:3],added),ncol(new_calls)==ncol(old_calls)+3L,
+  identical(tail(names(old_calls),2),c('Condition','Biological_unit')))
+stopifnot(identical(old_calls$Status,c('Responded','Responded')),identical(new_calls$Status,c('Responded','Did not respond')),
+  identical(new_calls$Noise_source,c('Baseline SD','Whole-trace noise')),all(new_calls$Whole_trace_noise_samples==59))
+dff <- noise_input$Jumpy/mean(noise_input$Jumpy[1:10])-1
+steps <- diff(dff)
+expected_noise <- 1.4826*median(abs(steps-median(steps)))/sqrt(2)/(1+mean(dff[1:10]))
+expected_sd <- sd(dff[1:10])/(1+mean(dff[1:10]))
+stopifnot(expected_noise>0.2,expected_sd<0.002,abs(new_calls$Whole_trace_noise[2]-expected_noise)<1e-12,abs(new_calls$Baseline_SD[2]-expected_sd)<1e-12,
+  abs(new_calls$Noise_SD_used[2]-expected_noise)<1e-12,abs(new_calls$Threshold_increase[2]-3*expected_noise)<1e-12,
+  abs(old_calls$Threshold_increase[2]-0.1)<1e-12,new_calls$Whole_trace_noise[1]==0,abs(new_calls$Threshold_increase[1]-0.1)<1e-12)
+# Threshold_source names the term that set a threshold, and says "Baseline noise" for the noise term whichever estimate it
+# used; Noise_source names the estimate. The Fiji window reads the two together (CalciumCalls.thresholdSetBy).
+stopifnot(identical(new_calls$Threshold_source,c('Floor','Baseline noise')),identical(old_calls$Threshold_source,c('Floor','Floor')))
+# the measurements themselves do not depend on the estimator
+for(column in c('Baseline_mean','Baseline_SD','Peak_increase','Peak_s','Window_AUC_fraction_s')) stopifnot(identical(old_calls[[column]],new_calls[[column]]))
+old_record <- read_manifest(old_kind$dir);new_record <- read_manifest(new_kind$dir)
+stopifnot(old_record[['sd_estimator']]=='sample_sd',old_record[['protocol_engine_version']]=='2.0.0',old_record[['engine_version']]==responder_engine_version(),
+  old_record[['noise_rule']]=='Noise is the sample SD of the local prestimulus baseline.',
+  new_record[['sd_estimator']]=='larger_of_baseline_sd_and_trace_noise',new_record[['protocol_engine_version']]=='2.1.0',new_record[['engine_version']]==responder_engine_version(),
+  new_record[['noise_rule']]==responder_noise_rule(trace_rule),grepl('whole-trace noise',new_record[['noise_rule']],fixed=TRUE))
+stopifnot(responder_import_protocol(file.path(old_kind$dir,'protocol.json'))$Engine_version=='2.0.0',responder_import_protocol(file.path(new_kind$dir,'protocol.json'))$SD_estimator=='larger_of_baseline_sd_and_trace_noise')
+# Settings written before this build name no estimator and run as before.
+unnamed <- noise_run('noise-unnamed',baseline_rule)
+stopifnot(unnamed$exit==0,identical(readLines(file.path(unnamed$dir,'responder_calls.csv')),readLines(file.path(old_kind$dir,'responder_calls.csv'))))
+# Refused, with no completion marker: settings that name another estimator than the protocol's, and a protocol that
+# records its estimator with another engine release than the earliest that defines it.
+mismatch <- noise_run('noise-settings-mismatch',trace_rule,c(sd_estimator='sample_sd'))
+wrong_release <- noise_run('noise-wrong-release',trace_rule,edit=function(json)gsub('"2.1.0"','"2.0.0"',json,fixed=TRUE))
+later_release <- noise_run('noise-later-release',baseline_rule,edit=function(json)gsub('"2.0.0"','"2.1.0"',json,fixed=TRUE))
+for(run in list(mismatch,wrong_release,later_release)) stopifnot(run$exit!=0,!file.exists(file.path(run$dir,'COMPLETE')))
+# The legacy rule records its one noise, the baseline SD.
+legacy_record <- read_manifest(file.path(root,'out'))
+stopifnot(legacy_record[['sd_estimator']]=='sample_sd',legacy_record[['protocol_engine_version']]=='legacy-1',legacy_record[['noise_rule']]=='Noise is the sample SD of the local prestimulus baseline.',
+  !any(added%in%names(calls)))
+cat('PASS: sample_sd keeps the 2.0.0 table; whole-trace noise appends its three columns and changes only what the threshold decides; the manifest names the estimator and the engine\'s sentence; mismatched settings or engine release are refused\n')

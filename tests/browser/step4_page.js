@@ -132,6 +132,11 @@ const assert = require('assert/strict');
     await page.waitForFunction(() => window.calciumStep4 && window.calciumStep4.S.state);
     await waitFrame(1);
     assert.equal(await text('#recording'), 'Fixture recording');
+    // The page is given its draft in the words it writes, so nothing reads as changed before anything is touched.
+    assert.ok(await page.isHidden('#discard'), 'an untouched page offers nothing to discard');
+    const newEstimator = await page.evaluate(() => window.calciumStep4.S.info.newEstimator);
+    assert.equal(newEstimator, 'larger_of_baseline_sd_and_trace_noise');
+    assert.equal(await page.evaluate(() => window.calciumStep4.collectDraft().protocol.sd_estimator), newEstimator, 'a new analysis takes its noise from the whole trace when that is larger');
     assert.equal(await page.inputValue('#view'), 'raw');
     assert.ok(await page.isEnabled('#play') && await page.isEnabled('#time'), 'movie controls work before an analysis');
     assert.ok(await page.isHidden('#result-tiles') && await page.isHidden('#plot-card'), 'preview has no empty result dashboard');
@@ -387,6 +392,23 @@ const assert = require('assert/strict');
     assert.equal(await page.evaluate(() => window.calciumStep4.collectDraft().protocol.windows[0].Floor_local_fraction), precise.windows[0].Floor_local_fraction);
     await importProtocol(originalProtocol, 'original-protocol.json');
 
+    // A version 2 rule made on the page from a legacy one is a protocol made here: it takes the noise of a new protocol,
+    // and is exported with the engine version that goes with it. The legacy rule itself is exported naming no estimator.
+    const legacyProtocol = { schema: 'simpleca.response-protocol', schema_version: 1, engine_version: 'legacy-1', name: 'Legacy consecutive-sample protocol', validation_status: 'legacy_unvalidated', signal_reference: 'fixed_reference_fractional_dff0',
+      windows: [{ Role: 'Stimulus', Stimulus: 'Capsaicin', Start_s: 3, End_s: 7, Baseline_s: 2.5, Floor_local_fraction: 0.1, SD_multiplier: 3, Consecutive_samples: 2, Max_gap_s: null }], field_overrides: null };
+    await importProtocol(legacyProtocol, 'legacy-protocol.json');
+    assert.equal(await page.inputValue('#protocol-mode'), '1');
+    const exportProtocol = async (name) => { const saving = page.waitForEvent('download'); await page.click('#protocol-export'); const file = path.join(out, name); await (await saving).saveAs(file); return JSON.parse(fs.readFileSync(file, 'utf8')); };
+    const legacyExported = await exportProtocol('legacy-exported.json');
+    assert.equal(legacyExported.schema_version, 1); assert.ok(!('sd_estimator' in legacyExported), 'a legacy file names no estimator');
+    await page.selectOption('#protocol-mode', '2');
+    const madeFromLegacy = await page.evaluate(() => window.calciumStep4.collectDraft().protocol);
+    assert.equal(madeFromLegacy.schema_version, 2); assert.equal(madeFromLegacy.sd_estimator, newEstimator, 'the rule type change carries the estimator of a new protocol');
+    const madeExported = await exportProtocol('made-from-legacy.json');
+    assert.equal(madeExported.sd_estimator, newEstimator); assert.equal(madeExported.engine_version, '2.1.0');
+    assert.deepEqual(madeExported.windows.map((w) => [w.SD_estimator, w.Engine_version]), [[newEstimator, '2.1.0']]);
+    await importProtocol(originalProtocol, 'original-protocol.json');
+
     // Legacy is an explicit mode and disables elapsed-time-only fields.
     const beforeSwitch = await page.evaluate(() => window.calciumStep4.collectDraft().protocol);
     await page.selectOption('#protocol-mode', '1'); await page.selectOption('#protocol-mode', '2');
@@ -416,6 +438,9 @@ const assert = require('assert/strict');
     const sent = JSON.parse(fs.readFileSync(path.join(out, 'sent.json'), 'utf8'));
     const submitted = JSON.parse(sent.protocol_json);
     assert.equal(submitted.schema_version, 2);
+    // The page writes its fixed "2.0.0" and "sample_sd" into the draft; the run takes the estimator named at the top of it.
+    assert.equal(sent.sd_estimator, newEstimator); assert.equal(submitted.sd_estimator, newEstimator); assert.equal(submitted.engine_version, '2.1.0');
+    assert.deepEqual(submitted.windows.map((w) => w.SD_estimator), [newEstimator, newEstimator]);
     assert.deepEqual(submitted.windows.map((w) => w.Stimulus), ['Capsaicin', 'Ionomycin']);
     assert.equal(submitted.windows[0].Floor_local_fraction, 0.1);
     assert.equal(submitted.windows[1].Floor_local_fraction, 0.4);
@@ -1514,6 +1539,13 @@ const assert = require('assert/strict');
       ['10.0%', '100.0%', '6.00', '4.50', 'Duration under a frame'], 'rises in % as in the verdict, times with 2 decimals, flags in words');
     assert.equal(at(calls, 'Cell001', 'Largest rise', 'Stimulus').tip, '1', 'pointing at a number shows the saved value');
     assert.deepEqual(at(calls, 'Cell001', 'Required rise set by', 'Stimulus'), { text: 'Minimum rise', tip: 'Saved: Floor' }, 'what set the required rise, in the words of the verdict');
+    assert.deepEqual(await page.evaluate(() => { const f = window.calciumStep4, data = { header: ['Cell', 'Threshold_source', 'Noise_source'],
+      rows: [['Cell001', 'Baseline noise', 'Whole-trace noise'], ['Cell002', 'Baseline noise', 'Noise floor'], ['Cell003', 'Baseline noise', 'Baseline SD'], ['Cell004', 'Floor', 'Whole-trace noise'], ['Cell005', 'Baseline noise', '']] };
+      const column = f.tableColumns('calls', data, true).find((c) => c.saved === 'Threshold_source');
+      const plain = f.tableColumns('calls', { header: ['Cell', 'Threshold_source'], rows: [['Cell001', 'Baseline noise']] }, true).find((c) => c.saved === 'Threshold_source');
+      return data.rows.map((row) => { const s = f.shownCell(column, row, () => 'Responded'); return [s.text, s.title || '']; }).concat([[f.shownCell(plain, ['Cell001', 'Baseline noise'], () => 'Responded').text, '']]); }),
+      [['Whole-trace noise', 'Saved: Baseline noise · Noise_source: Whole-trace noise'], ['Noise floor', 'Saved: Baseline noise · Noise_source: Noise floor'], ['Baseline SD', 'Saved: Baseline noise · Noise_source: Baseline SD'],
+        ['Minimum rise', 'Saved: Floor'], ['Baseline noise', ''], ['Baseline noise', '']], 'the noise that set the required rise is named as the Fiji window names it; a table without Noise_source says Baseline noise');
     assert.ok(await page.locator('#table-calls').evaluate((t) => { const even = t.tBodies[0].rows[1], style = (e) => getComputedStyle(e).backgroundColor;
       return style(even.cells[0]) === style(even) && style(even.cells[0]) !== style(t.tBodies[0].rows[0].cells[0]); }), 'the column that stays put takes the stripe of its row');
     assert.deepEqual(at(calls, 'Cell002', 'Largest rise at, s', 'Stimulus'), { text: '–', tip: 'Saved: 3 · Did not respond' }, 'the timing of a cell that did not respond is a dash, its saved value in the tooltip');

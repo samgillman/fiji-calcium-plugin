@@ -31,7 +31,7 @@ try {
         assert !ui.measurement.picture.is(original) : 'Analysis must not edit Step 2 cells'
         assert ui.measurement.picture.getWindow()==null && ui.cellPicture.image!=null : 'The cell picture belongs inside the analysis window'
         assert ui.responding.value.text=='–' && !ui.previousCell.enabled
-        assert ui.kcl.text=='Also score a separate positive control'
+        assert ui.kcl.text=='Include a positive control'
         // The original recording is visible and scrubbable even before analysis.
         assert (0..<ui.view.itemCount).collect{ui.view.getItemAt(it)}==['Static colour overview','Movie: change from rest','Movie: as recorded']
         assert ui.view.selectedIndex==2 && ui.cellPicture.image.is(ui.frameImage) && ui.slider.maximum==30
@@ -54,6 +54,9 @@ try {
             def sent=precise.settings(),p=new groovy.json.JsonSlurper().parseText(sent.protocol_json)
             assert sent.sampling_hz=='1.0000537066691941' && p.windows[0].Start_s==74/1.0000537066691941d && p.windows[0].End_s==299/1.0000537066691941d
             assert p.windows[0].Floor_local_fraction==0.10d && p.windows[0].SD_multiplier==3d && sent.baseline_start=='55' && sent.baseline_end=='74'
+            // a protocol made in this window takes noise from the whole trace when that is larger, and the window says so
+            assert p.sd_estimator==Protocol.newEstimator() && p.engine_version=='2.1.0' && sent.sd_estimator==Protocol.newEstimator()
+            assert precise.noiseNote.text=='Noise: larger of baseline SD and whole-trace noise'
             precise.windowModel.setValueAt(80d,0,startColumn)
             assert new groovy.json.JsonSlurper().parseText(precise.settings().protocol_json).windows[0].Start_s==80d
             assert precise.windowModel.rowCount==1;precise.kcl.doClick();assert precise.windowModel.rowCount==2;precise.kcl.doClick();assert precise.windowModel.rowCount==1
@@ -65,6 +68,13 @@ try {
             assert precise.protocol().schema_version==1 && precise.protocol().windows.size()==2
             assert precise.windowModel.getValueAt(1,Protocol.COLUMNS.indexOf('Duration_mode'))=='samples'
             assert precise.runButton.font.family==UIManager.getFont('Label.font').family : 'Use the interface font, not a fixed family'
+            assert precise.noiseNote.text=='Noise: baseline SD' : 'the legacy rule has one noise'
+            // a loaded protocol keeps its estimator; the starting preset is the plugin's own protocol again
+            precise.loadProtocol(new File('tests/fixtures/response-protocols/golden-protocol.json'))
+            assert precise.estimator=='sample_sd' && precise.protocol().sd_estimator=='sample_sd' && precise.protocol().engine_version=='2.0.0' && precise.noiseNote.text=='Noise: baseline SD'
+            String loaded=precise.fingerprint();precise.estimator=Protocol.newEstimator();assert precise.fingerprint()!=loaded : 'another estimator is a changed setting';precise.estimator='sample_sd'
+            precise.preset.selectedIndex=0
+            assert precise.estimator==Protocol.newEstimator() && precise.protocol().sd_estimator==Protocol.newEstimator() && precise.noiseNote.text=='Noise: larger of baseline SD and whole-trace noise'
         } finally {precise.dispose()}
         ui.runButton.doClick();assert !ui.busy && ui.status.text.contains('Confirm')
         ui.confirmed.selected=true
@@ -203,10 +213,12 @@ try {
         def portable=new File(ui.results,'portable.json');ui.saveProtocol(portable)
         ui.loadProtocol(portable)
         assert ui.protocol().schema_version==2 && ui.protocol().windows[0].Floor_local_fraction==0.2d
+        assert ui.protocol().sd_estimator==Protocol.newEstimator() && Protocol.read(portable).engine_version=='2.1.0'
         assert !ui.confirmed.selected
         // A timing edit must never erase independently imported control rules.
         def sharedProtocol=new File('tests/fixtures/response-protocols/golden-protocol.json')
         ui.loadProtocol(sharedProtocol)
+        assert ui.protocol().sd_estimator=='sample_sd' && ui.protocol().engine_version=='2.0.0' && ui.noiseNote.text=='Noise: baseline SD' : 'an imported protocol keeps its estimator'
         ui.windowModel.setValueAt(0.35d,1,Protocol.COLUMNS.indexOf('Floor_local_fraction'))
         ui.windowModel.setValueAt(5d,1,Protocol.COLUMNS.indexOf('SD_multiplier'))
         ui.windowModel.setValueAt('samples',1,Protocol.COLUMNS.indexOf('Duration_mode'))
@@ -214,6 +226,7 @@ try {
         ui.saveProtocol(portable);ui.loadProtocol(portable)
         ui.windowModel.setValueAt(7d,0,Protocol.COLUMNS.indexOf('End_s'))
         def retained=ui.protocol().windows[1]
+        assert ui.protocol().sd_estimator=='sample_sd' && retained.SD_estimator=='sample_sd' : 'and keeps it when saved and loaded again'
         assert retained.Floor_local_fraction==0.35d && retained.SD_multiplier==5d
         assert retained.Duration_mode=='samples' && retained.Consecutive_samples==4
         ui.sensitivityFile=sharedProtocol

@@ -14,7 +14,8 @@ def job=Job.newInstance(logFile:new File(root,'portable-test.log'))
 job.run([rscript,'--vanilla',new File('tests/test_analysis.R').absolutePath],new File('.').canonicalFile,180)
 def fixture=new File('build/analysis-fixtures').absoluteFile
 def imported=Protocol.read(new File(fixture,'golden-out/protocol.json'))
-def nativePayload=Protocol.payload(imported.windows,2,imported.name,imported.validation_status)
+def nativePayload=Protocol.payload(imported.windows,2,imported.name,imported.validation_status,null,imported.sd_estimator)
+assert nativePayload.sd_estimator=='sample_sd' && nativePayload.engine_version=='2.0.0' : 'a protocol that was read keeps its estimator'
 def input=new File(fixture,'golden-input.csv')
 def settings=[baseline_start:'1',baseline_end:'5',sampling_hz:'',recording:'Golden',input_mode:'background_corrected_fluorescence',condition:'Vehicle',biological_unit:'Culture1',
     protocol_json:groovy.json.JsonOutput.toJson(nativePayload),roi_registry_file:new File(fixture,'golden-out/roi_registry.csv').path,

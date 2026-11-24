@@ -14,6 +14,12 @@ progress <- function(p, text) { cat(sprintf('SIMPLECA\t%d\t%s\n', p, text)); flu
 dir.create(args[4],recursive=TRUE,showWarnings=FALSE)
 write <- function(x,name) write.csv(x,file.path(args[4],name),row.names=FALSE,na='')
 canonical_calls <- function(x) x[,setdiff(names(x),c('Window_peak_local_dFF','Window_AUC_local_dFF_s')),drop=FALSE]
+# The columns only the whole-trace estimator writes go last in every calls table, so each column of a sample_sd table
+# keeps its place.
+noise_columns_last <- function(x) {
+  added <- intersect(c('Whole_trace_noise','Whole_trace_noise_samples','Noise_source'),names(x))
+  x[,c(setdiff(names(x),added),added),drop=FALSE]
+}
 local_input <- function(key) {
   value <- setting(key)
   if (!nzchar(value) || basename(value)!=value) stop(paste('Expected snapshotted filename for',key))
@@ -82,6 +88,11 @@ if(nzchar(setting('protocol_file'))) {
     control_start=if(identical(s$kcl_enabled,'true'))num('kcl_start')else NULL,
     control_end=if(identical(s$kcl_enabled,'true'))num('kcl_end')else NULL)
 }
+# The noise behind the SD multiplier is part of the record. The legacy rule has one estimator, the sample SD of the
+# baseline (responder_noise_rule). Settings that name another estimator than the protocol's own stop the run.
+estimator <- if(responder_protocol_version(protocol)==1L)'sample_sd' else protocol$SD_estimator[1]
+if(nzchar(setting('sd_estimator'))&&setting('sd_estimator')!=estimator)
+  stop('The settings name the noise estimator ',setting('sd_estimator'),' but the protocol uses ',estimator)
 invisible(responder_export_protocol(protocol,file.path(args[4],'protocol.json')))
 applied <- responder_protocol_for_field(protocol,setting('recording'))
 invisible(responder_export_protocol(applied,file.path(args[4],'applied_protocol.json')))
@@ -91,6 +102,7 @@ if(responder_protocol_version(protocol)==1L)
 # Canonical metric names describe fractional change for every supported indicator.
 responders$calls <- canonical_calls(responders$calls)
 responders$calls$Condition <- setting('condition');responders$calls$Biological_unit <- setting('biological_unit')
+responders$calls <- noise_columns_last(responders$calls)
 responders$counts$Condition <- setting('condition');responders$counts$Biological_unit <- setting('biological_unit')
 write(metrics,'metrics.csv');write(normalized,'normalized_traces.csv');write(qc,'cell_quality.csv')
 write(responders$calls,'responder_calls.csv');write(responders$counts,'responder_counts.csv')
@@ -113,12 +125,12 @@ progress(82,'Saving applied results and independent diagnostics')
 if(nzchar(setting('sensitivity_file'))) {
   grid <- read.csv(local_input('sensitivity_file'),check.names=FALSE,stringsAsFactors=FALSE)
   diagnostic <- responder_sensitivity_results(normalized,cells,setting('recording'),protocol,grid,qc)
-  write(canonical_calls(diagnostic$calls),'sensitivity_calls.csv');write(diagnostic$counts,'sensitivity_counts.csv')
+  write(noise_columns_last(canonical_calls(diagnostic$calls)),'sensitivity_calls.csv');write(diagnostic$counts,'sensitivity_counts.csv')
 }
 if(nzchar(setting('negative_control_file'))) {
   windows <- read.csv(local_input('negative_control_file'),check.names=FALSE,stringsAsFactors=FALSE)
   diagnostic <- responder_control_diagnostics(normalized,cells,setting('recording'),protocol,windows,qc)
-  write(canonical_calls(diagnostic$calls),'negative_control_calls.csv');write(diagnostic$counts,'negative_control_counts.csv')
+  write(noise_columns_last(canonical_calls(diagnostic$calls)),'negative_control_calls.csv');write(diagnostic$counts,'negative_control_counts.csv')
 }
 # Cell SEM is descriptive. Biological-unit summaries are separate and never infer units from cell count.
 traces <- as.matrix(normalized[-1]);finite <- is.finite(traces);n <- rowSums(finite)
@@ -127,7 +139,10 @@ sem <- if(ncol(traces))apply(traces,1,function(x)sd(x[is.finite(x)])/sqrt(sum(is
 write(data.frame(Time=time,Mean=avg,SEM=sem,N_Cells=n),'mean_trace.csv')
 provenance <- read.delim(file.path(args[1],'provenance.tsv'),header=FALSE,col.names=c('key','value'),colClasses='character',quote='')
 extra <- c(R_version=as.character(getRversion()),jsonlite_version=as.character(packageVersion('jsonlite')),
-  protocol_schema_version=as.character(responder_protocol_version(protocol)),protocol_hash=responder_protocol_hash(protocol),applied_protocol_hash=responder_protocol_hash(applied),protocol_hash_algorithm='MD5 of canonical protocol JSON (identity, not a security signature)',
+  protocol_schema_version=as.character(responder_protocol_version(protocol)),
+  # engine_version scored this run; protocol_engine_version is the earliest engine release that defines the protocol's rule.
+  engine_version=responder_engine_version(),protocol_engine_version=responder_protocol_engine_version(protocol),
+  sd_estimator=estimator,noise_rule=responder_noise_rule(protocol),protocol_hash=responder_protocol_hash(protocol),applied_protocol_hash=responder_protocol_hash(applied),protocol_hash_algorithm='MD5 of canonical protocol JSON (identity, not a security signature)',
   time_source=time_source,normalization='(F-F0)/F0; fixed F0 mean of selected baseline frames',normalized_units='fraction',background='Already subtracted once by Fiji; no second subtraction',intensity_lift='None',
   AUC_interval='Legacy AUC: whole recording, signed net integral',Time_to_Peak_definition='Legacy peak: recording timestamp, not stimulus latency',
   window_metrics='Local prestimulus reference; observed samples in each declared response window; no extrapolation',

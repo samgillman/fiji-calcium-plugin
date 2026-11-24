@@ -49,6 +49,9 @@ try {
     assert about.key==Settings.identity(data) && about.rois.size()==6 && about.rois[0].size()==4
     assert about.draft.values.sampling_hz=='2.0000001' && about.draft.values.baseline_end=='5'
     assert about.draft.protocol.schema_version==2 && about.draft.protocol.windows[0].Duration_mode=='samples' && about.draft.protocol.windows[0].Consecutive_samples==2 : 'a response holds for 2 samples in a row by default'
+    // The page is handed its draft in the words it sends back (its own fixed copies), with the estimator of a new protocol at the top.
+    assert about.draft.protocol.sd_estimator==Protocol.newEstimator() && about.draft.protocol.engine_version==Protocol.PAGE_ENGINE && about.draft.protocol.windows*.SD_estimator==[Protocol.PAGE_ESTIMATOR] && about.draft.protocol.windows*.Engine_version==[Protocol.PAGE_ENGINE]
+    assert Protocol.canonical(about.draft.protocol,true).engine_version=='2.1.0' && about.fijiDraft==null && about.newEstimator==Protocol.newEstimator()
     assert about.timingProvisional && about.timeSource=='constant_fps' && Math.abs(about.frameTimes[1]-1/2.0000001d)<1e-14
     def state=json('api/state')[1]
     assert !state.busy && state.version==0 && !state.engineReady && state.rest==[1,5] && !state.settingsPending && call('api/results').text=='{}'
@@ -107,6 +110,17 @@ try {
     control.Floor_local_fraction=0.35d;control.SD_multiplier=5d;control.Duration_mode='samples';control.Consecutive_samples=4
     pending.protocol=Protocol.payload([primary,control],2,'Browser protocol','user_defined')
     def imported=json('api/protocol',[protocol:pending.protocol]);assert imported[0]==200 && imported[1].protocol.windows[1].Consecutive_samples==4
+    // Import and Export share this door. The page's draft of a rule made here is exported with the engine version of its
+    // estimator, although the page writes its fixed copies into it.
+    def exported=json('api/protocol',[protocol:about.draft.protocol]);assert exported[0]==200 && exported[1].protocol.engine_version=='2.1.0' && exported[1].protocol.windows*.SD_estimator==[Protocol.newEstimator()] && exported[1].protocol.sd_estimator==Protocol.newEstimator()
+    // A legacy file is answered with the estimator of a new protocol for the page to carry into a version 2 rule made from
+    // it; the page's legacy draft, which carries it, is answered with the legacy file, which names no estimator.
+    def legacyFile=Protocol.payload([Protocol.window('Stimulus','Capsaicin',0.5d,3d,8d)],1,'Historical','user_defined')
+    def toPage=json('api/protocol',[protocol:legacyFile]);assert toPage[0]==200 && toPage[1].protocol.schema_version==1 && toPage[1].protocol.sd_estimator==Protocol.newEstimator()
+    def toFile=json('api/protocol',[protocol:toPage[1].protocol]);assert toFile[0]==200 && toFile[1].protocol.schema_version==1 && !toFile[1].protocol.containsKey('sd_estimator')
+    // A file that names one estimator at the top and another in its windows with the engine version of the second is refused.
+    def twoNames=Settings.copy(exported[1].protocol);twoNames.sd_estimator='sample_sd'
+    assert json('api/protocol',[protocol:twoNames])[0]==400
     def inconsistent=Settings.copy(pending.protocol);inconsistent.windows[0].Baseline_s=999
     assert json('api/protocol',[protocol:inconsistent])[0]==400
     def unknown=Settings.copy(pending.protocol);unknown.schema_version=99
@@ -125,7 +139,7 @@ try {
         assert new File(settings.timestamps_file).name=='timestamps.csv' && new File(settings.timestamps_file).text==pending.timestamps.content
         assert settings.timestamps_sha256==Installer.digest(new File(settings.timestamps_file).bytes)
         assert new File(settings.sensitivity_file).name=='sensitivity.csv'
-        job.progress.call(40,'Scoring responses');gate.await(5,TimeUnit.SECONDS);job.check();fixture}
+        job.progress.call(40,'Making the calls');gate.await(5,TimeUnit.SECONDS);job.check();fixture}
     def started=json('api/analyze',[draft:pending,confirmed:true]);assert started[0]==200 && started[1].busy
     long wait=System.nanoTime()+3000000000L;while(sent==null&&System.nanoTime()<wait)Thread.sleep(10)
     assert json('api/analyze',[draft:pending,confirmed:true])[0]==400

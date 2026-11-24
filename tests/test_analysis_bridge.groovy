@@ -46,11 +46,11 @@ plain.text='nothing useful\n';assert Job.engineError(plain)==null
 // Windows line endings reach the log as a blank line after every line; the message is still found.
 plain.text="Error in responder_validate_protocol(protocol) : \n\n  Each stimulus requires a baseline\n\n  outside the other window.\n\nCalls: a -> b\n\n"
 assert Job.engineError(plain)=='Each stimulus requires a baseline outside the other window.'
-// A run in which no cell could be scored is reported as such, with the commonest reason, not as a green "Complete".
+// A run in which no cell got a call is reported as such, with the commonest reason, not as a green "Complete".
 def Settings=loader.loadClass('CalciumAnalysisSettings')
 def empty=new File(root,'no-evaluable');empty.mkdirs()
 new File(empty,'responder_counts.csv').text='"Field","Stimulus","Role","Registered","Responded","Evaluable","Unscorable"\n"F","ATP","Stimulus",3,0,0,3\n'
 new File(empty,'responder_calls.csv').text='"Field","Cell","Role","Status","Reason"\n"F","A","Stimulus","Unscorable","Fewer baseline samples than required"\n"F","B","Stimulus","Unscorable","Fewer baseline samples than required"\n"F","C","Stimulus","Unscorable","Sample gap exceeds the field limit"\n'
-assert Settings.noEvaluableCells(empty)=='Finished, but no cell could be scored for ATP: Fewer baseline samples than required (2 cells). Check the settings; the results were saved for the record.'
+assert Settings.noEvaluableCells(empty)=='Finished, but no cell got a call for ATP: Fewer baseline samples than required (2 cells). Check the settings; the results were saved for the record.'
 assert Settings.noEvaluableCells(new File('tests/fixtures/simpleca'))==null : 'A normal run is still Complete'
 println 'PASS: empty-run warning, stimulus/control window rules before a run, readable engine errors, platform selection, embedded source provenance, CSV quoting, cancellation and process failure'

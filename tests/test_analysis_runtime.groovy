@@ -27,7 +27,8 @@ assert Csv.read(new File(result,'analysis_manifest.csv')).any{it[0]=='plugin_ver
 // The managed Windows/Mac/Linux path also round-trips the portable protocol
 // through the native editor contract and checks the independent shared fixture.
 def portable=Protocol.read(new File('tests/fixtures/response-protocols/golden-protocol.json'))
-def payload=Protocol.payload(portable.windows,2,portable.name,portable.validation_status)
+def payload=Protocol.payload(portable.windows,2,portable.name,portable.validation_status,null,portable.sd_estimator)
+assert payload.sd_estimator=='sample_sd' && payload.engine_version=='2.0.0' : 'a protocol that was read keeps its estimator'
 def shared=Csv.read(new File('build/analysis-fixtures/shared-golden-input.csv'))
 def nativeInput=new File(root,'native measured.csv'),timestamps=new File(root,'per frame times.csv')
 Csv.write(nativeInput,shared.collect{it.take(1)+it.drop(2)})
