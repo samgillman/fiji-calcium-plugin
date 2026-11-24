@@ -94,7 +94,7 @@ is made, and the message says that a moving field is not told from an object.
 
 A cell that is not checked says why in the column Not_checked_because, for example "no peak time"
 or "no ring around the cell". Once the engine has finished, the analysis can no longer be
-cancelled: the checks run to the end.
+cancelled: the checks run to the end. On the page Cancel is then grayed out.
 
 What the check cannot see:
   - It looks only at the largest rise of each cell. An object that makes the call while the
@@ -107,16 +107,39 @@ What the check cannot see:
     outlines or cut by the picture's edge. The table gives the number of usable near-ring sectors
     of 8 and the outline's area for every cell.
   - A flag is not proof. Of 296 ATP responders 2 were flagged, and neither was an object.
-A cell without a flag is not shown to be free of objects. The page does not show these flags yet;
-they are in the table.
+A cell without a flag is not shown to be free of objects.
+
+The flags are on screen in the words of the table. On the page each flag joins the list of flagged
+cells, which has a filter for each kind: Possible passing object, Rise on the edge, Field moved and
+Short separate crossings. The cell panel gives the selected cell's flags under its call line. Click
+one to go to the first frame of the event, in the recording when a still picture is shown; pointing
+at it names the frame. A cell with a call that was not checked says so in its panel, for example
+"passing object not checked: no rise at the peak". When the whole analysis could not be checked,
+the list of flagged cells says why, once. In the Fiji window the flags are under the selected cell's
+call line too; a click goes to that frame in the Traces tab.
 
 REVIEWING THE CALLS
 An evaluable cell can be marked the other way after you have looked at it: a responder as
 not a responder, a non-responder as a responder. Each mark needs a reason: Noise, Movement, Passing
 object, Bad outline or Other. Other needs a short note. A note is one line of plain text, up to 120
 characters, and cannot start with =, +, - or @, which a spreadsheet would read as a formula. A mark
-can be removed. Excluded and unscorable cells have no call and cannot be marked. The page does not
-have the control yet; the marks are kept and counted by the plugin.
+can be removed. Excluded and unscorable cells have no call and cannot be marked. The marks are kept
+and counted by the plugin.
+
+  Marking     Select the cell. Under its call line, on the page and in the Fiji window, the button
+              reads Mark as not a responder on a responder, Mark as a responder on a non-responder,
+              and Remove mark on a marked cell. A form opens in place: Reason, Note, Save and
+              Cancel. On a flagged responder the reason is already chosen from the flag: Passing
+              object for a possible passing object or a rise on the edge, Movement for a field that
+              moved, Noise for short separate crossings. Tab moves through the form, Enter saves,
+              and Esc closes it and keeps the cell. A mark that is refused says why in the form.
+              There is no button on excluded or unscorable cells, in the control window or while an
+              analysis runs.
+  Shown       A marked cell's line starts with the call after review, then the reason and note,
+              then the automatic call: "Cell 97: Did not respond after review · passing object ·
+              automatic call Responded". A mark carried over adds "from an earlier analysis";
+              pointing at it names that analysis, and pointing at the reason gives the time of the
+              mark.
 
   Where       ..._reviewed_calls_<analysis>.csv beside the percent table, one row per mark: the
               cell, the automatic call, the reviewed call, the reason, the note, the time to the
@@ -130,14 +153,22 @@ have the control yet; the marks are kept and counted by the plugin.
               the right while there are marks: responded_after_review,
               percent_responding_after_review, responded_without_them_after_review,
               percent_without_them_after_review and cells_reclassified. With no marks it is as
-              before. The finish message gives both figures, and follows every mark; so does the
-              Fiji window, which reads the marks when it loads results and then names its groups
-              "Responded after review" and "Did not respond after review".
+              before. The finish message gives both figures and follows every mark. So do the page
+              and the Fiji window, at once: the headline gives % responding after review with the
+              count before review beside it, the groups under Show read "Responded after review"
+              and "Did not respond after review", and the outlines, plots, heatmap and tables
+              follow the call after review. On the page Show also has Marked while there are
+              marks, the calls table adds Reviewed call and Review reason (its Export adds
+              Reviewed_call, Review_reason and Review_note), and the Responder counts tab adds
+              After review and Calls changed.
+  Figures     A figure saved while there are marks records calls: after review, the review file
+              and its SHA-256, from the page and from the Fiji window.
   Saved       A mark is saved together with the percent table, or not at all. If the percent table
               is open in another program, close it and set the mark again.
   Methods     A sentence from the marks, for example "3 of 143 cells were reclassified after
               manual review: 2 from responder to non-responder (1 noise, 1 passing object) and 1
-              from non-responder to responder (other)."
+              from non-responder to responder (other)." On the page, Copy Methods sentence beside
+              the calls table copies it; pointing at the button shows it.
   Re-run      When a new analysis of the same recording finishes, the marks of the most recent
               earlier analysis are carried over for every cell whose automatic call and outline
               are unchanged. The others are dropped, and the finish message lists them, for
@@ -385,6 +416,7 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        name, or its number and Enter, or pick it from the list, or click the cell in
                        the picture. No cell again: the box's ✕, a click on empty space in the picture,
                        or Esc outside a box. Esc while typing in the box puts back the open cell.
+                       Esc in the mark form closes it and keeps the cell.
                        A double-click on the picture shows all of it and keeps the cell.
                        With a cell selected the plot shows that cell over the average, with its required
                        rise as a dashed line. Thresholds adds the threshold that did not set the required
@@ -394,9 +426,10 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        magenta (GFP plus the rise above what the background did, averaged over
                        9 x 9 pixels and 5 frames), Change from baseline (that rise alone), Colour
                        overview and Background areas. Outline thickness is beside "All outlines".
-                       Outlines: By call (each outline in the colour of its response call) or Plain
-                       (every outline white; excluded and unscorable cells stay dashed). Number cells
-                       writes each cell's number in its outline. Saved pictures and frames follow both.
+                       Outlines: By call (each outline in the colour of its call, after review when
+                       marked) or Plain (every outline white; excluded and unscorable cells stay
+                       dashed). Number cells writes each cell's number in its outline. Saved pictures
+                       and frames follow both.
                        Zooming the picture: + and - on its top left corner, with the zoom level between
                        them; Whole picture; and Zoom to region (then drag a rectangle; Esc cancels;
                        Shift + drag does the same). With the pointer on the picture the keys +, - and 0
@@ -779,7 +812,9 @@ Quality warnings are a button in the row of result figures ("19 cells flagged").
 for every flagged cell with its call and its flags; a click on a row opens that cell, and the left
 and right arrow keys then step through the flagged cells. Warnings also show as
 a line on the plot card under the selected cell's call, with a Needs quality review entry under
-Show. Warnings do not automatically exclude cells or change saved calls.
+Show. The flags of the checks on the calls are in the same list; a click on a flag in the cell
+panel goes to its frame. While there are review marks, Show also has Marked. Warnings do not
+automatically exclude cells or change saved calls.
 Where things are since 2026.11.20.19: a warning or error about a setting sits under that setting, and
 the Run box only says how many there are ("1 warning above"; click it to go there). The result figures
 at the top are figures only; Show, beside Cell, is the one cell filter.
