@@ -2120,6 +2120,11 @@ const assert = require('assert/strict');
     assert.equal(resultsLoads, 0, 'a mark is applied in place: the results are not loaded again');
     assert.deepEqual(await page.evaluate(() => { const S = window.calciumStep4.S; return [S.cell, S.version === S.state.version, document.activeElement.id, document.getElementById('mark').textContent, document.getElementById('mark-form').hidden]; }),
       ['Cell001', true, 'mark', 'Remove mark', true], 'the cell stays selected; its button now removes the mark');
+    // A poll sent before the answer can come back after it, with the older version: it must not read the results again.
+    let stalePolls = 0;
+    await page.route('**/api/state', async (route) => { const response = await route.fetch(), body = await response.json(); body.version -= 1; stalePolls++; await route.fulfill({ response, body: JSON.stringify(body) }); }, { times: 1 });
+    await page.waitForFunction(() => window.calciumStep4.S.version > 0); await page.waitForTimeout(1500); await page.unroute('**/api/state');
+    assert.deepEqual([stalePolls, resultsLoads], [1, 0], 'a poll answered with the version before the mark does not load the results again');
     assert.match(await text('#verdict'), /^Cell001: Did not respond after review · passing object: bright spot crosses the cell · automatic call Responded · rise held from 4\.5 s · largest rise 100\.0% at 6\.0 s \(needed 10\.0%, the minimum rise\)$/, 'the call after review first, then the reason and the automatic call, then what the automatic call rests on');
     assert.equal(await page.locator('#verdict .dot').evaluate((d) => getComputedStyle(d).backgroundColor), 'rgb(200, 102, 14)', 'its dot has the colour of the call after review');
     assert.match(await page.locator('#verdict span[title^="Marked "]').getAttribute('title'), /^Marked \d{4}-\d\d-\d\d \d\d:\d\d$/, 'when it was marked, in the tooltip');
@@ -2173,7 +2178,12 @@ const assert = require('assert/strict');
     assert.equal(sha(path.join(out, 'browser-results', 'responder_calls.csv')), callsSha, 'the engine\'s table is never written to');
     // A second mark, the other way: Other needs its note.
     await page.click('.tab[data-tab=review]'); await openCell('Cell002'); await page.click('#mark'); assert.ok(await page.isDisabled('#mark-save'));
-    await page.selectOption('#mark-reason', 'Other'); await page.press('#mark-reason', 'Enter'); assert.equal(await text('#mark-said'), 'Other needs a short note.');
+    // Enter on the reason saves, by the page's own key handler: a browser that does not submit a form from a list must save too.
+    await page.selectOption('#mark-reason', 'Other');
+    await page.locator('#mark-reason').evaluate((s) => s.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })));
+    assert.equal(await text('#mark-said'), 'Other needs a short note.', 'Enter on the reason saves, so the missing note is said');
+    await page.selectOption('#mark-reason', 'Noise'); await page.selectOption('#mark-reason', 'Other');
+    await page.press('#mark-reason', 'Enter'); assert.equal(await text('#mark-said'), 'Other needs a short note.');
     await page.fill('#mark-note', 'responds after the window'); await page.press('#mark-note', 'Enter');
     await page.waitForFunction(() => !!window.calciumStep4.S.results.review.marks.Cell002);
     assert.match(await text('#verdict'), /^Cell002: Responded after review · other: responds after the window · automatic call Did not respond · no sustained threshold crossing · /);
