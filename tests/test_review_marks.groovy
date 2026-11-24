@@ -66,6 +66,7 @@ assert first.results.review.findAll{it.key!='after'}==[folder:A,file:null,sha256
 assert first.results.review.after==cells.collectEntries{k,v->[id(k),v[0]]} : 'the call after review of every cell, here the automatic call'
 assert first.state.cancellable==false && first.state.busy==false
 assert !new File(folder,reviewName(A)).exists() && !first.results.tally.containsKey('reviewed') && first.results.tally.rows.every{!it.containsKey('reviewed')} : 'no marks: the tally is as it always was'
+assert first.state.message.startsWith('Complete. Protocol, inputs and tables saved in '+A+'. ') : 'the finish message is the Fiji window\'s: '+first.state.message
 assert first.state.message.endsWith('. All cells: 3 of 6 responded (50.0 %). Chosen blind: 2 of 3 responded (66.7 %). Added after the response was shown: 1 of 3 responded (33.3 %).') : first.state.message
 byte[] percentBefore=new File(folder,percentName(A)).bytes
 assert new String(percentBefore,'UTF-8')=='cells,registered,evaluable,responded,percent_responding,cells_below_zero,evaluable_without_them,responded_without_them,percent_without_them\n'+
@@ -237,17 +238,17 @@ assert page.call('api/review',[cell:id(2),call:'Did not respond',reason:'Noise']
 File fileD=new File(folder,reviewName('SimpleCa-20261101-130000-dddddddd'));String good=fileD.text
 fileD.text=good.replace(Installer.digest(new File(dirD,'responder_calls.csv').bytes),'0'*64)
 page.session.load(dirD);def mismatch=page.call('api/results')[1]
-assert mismatch.review.problem=='The review file '+fileD.name+' does not match the calls of this analysis, so its marks are not used.' && mismatch.review.marks==[:] && !mismatch.tally.containsKey('reviewed') : mismatch.review
+assert mismatch.review.problem=='The review file '+fileD.name+' does not match the calls of this analysis, so its marks are not used. Move it out of the folder to review this analysis again.' && mismatch.review.marks==[:] && !mismatch.tally.containsKey('reviewed') : mismatch.review
 def blocked=page.call('api/review',[cell:id(1),call:'Did not respond',reason:'Noise'])
 assert blocked[0]==400 && blocked[1].error=='The review file '+fileD.name+' does not match the calls of this analysis, so its marks are not used. Move it out of the folder to review this analysis again.'
 fileD.text=good.replace('SimpleCa-20261101-130000-dddddddd','SimpleCa-elsewhere')
-page.session.load(dirD);assert page.call('api/results')[1].review.problem=='The review file '+fileD.name+' is for another analysis, so its marks are not used.'
+page.session.load(dirD);assert page.call('api/results')[1].review.problem=='The review file '+fileD.name+' is for another analysis, so its marks are not used. Move it out of the folder to review this analysis again.'
 fileD.text=good.replace(',Noise,',',Tired,')
-page.session.load(dirD);assert page.call('api/results')[1].review.problem.endsWith('does not match the calls of this analysis, so its marks are not used.')
+page.session.load(dirD);assert page.call('api/results')[1].review.problem.endsWith('does not match the calls of this analysis, so its marks are not used. Move it out of the folder to review this analysis again.')
 File percentD=new File(folder,percentName('SimpleCa-20261101-130000-dddddddd'))
 assert !percentD.readLines('UTF-8')[0].contains('after_review') : 'a review file that is not used leaves no after-review columns in the percent table'
 fileD.text='not,a,review\n'
-page.session.load(dirD);assert page.call('api/results')[1].review.problem=='The review file '+fileD.name+' cannot be read, so its marks are not used.'
+page.session.load(dirD);assert page.call('api/results')[1].review.problem=='The review file '+fileD.name+' cannot be read, so its marks are not used. Move it out of the folder to review this analysis again.'
 fileD.text=good;page.session.load(dirD);def back=page.call('api/results')[1]
 assert back.review.problem=='' && back.review.marks.keySet()==[id(2)] as Set && back.tally.reviewed==true && percentD.readLines('UTF-8')[0].endsWith(',cells_reclassified')
 // a file saved by a spreadsheet program, with a byte order mark and blank lines at the end, is read; an empty one holds no marks
