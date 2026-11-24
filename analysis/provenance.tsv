@@ -1,5 +1,6 @@
 simpleca_repository	https://github.com/samgillman/simplecaapp
-simpleca_commit	67efdd241c3f9b25df3755ee359c153e45aae847
+simpleca_commit	b92d4ce98ddab3fceac352179703c1f48f044c90
+changed_in_this_plugin	The whole-trace noise estimator larger_of_baseline_sd_and_trace_noise and response engine 2.1.0 were added in this plugin and are not in SimpleCa
 LICENSE_sha256	7497d3228fc24d0cf8b27b7513cdf69bb32adb54cfbab66a774dbe005eeac41a
 responders.R_sha256	527ed05626dd7fdadbf435bfbe449bb6ea026ffa101c9a43075479d50829efee
 utils.R_sha256	e0cb5ada312d99ccb2cb66c156d33314f4abb6d7489c36560dac003e1bc9d322

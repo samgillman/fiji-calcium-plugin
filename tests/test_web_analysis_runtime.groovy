@@ -57,7 +57,8 @@ try {
     assert result.callsByWindow['Stimulus::Capsaicin'].InvalidF0.Status=='Excluded' && result.callsByWindow['Stimulus::Capsaicin'].Missing.Status=='Unscorable'
     assert result.frameTimes==times && result.baseline==[0,1.5] && state.frameTimes==times
     assert result.protocol.field_overrides[0].Field=='Golden field' && result.appliedProtocol.field_overrides==null
-    assert result.manifest.protocol_schema_version=='2' && result.manifest.simpleca_commit=='67efdd241c3f9b25df3755ee359c153e45aae847'
+    assert result.manifest.protocol_schema_version=='2' && result.manifest.simpleca_commit=='b92d4ce98ddab3fceac352179703c1f48f044c90'
+    assert result.manifest.changed_in_this_plugin=='The whole-trace noise estimator larger_of_baseline_sd_and_trace_noise and response engine 2.1.0 were added in this plugin and are not in SimpleCa'
     // The golden protocol is a sample_sd rule: engine 2.1.0 scores it as 2.0.0 did, and the record says which noise was used.
     assert result.manifest.sd_estimator=='sample_sd' && result.manifest.protocol_engine_version=='2.0.0' && result.manifest.engine_version=='2.1.0'
     assert result.manifest.noise_rule=='Noise is the sample SD of the local prestimulus baseline.' && result.protocol.engine_version=='2.0.0'
