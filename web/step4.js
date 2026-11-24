@@ -19,7 +19,7 @@
   // Movie frames: compressed images are kept for the session (about 40 MB for 300 full-size frames, much less at display size),
   // decoded ones only near the playhead. Keys carry the server's frame version, which changes with the baseline behind
   // "Change from baseline" and the display range, so a stale image is never reused.
-  const Buf = { version: null, blobs: new Map(), bitmaps: new Map(), inflight: new Map(), decoding: new Map(), failed: new Map(), bytes: 0 };
+  const Buf = { version: null, blobs: new Map(), bitmaps: new Map(), inflight: new Map(), decoding: new Map(), failed: new Map(), bytes: 0, closed: '' };   // closed: what Fiji says when the recording was closed there
   const PARALLEL = 4, DECODED_AROUND = 30, MAX_BYTES = 90e6, MAX_FPS = 30;
   Object.defineProperty(Pic, 'loading', { get: () => Buf.inflight.size > 0 || Buf.decoding.size > 0 });
   // The playback clock runs in recording seconds; frames are shown when the playhead reaches their timestamps.
@@ -944,7 +944,9 @@
     const job = { w };
     job.promise = (async () => {
       const response = await fetch('api/frame?f=' + f + '&mode=' + mode + '&w=' + w + '&v=' + encodeURIComponent(Buf.version));
+      if (response.status === 410) Buf.closed = (await response.json().catch(() => ({}))).error || '';   // the recording was closed in Fiji
       if (!response.ok) throw new Error('The recording frame could not be loaded.');
+      Buf.closed = '';
       const blob = await response.blob();
       if (key.startsWith(Buf.version + '|')) {
         const old = Buf.blobs.get(key); if (old) Buf.bytes -= old.blob.size;
@@ -1015,7 +1017,7 @@
   function frameFailed(f, mode) {
     if (S.view !== mode || S.frame !== f && !S.timer) return;
     Pic.error = 'The recording frame could not be loaded.'; play(false);
-    movieMessage('Frame ' + f + ' could not load. Keep the recording open in Fiji, then move the slider to retry.', true);
+    movieMessage(Buf.closed || 'Frame ' + f + ' could not load. Keep the recording open in Fiji, then move the slider to retry.', true);
     $('picture-note').textContent = Pic.shownFrame ? 'Last displayed frame: ' + Pic.shownFrame : 'No movie frame loaded';
   }
   function requestFrame() {
@@ -1706,7 +1708,7 @@
   const VIEW_NAMES = { picture: 'colour overview', raw: 'as recorded', flat: 'background removed', green: 'GFP', magenta: 'response in magenta', change: 'change from baseline' };
   async function viewCanvas(frame, labelled) {
     const f = frame || S.frame; let image = S.view === 'background' ? Pic.background : Pic.base;
-    if (!still()) { const reply = await fetch('api/frame?f=' + f + '&mode=' + S.view + '&v=' + encodeURIComponent(Buf.version || ''), { cache: 'no-store' }); if (!reply.ok) throw new Error('Frame ' + f + ' could not be read.'); image = await createImageBitmap(await reply.blob()); }
+    if (!still()) { const reply = await fetch('api/frame?f=' + f + '&mode=' + S.view + '&v=' + encodeURIComponent(Buf.version || ''), { cache: 'no-store' }); if (!reply.ok) throw new Error(reply.status === 410 && (await reply.json().catch(() => ({}))).error || 'Frame ' + f + ' could not be read.'); image = await createImageBitmap(await reply.blob()); }
     if (!image) throw new Error('The picture is not loaded yet.');
     const iw = S.info.width, ih = S.info.height, scale = pictureScale(), key = labelled ? [] : pictureKey(), font = getComputedStyle(document.body).fontFamily;
     const unit = Math.max(1, iw / 1388), size = Math.round(20 * unit), gap = Math.round(30 * unit), measure = document.createElement('canvas').getContext('2d'); measure.font = size + 'px ' + font;
