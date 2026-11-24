@@ -128,8 +128,13 @@ tbody tr { cursor: pointer; } tbody tr:nth-child(even) { background: #FBFCFD; } 
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
 th.cell-column, td.cell-column { position: sticky; left: 0; background: #fff; box-shadow: 1px 0 var(--gray-100); z-index: 2; }
 th.cell-column { background: var(--gray-50); z-index: 3; }
-tr.on td.cell-column { background: #d5ebf5; }
+/* the column that stays put takes the stripe, the pointer's row and the chosen row like the rest of its row */
+tbody tr:nth-child(even) td.cell-column { background: #FBFCFD; } tbody tr:hover td.cell-column { background: var(--blue-light); } tbody tr.on td.cell-column { background: #d5ebf5; }
+/* the Metrics + quality table list names its tables in full */
+#metrics-table { max-width: none; }
 td.empty-table { padding: 24px; color: var(--gray-600); }
+/* a turned table (the responder counts: a row for each column) does not sort */
+th.fixed { cursor: default; } th.fixed:hover { color: inherit; }
 
 .tip { position: fixed; z-index: 10; pointer-events: none; background: var(--gray-900); color: #fff; font-size: 12px; padding: 4px 8px; border-radius: var(--radius); box-shadow: var(--shadow-2); white-space: nowrap; }
 body.no-side aside { display: none; }

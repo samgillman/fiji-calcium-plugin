@@ -93,7 +93,8 @@ try {
         }
         ui.tabs.selectedIndex=1
         // Headline tiles and outline styles repeat the saved Responder counts and calls; they add no new calculation.
-        assert ui.responding.value.text=='67 %' && ui.responding.caption.text.contains('2 of 3 evaluable')
+        // one decimal, as on the page and in the finishing sentence (2 of 3 is 66.7 %, not 67 %)
+        assert ui.responding.value.text=='66.7 %' && ui.responding.caption.text.contains('2 of 3 evaluable')
         assert ui.responding.caption.text.contains('Capsaicin')
         assert ui.registered.value.text=='6' && ui.excluded.value.text=='2' && ui.unscorable.value.text=='1'
         assert ui.cellPicture.calls.Cell001=='Responded' && ui.cellPicture.calls.Cell002=='Did not respond'

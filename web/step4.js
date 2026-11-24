@@ -46,6 +46,8 @@
   /** A number as somebody types it into a box: digits with at most one decimal mark (a point or a comma) and a sign before
    *  them. null: the box is empty. NaN: anything else, also "1e1" and "0x10", which a program reads as numbers and a person does not. */
   function typedNumber(text) { const t = String(text).trim().replace(',', '.').replace('−', '-'); return t === '' ? null : /^[-+]?(\d+\.?\d*|\.\d+)$/.test(t) ? Number(t) : NaN; }
+  /** A whole number as typed (typedNumber), for a box that counts frames; NaN for anything else, also "2.5", never rounded. */
+  const typedWhole = (text) => { const v = typedNumber(text); return Number.isInteger(v) ? v : NaN; };
 
   /** Sets a canvas to the size it is shown at (sharp on high-density screens) and returns a context in CSS pixels. */
   function fit(canvas) {
@@ -495,8 +497,7 @@
     BASELINE_SD_AT_LEAST_ONE_THIRD_LOCAL_F0: 'Baseline noise is at least a third of the local F₀, so the fractional rise threshold is dominated by noise',
     DURATION_BELOW_SAMPLE_INTERVAL: 'Minimum response duration is shorter than one frame interval; timing is coarsely resolved',
     reference_below_3_baseline_sd_review: 'Low F₀ relative to baseline noise; review fractional amplitudes and the response call',
-    TRACE_BELOW_MINUS_ONE: 'ΔF/F₀ falls below −1; corrected fluorescence becomes negative relative to its positive reference. Review background and baseline stability',
-    RISE_START_BELOW_BASELINE_SD: 'The legacy 10% rise level is below baseline SD; the rise-time estimate is sensitive to baseline noise'
+    TRACE_BELOW_MINUS_ONE: 'ΔF/F₀ falls below −1; corrected fluorescence becomes negative relative to its positive reference. Review background and baseline stability'
   };
   const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
   /** How many cells of the selected window got a call (responded or did not). Zero means the run finished without a single call. */
@@ -507,8 +508,8 @@
     let best = ''; for (const [reason, n] of seen) if (!best || n > seen.get(best)) best = reason; return best;
   }
   const flagText = (flag) => FLAG_TEXT[flag] || flag.replace(/_/g, ' ');
-  /** Each flag in two or three words, for the list of flagged cells; FLAG_TEXT has the full sentence. */
-  const FLAG_SHORT = { BASELINE_SD_AT_LEAST_ONE_THIRD_LOCAL_F0: 'Noisy baseline', reference_below_3_baseline_sd_review: 'Low F₀', TRACE_BELOW_MINUS_ONE: 'Below zero', RISE_START_BELOW_BASELINE_SD: 'Rise starts in the noise' };
+  /** Each flag in two or three words, for the list of flagged cells and the tables; FLAG_TEXT has the full sentence. */
+  const FLAG_SHORT = { BASELINE_SD_AT_LEAST_ONE_THIRD_LOCAL_F0: 'Noisy baseline', reference_below_3_baseline_sd_review: 'Low F₀', TRACE_BELOW_MINUS_ONE: 'Below zero', DURATION_BELOW_SAMPLE_INTERVAL: 'Duration under a frame' };
   const flagShort = (flag) => FLAG_SHORT[flag] || flagText(flag);
   function showQuality() {
     if (!S.results) return;
@@ -547,91 +548,178 @@
     }
     for (const message of new Set(notices)) { const li = document.createElement('li'); li.textContent = message; list.appendChild(li); }
   }
-  /** What each saved metric column is: [column, name, unit, where it is measured or counted from, response].
-   *  response: the column describes the timing or shape of a response, so it is summarised only over cells that responded
-   *  (for a cell that did not respond it is the timing of noise). The order here is the order in the summary. A numeric
-   *  column that is not listed is still shown, under its saved name. */
-  const METRICS = [
-    ['Peak_dFF0', 'Peak', 'ΔF/F₀', 'whole recording'],
-    ['Response_Amplitude', 'Peak above baseline', 'ΔF/F₀', 'whole recording'],
-    ['Peak_increase', 'Peak rise', 'fraction of baseline', 'response window'],
-    ['Window_peak_local_fraction', 'Peak rise', 'fraction of baseline', 'response window'],
-    ['SNR', 'Signal-to-noise', 'peak ÷ baseline SD', 'whole recording'],
-    ['AUC', 'Area under the curve', 'ΔF/F₀ × s', 'whole recording, signed'],
-    ['Window_AUC_fraction_s', 'Area under the curve', 'fraction × s', 'response window, signed'],
-    ['Baseline_SD', 'Baseline SD', 'ΔF/F₀', 'F₀ frames'],
-    ['F0', 'F₀', 'gray levels', 'F₀ frames'],
-    ['Baseline_SD_raw', 'Baseline SD', 'gray levels', 'F₀ frames'],
-    ['Onset_s', 'Onset time', 's', 'from recording start', true],
-    ['Run_start_s', 'Onset time', 's', 'from recording start', true],
-    ['Response_latency_s', 'Latency', 's', 'from the stimulus', true],
-    ['Confirmation_s', 'Response confirmed', 's', 'from recording start', true],
-    ['Run_end_s', 'Response end', 's', 'from recording start', true],
-    ['Run_duration_s', 'Response duration', 's', 'above the threshold', true],
-    ['Time_to_Peak', 'Peak time', 's', 'from recording start', true],
-    ['Peak_latency_s', 'Peak latency', 's', 'from the stimulus', true],
-    ['Time_to_25_Peak', '25 % of peak reached', 's', 'from recording start', true],
-    ['Time_to_50_Peak', '50 % of peak reached', 's', 'from recording start', true],
-    ['Time_to_75_Peak', '75 % of peak reached', 's', 'from recording start', true],
-    ['Rise_Time', 'Rise time', 's', '10 % to 90 % of peak', true],
-    ['Rise_Rate_10_90_dFF0_per_s', 'Rise rate', 'ΔF/F₀ per s', '10 % to 90 % of peak', true],
-    ['FWHM', 'FWHM', 's', 'width at half of peak', true],
-    ['FWHM_Lower_Bound', 'FWHM, lower bound', 's', 'still above half at the end', true],
-    ['Half_Width', 'Half-width', 's', 'FWHM ÷ 2', true],
-  ];
-  const METRIC = new Map(METRICS.map((m, order) => [m[0], { name: m[1], unit: m[2], measured: m[3], response: !!m[4], order }]));
-  /** Columns that say how the analysis was set up or how much of a window had data, not what a cell did: left out of the summary. */
-  const NOT_METRICS = new Set(['Reference_value', 'Baseline_SD_input', 'Baseline_samples', 'Normalization_minimum_reference', 'Baseline_start_s', 'Baseline_end_s', 'Stimulus_onset_s', 'Start_s', 'End_s', 'Window_AUC_start_s', 'Window_AUC_end_s', 'Window_AUC_covered_s', 'Window_AUC_coverage_fraction', 'Run_samples', 'Eligible']);
-  /** Mean, SD, SEM and number of cells of every metric: for all cells, by response call, and by how the cells were chosen
-   *  when that was recorded. Worked out here from the saved per-cell tables, which are not changed.
-   *  - Each metric is one row. Saved columns that hold the same number for every cell in this analysis (which ones do
-   *    depends on the settings) share a row, and "Saved as" names them all.
-   *  - The timing and shape of a response are summarised over the cells that responded. */
+  // ---------------------------------------------------------------- the saved columns in words: one dictionary for every table on screen
+  const DFF = 'ΔF/F₀', SEC = 's', PCT = '%', GRAY = 'gray levels', AREA = 'ΔF/F₀ × s', RATE = 'ΔF/F₀ per s', FRAMES = 'frames', CELLS = 'cells', PIXELS = 'pixels';
+  /** Decimals on screen by unit, the same down a whole column: time 2, ΔF/F₀ 3, percentages 1, gray levels 2. */
+  const DECIMALS = { [SEC]: 2, [DFF]: 3, [PCT]: 1, [GRAY]: 2, [AREA]: 2, [RATE]: 3, [FRAMES]: 0, [CELLS]: 0, [PIXELS]: 0 };
+  /** Units written after a column's name ("Peak, ΔF/F₀"). A percentage carries its "%" in every cell; a count needs none. */
+  const NAMED_UNITS = new Set([SEC, DFF, GRAY, AREA, RATE, PIXELS]);
+  /** What each saved column is: [saved name, name on screen, unit, where it is measured, more]. more: alias (the saved column
+   *  it equals by definition in this plugin: the two are shown once), response (the timing or shape of a response: shown for a
+   *  cell that responded only, and summarised over those cells), fraction (saved as a fraction, shown in %), decimals, about.
+   *  Two tables can use one saved name for two things (Status, Baseline_SD), so the words are looked up by table: "cell" is
+   *  metrics.csv and cell_quality.csv, "window" the calls, counts and window metrics; "any" holds the rest. The saved files keep
+   *  their own names, values and every column; a column missing here is shown under its saved name in words (columnWords). */
+  const COLUMN_WORDS = {
+    any: [
+      ['Cell', 'Cell'], ['Field', 'Recording'], ['Role', 'Role'], ['Stimulus', 'Stimulus'], ['Population', 'Population'], ['Reason', 'Reason'], ['QC_flags', 'Flags', '', '', { flags: true }],
+      ['Condition', 'Condition'], ['Biological_unit', 'Biological unit'], ['Group', 'Group'], ['Replicate', 'Replicate'], ['Selection_basis', 'Chosen'], ['Note', 'Note'],
+      ['Raw_QC_available', 'Raw checks'], ['Signal_kind', 'Signal'], ['Input_mode', 'Input'], ['Normalized_units', 'Normalized units'], ['Normalization_reference', 'Reference'],
+      ['Responded', 'Responded', CELLS], ['Evaluable', 'Evaluable', CELLS], ['Percent_responding', '% responding', PCT],
+      ['ROI_ID', 'Outline ID'], ['Accepted', 'Accepted'], ['Included_in_measurement', 'Measured'], ['Exclusion_reason', 'Why left out'], ['ROI_sha256', 'Outline hash'],
+      ['Area_pixels', 'Area', PIXELS], ['Background_pixels', 'Background area', PIXELS], ['Near_edge', 'Near the edge'],
+      ['Accepted_ROIs', 'Accepted outlines', CELLS], ['Premeasurement_excluded', 'Left out before measuring', CELLS], ['Registered_for_analysis', 'Registered', CELLS],
+      ['Normalization_valid', 'Normalization valid', CELLS], ['Normalization_excluded', 'Normalization excluded', CELLS], ['Fields', 'Recordings', '', '', { decimals: 0 }],
+      ['Replicates_evaluable', 'Replicates', '', '', { decimals: 0 }], ['Mean_replicate_percent', 'Mean of replicates', PCT], ['SD_replicate_percent', 'SD of replicates', PCT], ['Cell_pooled_percent', 'Cells pooled', PCT],
+    ],
+    cell: [
+      ['Status', 'Normalization', '', '', { about: 'Whether F₀ can normalize this cell; the response call is under Call' }], ['Reason', 'Normalization reason'],
+      ['F0', 'F₀', GRAY, 'F₀ frames'], ['Reference_value', 'Reference value', GRAY, 'F₀ frames', { alias: 'F0' }],
+      ['Baseline_SD_raw', 'Raw baseline SD', GRAY, 'F₀ frames'], ['Baseline_SD_input', 'Input baseline SD', GRAY, 'F₀ frames', { alias: 'Baseline_SD_raw' }],
+      ['Baseline_samples', 'F₀ frames', FRAMES], ['Normalization_minimum_reference', 'Smallest F₀ allowed', GRAY], ['Metric_status', 'Metrics'],
+      ['Peak_dFF0', 'Peak', DFF, 'whole recording'], ['Response_Amplitude', 'Peak above baseline', DFF, 'whole recording', { alias: 'Peak_dFF0' }],
+      ['Time_to_Peak', 'Time to peak', SEC, 'whole recording, from its start', { response: true }],
+      ['Time_to_25_Peak', 'Time to 25% of peak', SEC, 'whole recording, from its start', { response: true }],
+      ['Time_to_50_Peak', 'Time to 50% of peak', SEC, 'whole recording, from its start', { response: true }],
+      ['Time_to_75_Peak', 'Time to 75% of peak', SEC, 'whole recording, from its start', { response: true }],
+      ['Rise_Time', 'Rise time', SEC, 'whole recording, 10% to 90% of peak', { response: true }], ['Rise_Rate_10_90_dFF0_per_s', 'Rise rate', RATE, 'whole recording, 10% to 90% of peak', { response: true }],
+      ['AUC', 'AUC', AREA, 'whole recording, signed'],
+      ['FWHM', 'FWHM', SEC, 'whole recording, width at half of peak', { response: true }], ['FWHM_Censored', 'FWHM cut off', '', 'still above half at the end'],
+      ['FWHM_Lower_Bound', 'FWHM, lower bound', SEC, 'whole recording, still above half at the end', { response: true }], ['Half_Width', 'Half-width', SEC, 'whole recording, FWHM ÷ 2', { response: true }],
+      ['Baseline_SD', 'Baseline SD', DFF, 'F₀ frames'], ['SNR', 'Signal-to-noise', '', 'whole recording, peak ÷ baseline SD', { decimals: 2 }],
+    ],
+    window: [
+      ['Status', 'Call'],
+      ['Baseline_start_s', 'Baseline start', SEC], ['Baseline_end_s', 'Baseline end', SEC], ['Stimulus_onset_s', 'Stimulus at', SEC], ['Start_s', 'Window start', SEC], ['End_s', 'Window end', SEC],
+      ['Floor_local_fraction', 'Minimum rise', PCT, '', { fraction: true }], ['SD_multiplier', 'SD multiple', '', '', { decimals: 1 }], ['Duration_mode', 'Duration in'], ['Min_duration_s', 'Shortest response', SEC],
+      ['Consecutive_samples', 'Frames in a row', FRAMES], ['Max_gap_s', 'Largest gap', SEC], ['Min_baseline_samples', 'Fewest baseline frames', FRAMES], ['Noise_floor_local_fraction', 'Noise floor', PCT, '', { fraction: true }],
+      ['Expected_interval_s', 'Expected frame interval', SEC, '', { decimals: 6 }], ['Baseline_s', 'Baseline length', SEC], ['Protocol_version', 'Protocol version', '', '', { decimals: 0 }], ['Protocol_name', 'Protocol'],
+      ['Engine_version', 'Engine version'], ['Validation_status', 'Protocol status'], ['Signal_reference', 'Signal reference'], ['SD_estimator', 'SD estimator'], ['Threshold_operator', 'Threshold test'],
+      ['Coverage_policy', 'Coverage rule'], ['Response_direction', 'Direction'], ['Smoothing', 'Smoothing'], ['Protocol_hash', 'Protocol hash'], ['Applied_protocol_hash', 'Applied protocol hash'],
+      ['Resolved_interval_s', 'Frame interval', SEC, '', { decimals: 6 }], ['Gap_mode', 'Gap rule'], ['Nominal_min_samples', 'Frames required', FRAMES], ['Response_reference', 'Response reference'],
+      ['Window_clipped', 'Window cut short'], ['Window_warning', 'Window warning'], ['Effective_end_s', 'Window end used', SEC], ['Field_reason', 'Recording note'],
+      ['Requested_response_span_s', 'Window length set', SEC], ['Response_observed_span_s', 'Window length recorded', SEC], ['Baseline_observed_span_s', 'Baseline length recorded', SEC],
+      ['Baseline_mean', 'Baseline mean', PCT, 'response baseline, of the local level', { fraction: true }],
+      ['Baseline_SD', 'Baseline SD', PCT, 'response baseline, of the local level', { fraction: true, about: 'Not the SD of the F₀ frames in the metrics' }],
+      ['Baseline_SD_global', 'Global baseline SD', PCT, '', { fraction: true }], ['Baseline_samples', 'Baseline frames', FRAMES], ['Response_samples', 'Window frames', FRAMES],
+      ['Local_F0_relative', 'Local level ÷ F₀', '', '', { decimals: 3 }], ['Local_reference_relative', 'Local reference ÷ F₀', '', '', { decimals: 3, alias: 'Local_F0_relative' }],
+      ['Input_reference_value', 'Input reference', '', '', { decimals: 3 }], ['Local_reference_value', 'Local reference', '', '', { decimals: 3 }],
+      ['Threshold_increase', 'Required rise', PCT, 'of the local level', { fraction: true }], ['Peak_increase', 'Largest rise', PCT, 'response window, of the local level', { fraction: true }],
+      ['Floor_threshold', 'Minimum rise threshold', PCT, '', { fraction: true, alias: 'Floor_local_fraction' }], ['Noise_threshold', 'Noise threshold', PCT, '', { fraction: true }], ['Noise_SD_used', 'Noise SD used', PCT, '', { fraction: true }],
+      ['Threshold_source', 'Required rise set by', '', '', { values: { Floor: 'Minimum rise' } }], ['Margin', 'Largest ÷ required', '', '', { decimals: 2 }],
+      ['Onset_s', 'Onset', SEC, 'from recording start', { response: true, about: 'The first frame of the held rise' }], ['Run_start_s', 'Run start', SEC, 'from recording start', { response: true, alias: 'Onset_s' }],
+      ['Confirmation_s', 'Response confirmed', SEC, 'from recording start', { response: true }], ['Run_end_s', 'Response end', SEC, 'from recording start', { response: true }],
+      ['Run_duration_s', 'Response duration', SEC, 'above the required rise', { response: true }], ['Run_samples', 'Frames held', FRAMES, 'above the required rise', { response: true }],
+      ['Response_latency_s', 'Onset latency', SEC, 'from the stimulus', { response: true }],
+      ['Peak_s', 'Largest rise at', SEC, 'from recording start', { response: true, about: 'The highest frame of the response window; it comes before the onset when that frame alone was not held' }],
+      ['Peak_latency_s', 'Largest rise latency', SEC, 'from the stimulus', { response: true }], ['Window_peak_local_fraction', 'Window peak', PCT, 'response window', { fraction: true, alias: 'Peak_increase' }],
+      ['Window_AUC_fraction_s', 'Window AUC', AREA, 'response window, signed'], ['Window_AUC_start_s', 'Window AUC start', SEC], ['Window_AUC_end_s', 'Window AUC end', SEC],
+      ['Window_AUC_covered_s', 'Window AUC covered', SEC], ['Window_AUC_coverage_fraction', 'Window AUC coverage', PCT, '', { fraction: true }], ['AUC_method', 'AUC method'],
+      ['Eligible', 'Eligible'], ['Measurements_available', 'Measured'], ['Response_window_complete', 'Window complete'],
+      ['Raw_F0', 'Raw F₀', '', '', { decimals: 3 }], ['Raw_baseline_SD', 'Raw baseline SD', '', '', { decimals: 3 }], ['Raw_baseline_samples', 'Raw baseline frames', FRAMES], ['Local_F0_raw', 'Raw local F₀', '', '', { decimals: 3 }],
+      ['Registered', 'Registered', CELLS], ['Nonresponders', 'Did not respond', CELLS], ['Excluded', 'Excluded', CELLS], ['Unscorable', 'Unscorable', CELLS],
+      ['Control_name', 'Control'], ['Control_effective_end_s', 'Control window end used', SEC], ['KCl_effective_end_s', 'KCl window end used', SEC], ['Control_window_warning', 'Control window warning'],
+      ['KCl_window_warning', 'KCl window warning'], ['Control_field_reason', 'Control note'], ['KCl_field_reason', 'KCl note'],
+    ],
+  };
+  const WORDS = Object.fromEntries(Object.entries(COLUMN_WORDS).map(([family, list]) => [family, new Map(list.map(([saved, name, unit, measured, more]) => [saved, Object.assign({ saved, name, unit: unit || '', measured: measured || '' }, more)]))]));
+  const FAMILY = { metrics: 'cell', quality: 'cell', calls: 'window', windowMetrics: 'window', counts: 'window', sensitivityCalls: 'window', sensitivityCounts: 'window', negativeControlCalls: 'window', negativeControlCounts: 'window' };
+  /** A saved column of a table in words. One the dictionary does not know keeps its saved name, with spaces for the underscores. */
+  function columnWords(kind, saved) {
+    const known = (WORDS[FAMILY[kind]] && WORDS[FAMILY[kind]].get(saved)) || WORDS.any.get(saved); if (known) return known;
+    const timed = /_s$/.test(saved); return { saved, name: saved.replace(/_s$/, '').replace(/_/g, ' '), unit: timed ? SEC : '', measured: '' };
+  }
+  /** The saved columns of a table that are the same as this one by definition. */
+  const twinsOf = (kind, saved) => Array.from((WORDS[FAMILY[kind]] || new Map()).values()).filter((w) => w.alias === saved).map((w) => w.saved);
+  const TABLE_NAMES = { metrics: 'Whole-recording metrics', quality: 'Cell quality', registry: 'Registered cells', windowMetrics: 'Response-window metrics', replicates: 'Biological-replicate counts', groups: 'Condition counts',
+    unassigned: 'Unassigned biological units', cohort: 'Cohort flow', recordingMetadata: 'Recording details', sensitivityCalls: 'Sensitivity: cell calls', sensitivityCounts: 'Sensitivity: responder counts',
+    negativeControlCalls: 'Negative controls: cell calls', negativeControlCounts: 'Negative controls: responder counts' };
+  /** The response call of a cell, put beside it in the per-cell metric tables (it is not a column of those files). */
+  const CALL_COLUMN = { name: 'Call', call: true, about: 'The response call for the primary stimulus, from the cell response calls' };
+  /** The columns a table shows until "Show all saved columns" is ticked, in this order. */
+  const SHORT = {
+    calls: ['Cell', 'Role', 'Stimulus', 'Status', 'Reason', 'Threshold_increase', 'Threshold_source', 'Peak_increase', 'Peak_s', 'Onset_s', 'Run_samples', 'Response_latency_s', 'Run_duration_s', 'Window_AUC_fraction_s', 'Baseline_SD', 'QC_flags'],
+    windowMetrics: ['Cell', 'Role', 'Stimulus', 'Status', 'Reason', 'Peak_increase', 'Peak_latency_s', 'Onset_s', 'Response_latency_s', 'Run_duration_s', 'Window_AUC_fraction_s', 'QC_flags'],
+    metrics: ['Cell', CALL_COLUMN, 'Status', 'Peak_dFF0', 'Time_to_Peak', 'Rise_Time', 'FWHM', 'AUC', 'SNR', 'Baseline_SD', 'F0'],
+    quality: ['Cell', CALL_COLUMN, 'Status', 'Reason', 'F0', 'Baseline_SD_raw', 'Baseline_samples', 'QC_flags'],
+    counts: ['Stimulus', 'Role', 'Population', 'Registered', 'Responded', 'Nonresponders', 'Evaluable', 'Excluded', 'Unscorable', 'Percent_responding', 'Start_s', 'End_s', 'Effective_end_s', 'Window_warning', 'Floor_local_fraction', 'SD_multiplier', 'Consecutive_samples'],
+  };
+  /** A number as the tables write it: so many decimals, the true minus, never "−0.000", and "%" after a percentage. */
+  function decimal(v, decimals, percent) {
+    if (!finite(v)) return '–';
+    let text = v.toFixed(decimals); if (/^-[0.]*$/.test(text)) text = text.slice(1);
+    return text.replace('-', '−') + (percent ? '%' : '');
+  }
+  /** A share of cells as the page writes it everywhere: one decimal and "%"; a dash when no cell was evaluable. */
+  const shareText = (part, whole) => whole ? decimal(100 * part / whole, 1, true) : '–';
+  const primaryWindow = () => { const windows = (S.results && S.results.windows) || []; return windows.find((w) => w.role === 'Stimulus') || windows[0]; };
+  /** The calls of the primary stimulus, by cell: what the per-cell metrics and the summary are split by. */
+  const primaryCalls = () => { const r = S.results, w = primaryWindow(); return (w && r.callsByWindow && r.callsByWindow[w.key]) || r.calls || {}; };
+  /** The rows of the summary, always these and in this order, so that the summaries of different recordings line up: [table,
+   *  saved column]. Columns that are the same by definition (alias) are not rows of their own: "Saved as" names them. The
+   *  response is timed in the response window; the timing of the whole recording's peak is named for the whole recording. */
+  const SUMMARY_ROWS = [['metrics', 'Peak_dFF0'], ['windowMetrics', 'Peak_increase'], ['metrics', 'SNR'], ['metrics', 'AUC'], ['windowMetrics', 'Window_AUC_fraction_s'],
+    ['metrics', 'Baseline_SD'], ['metrics', 'F0'], ['metrics', 'Baseline_SD_raw'],
+    ['windowMetrics', 'Onset_s'], ['windowMetrics', 'Response_latency_s'], ['windowMetrics', 'Confirmation_s'], ['windowMetrics', 'Run_end_s'], ['windowMetrics', 'Run_duration_s'], ['windowMetrics', 'Peak_latency_s'],
+    ['metrics', 'Time_to_Peak'], ['metrics', 'Time_to_25_Peak'], ['metrics', 'Time_to_50_Peak'], ['metrics', 'Time_to_75_Peak'], ['metrics', 'Rise_Time'], ['metrics', 'Rise_Rate_10_90_dFF0_per_s'],
+    ['metrics', 'FWHM'], ['metrics', 'FWHM_Lower_Bound'], ['metrics', 'Half_Width']];
+  /** Mean, SD, SEM and number of cells of every metric: for all cells that were not excluded, by response call, and by how the
+   *  cells were chosen when that was recorded. Worked out here from the saved per-cell tables, which are not changed.
+   *  - The rows are SUMMARY_ROWS; the saved file has every one of them (no cells where a column was not saved), the screen
+   *    those that were saved. A response-window column comes from the window metrics, or from the calls when there are none.
+   *  - The timing and shape of a response are summarised over the cells that responded.
+   *  - On screen the two kinds of choosing are columns only when both have cells; n has a column of its own. */
   function metricSummary() {
-    const r = S.results, tags = r.chosenBlind || null, primary = (r.windows || []).find((w) => w.role === 'Stimulus') || (r.windows || [])[0];
-    const called = (primary && r.callsByWindow && r.callsByWindow[primary.key]) || r.calls || {}, status = (n) => (called[n] || {}).Status;
-    const groups = [['All cells', () => true], ['Responded', (n) => status(n) === 'Responded'], ['Did not respond', (n) => status(n) === 'Did not respond']];
-    if (tags) groups.push(['Chosen blind', (n) => tags[n] === true], ['Added after the response', (n) => tags[n] === false]);
-    // every numeric column of the two per-cell tables, as cell -> number
-    const columns = [];
-    for (const key of ['metrics', 'windowMetrics']) {
-      const data = r.tables[key]; if (!data || !data.rows.length) continue;
-      const cell = data.header.indexOf('Cell'), role = data.header.indexOf('Role'); if (cell < 0) continue;
-      const rows = data.rows.filter((row) => role < 0 || row[role] === 'Stimulus');
-      data.header.forEach((name, c) => {
-        if (c === cell || NOT_METRICS.has(name)) return;
-        const pairs = rows.map((row) => [row[cell], row[c]]).filter((pair) => pair[1] !== '' && pair[1] != null && pair[1] !== 'NA');
-        if (!pairs.length || !pairs.every((pair) => isFinite(Number(pair[1])))) return;
-        const known = METRIC.get(name) || { name, unit: '', measured: key === 'windowMetrics' ? 'response window' : '', response: false, order: METRICS.length + columns.length };
-        columns.push({ saved: [name], values: new Map(pairs.map((pair) => [pair[0], Number(pair[1])])), ...known });
-      });
-    }
-    columns.sort((a, b) => a.order - b.order);
-    // columns with the same number for every cell become one metric
-    const same = (a, b) => { if (a.values.size !== b.values.size) return false; for (const [cell, x] of a.values) { const y = b.values.get(cell); if (y === undefined || Math.abs(x - y) > 1e-9 * Math.max(1, Math.abs(x), Math.abs(y))) return false; } return true; };
-    const metrics = [];
-    for (const column of columns) { const twin = metrics.find((m) => same(m, column)); if (twin) twin.saved.push(column.saved[0]); else metrics.push(column); }
-    const long = [['Metric', 'Unit', 'Measured', 'Saved_as', 'Group', 'Mean', 'SD', 'SEM', 'N_cells']], wide = [];
-    for (const m of metrics) {
-      const line = [m.name, m.unit, m.measured];
-      for (const [group, belongs] of groups) {
-        const xs = []; for (const [cell, x] of m.values) if (belongs(cell) && (!m.response || status(cell) === 'Responded')) xs.push(x);
-        const k = xs.length, mean = k ? xs.reduce((a, b) => a + b, 0) / k : NaN, sd = k > 1 ? Math.sqrt(xs.reduce((a, b) => a + (b - mean) * (b - mean), 0) / (k - 1)) : NaN, sem = k > 1 ? sd / Math.sqrt(k) : NaN;
-        long.push([m.name, m.unit, m.measured, m.saved.join('; '), group, k ? mean : '', k > 1 ? sd : '', k > 1 ? sem : '', k]);
-        line.push(k ? (+mean.toPrecision(4)) + (k > 1 ? ' ± ' + (+sem.toPrecision(3)) : '') + '  (n = ' + k + ')' : '–');
+    const r = S.results, tags = r.chosenBlind || null, primary = primaryWindow(), called = primaryCalls(), status = (n) => (called[n] || {}).Status;
+    const left = (n) => status(n) === 'Excluded' || (S.quality[n] || {}).Status === 'Excluded';
+    const groups = [['All cells', (n) => !left(n)], ['Responded', (n) => status(n) === 'Responded'], ['Did not respond', (n) => status(n) === 'Did not respond']];
+    if (tags) groups.push(['Chosen blind', (n) => tags[n] === true && !left(n)], ['Added after the response', (n) => tags[n] === false && !left(n)]);
+    const both = !!tags && S.info.names.some((n) => tags[n] === true) && S.info.names.some((n) => tags[n] === false), shown = groups.filter((g, i) => i < 3 || both);
+    /** The saved table that holds a column, and its rows for the primary stimulus. */
+    const source = (kind, saved) => {
+      for (const key of kind === 'windowMetrics' ? ['windowMetrics', 'calls'] : [kind]) {
+        const data = r.tables[key]; if (!data || !data.header.includes(saved) || !data.header.includes('Cell')) continue;
+        const role = data.header.indexOf('Role');
+        return { data, rows: data.rows.filter((row) => role < 0 || row[role] === ((primary && primary.role) || 'Stimulus')) };
       }
-      line.push(m.saved.join(', ')); wide.push(line);
+      return null;
+    };
+    const long = [['Metric', 'Unit', 'Measured', 'Saved_as', 'Group', 'Mean', 'SD', 'SEM', 'N_cells']], wide = [];
+    for (const [kind, saved] of SUMMARY_ROWS) {
+      const words = columnWords(kind, saved), found = source(kind, saved), scale = words.fraction ? 100 : 1, decimals = words.decimals != null ? words.decimals : DECIMALS[words.unit];
+      const names = found ? [saved].concat(twinsOf(kind, saved).filter((twin) => found.data.header.includes(twin))) : [saved], values = new Map();
+      if (found) { const cell = found.data.header.indexOf('Cell'), c = found.data.header.indexOf(saved);
+        for (const row of found.rows) { const v = row[c] === '' || row[c] == null ? NaN : Number(row[c]); if (isFinite(v)) values.set(row[cell], scale * v); } }
+      const stats = groups.map(([group, belongs]) => {
+        const xs = []; for (const [cell, x] of values) if (belongs(cell) && (!words.response || status(cell) === 'Responded')) xs.push(x);
+        const k = xs.length, mean = k ? xs.reduce((a, b) => a + b, 0) / k : NaN, sd = k > 1 ? Math.sqrt(xs.reduce((a, b) => a + (b - mean) * (b - mean), 0) / (k - 1)) : NaN;
+        return { group, k, mean, sd, sem: k > 1 ? sd / Math.sqrt(k) : NaN };
+      });
+      for (const s of stats) long.push([words.name, words.unit, words.measured, found ? names.join('; ') : '', s.group, s.k ? s.mean : '', s.k > 1 ? s.sd : '', s.k > 1 ? s.sem : '', s.k]);
+      if (!found) continue;
+      const line = [{ text: words.name, title: 'Saved as ' + names.join(', ') + (words.fraction ? ', as fractions' : '') }, { text: words.unit }, { text: words.measured }];
+      for (const s of stats.filter((s) => shown.some((g) => g[0] === s.group))) {
+        line.push(s.k ? { text: decimal(s.mean, decimals, false) + (s.k > 1 ? ' ± ' + decimal(s.sem, decimals, false) : '') + (words.unit === PCT ? '%' : ''), title: 'Mean ' + s.mean + (s.k > 1 ? ', SD ' + s.sd + ', SEM ' + s.sem : ''), key: s.mean, num: true } : { text: '–', key: '', num: true });
+        line.push({ text: String(s.k), key: s.k, num: true });
+      }
+      wide.push(line);
     }
-    return { wide: { header: ['Metric', 'Unit', 'Measured'].concat(groups.map((g) => g[0]), ['Saved as']), rows: wide, computed: true }, long };
+    const columns = [{ name: 'Metric' }, { name: 'Unit' }, { name: 'Measured' }].concat(...shown.map(([group]) => [{ name: group, title: 'Mean ± SEM of the cells in this group' }, { name: 'n', title: 'Cells in ' + group.toLowerCase() }]));
+    return { wide: { header: columns.map((c) => c.name), columns: columns.map((c, index) => Object.assign({ given: true, index }, c)), rows: wide }, long };
   }
   const csvText = (rows) => rows.map((row) => row.map((v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(',')).join('\n') + '\n';
   /** The table on the Metrics tab as CSV rows: the summary in long form (one row per metric and group), any other table as saved. */
-  function metricRows() { const key = $('metrics-table').value; if (key === 'summary') return metricSummary().long; const data = S.results.tables[key] || { header: [], rows: [] }; return [data.header].concat(data.rows); }
+  function metricRows() { const key = $('metrics-table').value; if (key === 'summary') return metricSummary().long; return savedRows(key); }
+  /** A saved table as CSV rows, with its saved names and every column. */
+  const savedRows = (key) => { const data = (S.results && S.results.tables[key]) || { header: [], rows: [] }; return [data.header].concat(data.rows); };
+  const METRIC_HELP = {
+    summary: 'Mean ± SEM. Onset, latency, time to peak, rise and width are for cells that responded. Point at a metric for its saved columns; the saved file also has the SD.',
+    metrics: 'Measured over the whole recording. AUC is signed and turns negative when the signal drifts down. Times are from the start of the recording; rise time, from 10% to 90% of the peak, can follow noise. For the response itself, choose Response-window metrics.',
+    windowMetrics: 'Measured in the response window against the baseline just before the stimulus. Latencies are from the stimulus, to the nearest frame.',
+  };
   function showMetricTable() {
-    const key = $('metrics-table').value;
-    if (key === 'summary') { $('metric-help').textContent = 'Mean ± SEM (n). Onset, latency, peak time, rise and width are given for cells that responded. Saved columns with the same numbers share a row. The saved file also has the SD.'; table('table-metrics', metricSummary().wide); return; }
-    $('metric-help').textContent = key === 'metrics' ? 'Legacy metrics: AUC is the signed net integral over the whole recording; negative drift can make it negative. Peak time is a recording timestamp. Rise time is the 10–90% crossing interval after the display baseline and can be noise-sensitive. For stimulus-specific values, choose Response-window metrics (including Peak_latency_s and Window_AUC_fraction_s).' : key === 'windowMetrics' ? 'Response-window metrics use the baseline before the stimulus. Peak_latency_s is measured from the stimulus (the first frame after it), to the nearest frame; Window_AUC_fraction_s covers the response window.' : '';
-    table('table-metrics', S.results.tables[key]);
+    const key = $('metrics-table').value; $('metric-help').textContent = METRIC_HELP[key] || ''; $('all-metric-columns-label').hidden = !SHORT[key];
+    if (key === 'summary') table('table-metrics', metricSummary().wide); else table('table-metrics', S.results.tables[key], key);
   }
 
   function draftChanged() {
@@ -671,7 +759,7 @@
     if (prefs['step4.every']) { try { window.localStorage.setItem('step4.every', prefs['step4.every']); } catch (blocked) { } }
     if (prefs['step4.help']) { const on = prefs['step4.help'] === '1'; document.body.classList.toggle('show-help', on); $('toggle-help').textContent = on ? 'Hide explanations' : 'Show explanations'; }
     $('recording').textContent = S.info.recording; $('recording').title = S.info.recording;
-    document.title = S.info.names.length + ' cells · SimpleCa²⁺ · ' + S.info.recording + ' · ' + S.info.key.slice(0, 6); $('version').textContent = 'Ca²⁺ Imaging (Wang Lab) ' + S.info.pluginVersion;
+    document.title = S.info.names.length + ' cells · Step 4 · ' + S.info.recording + ' · ' + S.info.key.slice(0, 6); $('version').textContent = 'Ca²⁺ Imaging (Wang Lab) ' + S.info.pluginVersion;
     S.initialDraft = clone(S.info.draft);
     S.revision = Math.max(0, Number(S.info.draftRevision) || 0); fillDraft(S.info.draft); S.draftAck = JSON.stringify(collectDraft());
     $('time').max = Math.max(1, S.info.frames);
@@ -749,7 +837,7 @@
   async function loadResults() {
     S.results = await api('results'); const r = S.results;
     const records = (data) => Object.fromEntries(((data && data.rows) || []).map((row) => [row[data.header.indexOf('Cell')], Object.fromEntries(data.header.map((key, i) => [key, row[i]]))]));
-    S.quality = records(r.tables.quality); S.metrics = records(r.tables.metrics);
+    S.quality = records(r.tables.quality);
     const windows = r.windows && r.windows.length ? r.windows : [{ key: 'Stimulus::' + (r.counts.Stimulus || 'Stimulus'), role: 'Stimulus', stimulus: r.counts.Stimulus || 'Stimulus' }];
     const selector = $('response-window'); selector.innerHTML = '';
     for (const w of windows) { const o = document.createElement('option'); o.value = w.key; o.textContent = w.stimulus + (w.role === 'Control' ? ' · control' : ' · primary'); selector.appendChild(o); }
@@ -759,14 +847,13 @@
     $('window-select-label').hidden = !(S.results.windows && S.results.windows.length > 1);
     for (const tab of document.querySelectorAll('.tab')) tab.disabled = false;
     const tables = $('metrics-table'); tables.innerHTML = '';
-    const titles = { metrics: 'Legacy whole-recording metrics', quality: 'Cell quality', registry: 'Registered cells', windowMetrics: 'Response-window metrics', replicates: 'Biological-replicate counts', groups: 'Condition counts', unassigned: 'Unassigned biological units', cohort: 'Cohort flow', recordingMetadata: 'Recording details', sensitivityCalls: 'Sensitivity: cell calls', sensitivityCounts: 'Sensitivity: responder counts', negativeControlCalls: 'Negative controls: cell calls', negativeControlCounts: 'Negative controls: responder counts' };
     { const o = document.createElement('option'); o.value = 'summary'; o.textContent = 'Summary: mean ± SEM of each metric'; tables.appendChild(o); }
-    for (const key of Object.keys(r.tables || {})) if (!['calls', 'counts'].includes(key) && r.tables[key].header.length) { const o = document.createElement('option'); o.value = key; o.textContent = titles[key] || key.replace(/_/g, ' '); tables.appendChild(o); }
+    for (const key of Object.keys(r.tables || {})) if (!['calls', 'counts'].includes(key) && r.tables[key].header.length) { const o = document.createElement('option'); o.value = key; o.textContent = TABLE_NAMES[key] || key.replace(/_/g, ' '); tables.appendChild(o); }
     tables.value = 'summary'; showMetricTable();
     S.withoutBelowZero = false;   // every cell is counted until the switch says otherwise
-    table('table-calls', r.tables.calls); table('table-counts', r.tables.counts); showTally();
-    for (const id of ['save-plot', 'save-heatmap', 'save-plot-folder', 'save-heatmap-folder', 'edit-plot', 'edit-heatmap', 'data-save', 'data-download', 'metrics-save', 'metrics-download']) $(id).disabled = false;
-    for (const id of ['plot-saved', 'heatmap-saved', 'data-saved', 'metrics-saved']) $(id).textContent = '';
+    showCalls(); showCounts(); showTally();
+    for (const id of ['save-plot', 'save-heatmap', 'save-plot-folder', 'save-heatmap-folder', 'edit-plot', 'edit-heatmap', 'data-save', 'data-download', 'metrics-save', 'metrics-download', 'calls-save', 'calls-download', 'counts-save', 'counts-download']) $(id).disabled = false;
+    for (const id of ['plot-saved', 'heatmap-saved', 'data-saved', 'metrics-saved', 'calls-saved', 'counts-saved']) $(id).textContent = '';
     if (!$('panel-data').hidden) showData();
     for (const option of $('signal').options) option.disabled = option.value !== 'dff' && !hasTable(option.value);
     if ($('signal').selectedOptions[0].disabled) { S.signal = Data.signal = 'dff'; $('signal').value = 'dff'; $('data-signal').value = 'dff'; }
@@ -777,16 +864,18 @@
   function tallyRows() {
     const t = S.results && S.results.tally; if (!t || !t.rows) return null;
     const rows = {};
-    for (const row of t.rows) { const c = S.withoutBelowZero ? row.without : row.counted; rows[row.key] = { label: row.label, responded: c[0], evaluable: c[1], share: c[1] ? Math.round(100 * c[0] / c[1]) + '%' : '–' }; }
+    for (const row of t.rows) { const c = S.withoutBelowZero ? row.without : row.counted; rows[row.key] = { label: row.label, responded: c[0], evaluable: c[1], share: shareText(c[0], c[1]) }; }
     return rows;
   }
   /** The same tally as a table on the Responder counts tab: every row with all its cells and without those below zero. */
   function showTally() {
     const t = S.results && S.results.tally; $('tally-box').hidden = !t; if (!t) return;
-    const percent = (c) => c[1] ? +(100 * c[0] / c[1]).toFixed(1) : '';
+    const share = (c) => ({ text: shareText(c[0], c[1]), key: c[1] ? c[0] / c[1] : '', num: true }), count = (n) => ({ text: String(n), key: n, num: true });
     // six columns, so the table fits its tab; the saved file has every number in a column of its own
-    table('table-tally', { computed: true, header: ['Cells', '% responding', 'Responded', 'Evaluable', 'Cells below zero', 'Without them'],
-      rows: t.rows.map((row) => [row.label, percent(row.counted), row.counted[0], row.counted[1], row.counted[2] - row.without[2], row.without[1] ? percent(row.without) + ' % (' + row.without[0] + ' of ' + row.without[1] + ')' : '–']) });
+    const header = ['Cells', '% responding', 'Responded', 'Evaluable', 'Cells below zero', 'Without them'];
+    table('table-tally', { header, columns: header.map((name, index) => ({ name, index, given: true })),
+      rows: t.rows.map((row) => [row.label, share(row.counted), count(row.counted[0]), count(row.counted[1]), count(row.counted[2] - row.without[2]),
+        row.without[1] ? { text: shareText(row.without[0], row.without[1]) + ' (' + row.without[0] + ' of ' + row.without[1] + ')', key: row.without[0] / row.without[1], num: true } : { text: '–', key: '', num: true }]) });
   }
   /** The headline numbers for the selected response window (the primary stimulus or its control), from the saved counts. */
   function showTiles() {
@@ -809,7 +898,7 @@
       $('tile-responding').innerHTML = '<b>' + tally.all.share + '</b><span>' + label + ': ' + tally.all.responded + ' of ' + tally.all.evaluable + ' evaluable cells' + (S.withoutBelowZero && below ? ' · ' + below + ' below zero left out' : '') + '</span>'
         + lines.map(([text, title]) => '<span class="tile-line" title="' + escape(title) + '">' + escape(text) + '</span>').join('');
     }
-    else $('tile-responding').innerHTML = '<b>' + (isFinite(percent) ? Math.round(percent) + '%' : '–') + '</b><span>' + all + '</span>';
+    else $('tile-responding').innerHTML = '<b>' + decimal(percent, 1, true) + '</b><span>' + all + '</span>';
     $('tile-registered').firstChild.textContent = whole('Registered'); $('tile-excluded').firstChild.textContent = whole('Excluded'); $('tile-unscorable').firstChild.textContent = whole('Unscorable');
     for (const [id, key] of [['tile-excluded', 'Excluded'], ['tile-unscorable', 'Unscorable']]) $(id).classList.toggle('zero', whole(key) === '0');
   }
@@ -837,9 +926,11 @@
     if (!name) verdict.textContent = !S.results ? '' : S.listed.length ? 'No cell selected.' : 'No cells in this group.';
     else if (!row) verdict.innerHTML = S.results ? '<b>' + escape(shortName(name)) + '</b> · no response call was saved for this cell' : '';
     else {
-      const parts = ['<span class="dot" style="background:' + CALL[kind(row.Status)] + '"></span><b>' + escape(shortName(name)) + ': ' + escape(row.Status || '') + '</b>', escape((row.Reason || '').toLowerCase())];
+      // a responder: what the call rests on, the rise held long enough, in place of the engine's "sustained threshold crossing"
+      const basis = row.Status === 'Responded' ? heldRise(row) : '';
+      const parts = ['<span class="dot" style="background:' + CALL[kind(row.Status)] + '"></span><b>' + escape(shortName(name)) + ': ' + escape(row.Status || '') + '</b>', escape(basis || (row.Reason || '').toLowerCase())];
       const rise = number(row.Peak_increase), at = number(row.Peak_s), need = number(row.Threshold_increase), setBy = { noise: ', set by its noise', floor: ', the minimum rise' }[requiredBy(row)] || '';
-      if (isFinite(rise)) parts.push('largest rise ' + (100 * rise).toFixed(1) + '%' + (isFinite(at) ? ' at ' + at.toFixed(1) + ' s' : '') + (isFinite(need) ? ' (needed ' + (100 * need).toFixed(1) + '%' + setBy + ')' : ''));
+      if (isFinite(rise)) parts.push('largest rise ' + decimal(100 * rise, 1, true) + (isFinite(at) ? ' at ' + decimal(at, 1) + ' s' : '') + (isFinite(need) ? ' (needed ' + decimal(100 * need, 1, true) + setBy + ')' : ''));
       verdict.innerHTML = parts.filter(Boolean).join(' · ');
       verdict.title = 'Rise and threshold are shown as percentages of local prestimulus fluorescence. The saved call table stores the corresponding fractions.';
     }
@@ -848,6 +939,13 @@
     for (const row of document.querySelectorAll('tbody tr')) row.classList.toggle('on', row.dataset.cell === name);
     if (Pic.zoom > 1 && name) centreOn(S.info.names.indexOf(name));
     Plot.dirty = true; drawPlot(); drawPicture(); drawHeatmap();
+  }
+  /** The rise a response call rests on, from the saved call: "rise held for 2 frames from 121.0 s, 102.0 s after the stimulus"
+   *  (onset, run length and latency). Empty when the call saved no onset. */
+  function heldRise(row) {
+    const onset = number(row.Onset_s !== undefined && row.Onset_s !== '' ? row.Onset_s : row.Run_start_s), frames = number(row.Run_samples), after = number(row.Response_latency_s);
+    if (!isFinite(onset)) return '';
+    return 'rise held ' + (isFinite(frames) ? 'for ' + plural(Math.round(frames), 'frame') + ' ' : '') + 'from ' + decimal(onset, 1) + ' s' + (isFinite(after) ? ', ' + decimal(after, 1) + ' s after the stimulus' : '');
   }
   const escape = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   /** The plot opens on the average alone and stays on what was chosen: picking a cell never changes what the plot shows.
@@ -1543,38 +1641,55 @@
   }
   /** Places legend entries: in rows from the left, wrapped by whole entries, with one row height and even gaps; or stacked in
    *  one column. As few rows as the width allows, and those rows as even as they can be: two entries and two, or three and
-   *  two, never three with the fourth left alone. No entry is wider than the width: one that would be is shortened (fitted).
-   *  Returns each entry's place and words and the size of the block; drawLegend draws it.
-   *  ctx carries the font. Lengths are written for 12-pixel text, as in the painters. */
+   *  two, never three with the fourth left alone. No entry is wider than the width: the words of one that would be go on two
+   *  lines or more (legendLines), and its row is that much taller. Returns each entry's place and lines and the size of the
+   *  block; drawLegend draws it. ctx carries the font. Lengths are written for 12-pixel text, as in the painters. */
   function legendLayout(ctx, items, width, look, stacked) {
-    const u = (n) => n * look.px / 12, rowHeight = u(18), gap = u(14), texts = items.map((item) => fitted(ctx, item.text, width - u(21))), wide = texts.map((text) => u(21) + ctx.measureText(text).width);
+    const u = (n) => n * look.px / 12, rowHeight = u(18), lineHeight = u(15), gap = u(14), lines = items.map((item) => legendLines(ctx, item.text, width - u(21)));
+    const wide = lines.map((words) => u(21) + words.reduce((most, line) => Math.max(most, ctx.measureText(line).width), 0)), tall = lines.map((words) => rowHeight + (words.length - 1) * lineHeight);
     /** The rows, filled from the left: an entry starts a new row when it would pass the width, or when its row holds "most" entries already. */
-    const fill = (most) => { const rows = []; for (const w of wide) { const row = rows[rows.length - 1]; if (row && !stacked && row.n < most && row.width + gap + w <= width) { row.n++; row.width += gap + w; } else rows.push({ n: 1, width: w }); } return rows; };
+    const fill = (most, sizes) => { const rows = []; for (const w of sizes || wide) { const row = rows[rows.length - 1]; if (row && !stacked && row.n < most && row.width + gap + w <= width) { row.n++; row.width += gap + w; } else rows.push({ n: 1, width: w }); } return rows; };
     let rows = fill(Infinity);
     // the same number of rows with the entries shared out evenly, when they fit that way; else with one more to a row, and so on
     if (!stacked) for (let most = Math.ceil(wide.length / rows.length); most < wide.length; most++) { const even = fill(most); if (even.length === rows.length) { rows = even; break; } }
-    const places = []; let i = 0;
-    rows.forEach((row, r) => { let x = 0; for (let k = 0; k < row.n; k++, i++) { places.push({ item: items[i], text: texts[i], x, y: r * rowHeight }); x += wide[i] + gap; } });
-    return { places, rowHeight, width: rows.reduce((most, row) => Math.max(most, row.width), 0), height: rows.length * rowHeight };
+    // entries of different widths can still leave the last one alone ("response window" under two long entries): filled from
+    // the end instead, the same number of rows may end on two
+    if (!stacked && rows.length > 1 && rows[rows.length - 1].n === 1) { const back = fill(Infinity, wide.slice().reverse()).reverse(); if (back.length === rows.length && back[back.length - 1].n > 1) rows = back; }
+    const places = []; let i = 0, y = 0;
+    for (const row of rows) { let x = 0, high = 0; for (let k = 0; k < row.n; k++, i++) { places.push({ item: items[i], lines: lines[i], text: lines[i].join(' '), x, y }); x += wide[i] + gap; high = Math.max(high, tall[i]); } y += high; }
+    return { places, rowHeight, lineHeight, width: rows.reduce((most, row) => Math.max(most, row.width), 0), height: y };
+  }
+  /** The words of a legend entry as lines no wider than "room": one line when they fit; else broken between words, never inside
+   *  "± SEM" or the number of cells, "(n = 116)", so that nothing of the entry is lost. Only a word wider than the room on its
+   *  own is shortened (fitted). */
+  function legendLines(ctx, text, room) {
+    if (ctx.measureText(text).width <= room) return [text];
+    const lines = [];
+    for (const word of text.match(/± \S+|\(n = [^)]*\)|\S+/g) || [text]) {
+      const longer = lines.length ? lines[lines.length - 1] + ' ' + word : null;
+      if (longer !== null && ctx.measureText(longer).width <= room) lines[lines.length - 1] = longer; else lines.push(fitted(ctx, word, room));
+    }
+    return lines;
   }
   /** Draws a legend placed by legendLayout with its left top corner at (left, top). A swatch shows the thing as it is drawn:
    *  a line at its own width and dashes, on its band when it has one (two lines, one above the other, for an entry that
-   *  stands for lines of two kinds); a box in a band's colour, as thin as a bar when it stands for one. */
+   *  stands for lines of two kinds); a box in a band's colour, as thin as a bar when it stands for one. The swatch stands
+   *  beside the first line of an entry's words. */
   function drawLegend(ctx, layout, left, top, look) {
     const u = (n) => n * look.px / 12; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineCap = 'butt';
-    for (const { item, text, x, y } of layout.places) {
+    for (const { item, lines, x, y } of layout.places) {
       const sx = left + x, sy = top + y + layout.rowHeight / 2;
       if (item.band) { ctx.fillStyle = item.band; ctx.fillRect(sx, sy - u(5), u(16), u(10)); }
       if (item.kind === 'line') { const rule = (line, y) => { ctx.strokeStyle = line.colour; ctx.lineWidth = line.width; ctx.setLineDash(line.dash || []); ctx.beginPath(); ctx.moveTo(sx, y); ctx.lineTo(sx + u(16), y); ctx.stroke(); ctx.setLineDash([]); };
         if (item.second) { rule(item, sy - u(2.5)); rule(item.second, sy + u(2.5)); } else rule(item, sy); }
       else { const high = item.height || u(10); ctx.fillStyle = item.colour; ctx.fillRect(sx + u(2), sy - high / 2, u(14), high);
         if (item.outline) { ctx.strokeStyle = shade(look.ink, 0.3); ctx.lineWidth = 1; ctx.strokeRect(sx + u(2) + 0.5, sy - high / 2 + 0.5, u(14) - 1, high - 1); } }
-      ctx.fillStyle = look.ink; writeText(ctx, text, sx + u(21), sy, look);
+      ctx.fillStyle = look.ink; lines.forEach((line, k) => writeText(ctx, line, sx + u(21), sy + k * layout.lineHeight, look));
     }
   }
   /** A text as it fits into a width: the text itself, or its beginning with an ellipsis in place of the rest. The one rule for
-   *  text that does not fit, wherever a painter writes words that somebody typed or that grow with the data: titles, legend
-   *  entries, the stimulus label. ctx carries the font. */
+   *  text on one line that does not fit, wherever a painter writes words that somebody typed: titles, the stimulus label, a
+   *  word of a legend entry wider than the legend. ctx carries the font. */
   function fitted(ctx, text, room) {
     if (ctx.measureText(text).width <= room) return text;
     let n = text.length; while (n > 0 && ctx.measureText(text.slice(0, n).trimEnd() + '…').width > room) n--;
@@ -1627,13 +1742,13 @@
     const u = (n) => n * look.px / 12, widest = (texts) => texts.reduce((most, text) => Math.max(most, ctx.measureText(text).width), 0);
     const column = look.legend === 'right' && items.length ? legendLayout(ctx, items, w / 3, look, true) : null;
     const L = Math.ceil(u(6) + look.px + u(6) + widest(tickLabels) + u(4) + look.tickLength);
-    const R = Math.ceil(u(14) + (column ? u(12) + column.width + u(4) : 0)), W = Math.max(10, w - L - R);
+    const R = Math.ceil(u(14) + (column ? u(12) + column.width + u(8) : 0)), W = Math.max(10, w - L - R);
     const rows = look.legend === 'top' && items.length ? legendLayout(ctx, items, w - L - u(6), look, false) : null, top = u(8), under = top + (rows ? rows.height + u(4) : 0);
     const labelled = parts.stimulus !== null && !!look.stimulusText, barred = !!parts.spans.response;
     const labels = labelled ? u(15) : 0, T = Math.round(under + labels + (barred ? look.windowBar + u(4) : labelled ? u(2) : 0));
     const below = look.tickLength + u(3) + look.px + u(5), H = Math.max(10, Math.floor(h - T - below - look.px - u(5)));
     return { L, T, W, H, labelY: under + u(7), lineTop: labelled ? under + labels : T, barY: barred ? T - u(4) - look.windowBar : null, titleY: T + H + below,
-      legend: column ? { layout: column, x: w - u(4) - column.width, y: T } : rows ? { layout: rows, x: L, y: top } : null };
+      legend: column ? { layout: column, x: w - u(8) - column.width, y: T } : rows ? { layout: rows, x: L, y: top } : null };
   }
   /** Everything about the time course that is settled before a line is drawn, in a w × h area by a look: the time and the range
    *  shown, what is drawn in them (plotParts), the legend's entries, the Y axis numbers and where the parts go (g: plotLayout).
@@ -2007,36 +2122,93 @@
     return { name: g.names[row], frame: f, inside: x >= g.L, gap: wanted < g.bounds[f][0] || wanted > g.bounds[f][1] };
   }
 
-  // ---------------------------------------------------------------- tables (the saved tables themselves; long decimals are shortened for reading only)
-  function table(id, data) {
-    const element = $(id); element.innerHTML = ''; if (!data || !data.header) return;
-    const core = ['Cell', 'Role', 'Stimulus', 'Status', 'Reason', 'QC_flags', 'Baseline_mean', 'Baseline_SD', 'Threshold_increase', 'Peak_increase', 'Response_latency_s', 'Peak_latency_s', 'Run_duration_s', 'Run_samples', 'Window_peak_local_fraction', 'Window_AUC_fraction_s'];
-    let columns = data.header.map((name, index) => ({ name, index }));
-    if (id === 'table-calls' && !$('all-call-columns').checked) columns = core.filter((name) => data.header.includes(name)).map((name) => ({ name, index: data.header.indexOf(name) }));
-    columns = [...columns.filter((c) => c.name === 'Cell'), ...columns.filter((c) => c.name !== 'Cell')];
-    // the recording's name, the role and the stimulus repeat on every row of a one-window run: leave them out so the numbers fit
-    if (data.rows.length > 1) columns = columns.filter((c) => !['Field', 'Role', 'Stimulus'].includes(c.name) || new Set(data.rows.map((row) => row[c.index])).size > 1);
-    // a saved table keeps its saved column names; pointing at one says what the column is
-    const frozen = (name) => name === 'Cell' || (!!data.computed && name === data.header[0]);
-    const about = (name) => { const m = METRIC.get(name); return data.computed ? '' : (m ? m.name + (m.unit ? ' (' + m.unit + ')' : '') + (m.measured ? ', ' + m.measured : '') + '. ' : '') + 'Saved column: ' + name; };
-    const cellColumn = data.header.indexOf('Cell'), numeric = data.header.map((_, c) => data.rows.some((row) => row[c] !== '' && row[c] !== undefined) && data.rows.every((row) => row[c] === '' || row[c] === undefined || isFinite(Number(row[c]))));
-    const head = element.createTHead().insertRow(), body = element.createTBody(); let sorted = -1, direction = 1;
-    const fill = (rows) => { body.innerHTML = '';
-      if (!rows.length) { const td = body.insertRow().insertCell(); td.colSpan = Math.max(1, columns.length); td.className = 'empty-table'; td.textContent = 'No rows were saved for this table.'; return; }
-      for (const row of rows) { const tr = body.insertRow(); if (cellColumn >= 0) { tr.dataset.cell = row[cellColumn]; tr.classList.toggle('on', row[cellColumn] === S.cell); }
-        for (const { name, index: c } of columns) { const value = row[c] == null ? '' : row[c], td = tr.insertCell();
-          if (numeric[c] && value !== '') { const v = Number(value); td.className = 'num'; td.textContent = Number.isInteger(v) ? String(v) : String(+v.toPrecision(4)); td.title = value; }
-          else if (name === 'Cell') { td.textContent = shortName(value); td.title = value; } else td.textContent = value;
-          if (frozen(name)) td.classList.add('cell-column');
-        }
-      }
+  // ---------------------------------------------------------------- tables: the saved tables in words, rounded for reading only
+  /** The columns of a saved table as they are shown: its short set (every column with "Show all saved columns"), the Cell
+   *  first, a column that is the same as another by definition once, the response call beside the cell in the per-cell metric
+   *  tables, and the recording, role and stimulus only when they differ between rows. Each says how its values are written. */
+  function tableColumns(kind, data, everything) {
+    const has = (name) => data.header.includes(name);
+    const describe = (saved, index) => {
+      const words = columnWords(kind, saved), values = data.rows.map((row) => row[index]).filter((v) => v !== '' && v != null && v !== 'NA');
+      const numeric = values.length > 0 && values.every((v) => isFinite(Number(v)));
+      const decimals = words.decimals != null ? words.decimals : DECIMALS[words.unit] != null ? DECIMALS[words.unit] : values.every((v) => Number.isInteger(Number(v))) ? 0 : 3;
+      return Object.assign({}, words, { index, numeric, decimals });
     };
-    columns.forEach(({ name, index: c }) => { const th = document.createElement('th'); th.textContent = name; th.title = about(name); if (frozen(name)) th.classList.add('cell-column'); head.appendChild(th);
-      th.addEventListener('click', () => { direction = sorted === c ? -direction : 1; sorted = c; for (const other of head.children) other.classList.remove('up', 'down'); th.classList.add(direction > 0 ? 'up' : 'down');
-        fill(data.rows.slice().sort((a, b) => direction * (numeric[c] ? (Number(a[c] === '' ? NaN : a[c]) || 0) - (Number(b[c] === '' ? NaN : b[c]) || 0) : String(a[c]).localeCompare(String(b[c]))))); }); });
-    body.addEventListener('click', (event) => { const tr = event.target.closest('tr'); if (tr && tr.dataset.cell) chooseCell(tr.dataset.cell); });
-    fill(data.rows);
+    const all = data.header.map(describe), joined = FAMILY[kind] === 'cell' && has('Cell');
+    let columns = everything || !SHORT[kind] ? all.slice() : SHORT[kind].map((name) => name === CALL_COLUMN ? (joined ? CALL_COLUMN : null) : all.find((c) => c.saved === name)).filter(Boolean);
+    if (!everything) columns = columns.filter((c) => !c.alias || !has(c.alias));
+    if (joined && !columns.includes(CALL_COLUMN)) columns.splice(columns.findIndex((c) => c.saved === 'Cell') + 1, 0, CALL_COLUMN);
+    columns = [...columns.filter((c) => c.saved === 'Cell'), ...columns.filter((c) => c.saved !== 'Cell')];
+    // the recording's name, the role and the stimulus repeat on every row of a one-window run: left out so the numbers fit
+    if (data.rows.length > 1) columns = columns.filter((c) => !['Field', 'Role', 'Stimulus'].includes(c.saved) || new Set(data.rows.map((row) => row[c.index])).size > 1);
+    return columns;
   }
+  /** The response call of a row: its own in a table of calls, the primary stimulus's call of its cell in a per-cell table. */
+  function callReader(kind, data) {
+    const status = data.header.indexOf('Status'), cell = data.header.indexOf('Cell');
+    if (FAMILY[kind] === 'window' && status >= 0) return (row) => row[status];
+    if (FAMILY[kind] === 'cell' && cell >= 0 && S.results) { const calls = primaryCalls(); return (row) => (calls[row[cell]] || {}).Status; }
+    return () => undefined;
+  }
+  /** A saved value as a table shows it: { text, title, key (for sorting; '' sorts last), num (right-aligned) }. Numbers have the
+   *  decimals of their column, the true minus, no "−0.000" and "%" after a percentage; TRUE and FALSE read yes and no; a missing
+   *  value is one dash. The timing of a cell that did not respond is a dash too, with the saved value in its tooltip. */
+  function shownCell(column, row, callOfRow) {
+    if (column.call) { const call = callOfRow(row) || ''; return { text: call || '–', key: call }; }
+    const raw = row[column.index] == null ? '' : String(row[column.index]);
+    if (column.saved === 'Cell') return { text: shortName(raw) || '–', title: raw, key: shortName(raw) };
+    if (raw === '' || raw === 'NA') return { text: '–', key: '', num: column.numeric };
+    if (column.response && callOfRow(row) !== 'Responded') return { text: '–', title: 'Saved: ' + raw + ' · ' + (callOfRow(row) || 'no call'), key: '', num: column.numeric };
+    if (column.numeric) { const v = Number(raw); return { text: decimal(column.fraction ? 100 * v : v, column.decimals, column.unit === PCT), title: raw, key: v, num: true }; }
+    if (column.flags) return { text: raw.split(/[;|,]/).map((flag) => flag.trim()).filter(Boolean).map(flagShort).join(' · ') || '–', title: raw, key: raw };
+    if (/^(true|false)$/i.test(raw)) return { text: /^true$/i.test(raw) ? 'yes' : 'no', title: raw, key: raw.toLowerCase() };
+    if (column.values && column.values[raw]) return { text: column.values[raw], title: 'Saved: ' + raw, key: column.values[raw] };
+    return { text: raw, key: raw };
+  }
+  /** A column's name on screen, with its unit ("Peak, ΔF/F₀"), and what pointing at it says: what it is, and its saved name. */
+  const headerText = (c) => c.given ? c.name : c.name + (NAMED_UNITS.has(c.unit) ? ', ' + c.unit : '');
+  const headerTitle = (c) => c.given ? c.title || '' : [c.name + (c.measured ? ', ' + c.measured : ''), c.about,
+    c.call ? '' : 'Saved as ' + c.saved + (c.fraction ? ', a fraction' : '') + (c.alias ? ', the same as ' + c.alias + ' by definition' : '')].filter(Boolean).join('. ') + '.';
+  /** A table with one row for each window (the responder counts), turned: a row for each column, a column for each window. */
+  function turned(columns, rows, callOfRow) {
+    const head = columns.find((c) => c.saved === 'Stimulus'), role = columns.find((c) => c.saved === 'Role');
+    const out = [{ name: '', given: true, index: 0 }].concat(rows.map((row, k) => ({ name: head ? String(row[head.index] || '–') + (role && row[role.index] === 'Control' ? ' (control)' : '') : 'Value', given: true, index: k + 1 })));
+    return { columns: out, rows: columns.filter((c) => c !== head).map((c) => [{ text: headerText(c), title: headerTitle(c) }].concat(rows.map((row) => shownCell(c, row, callOfRow)))) };
+  }
+  /** Draws a table. A saved table (kind: which one) keeps its saved names and values; on screen its columns are named in words
+   *  with their units, its numbers are rounded by their unit, and pointing at a header or a number shows what was saved. A table
+   *  worked out here brings its columns (data.columns, given: its cells are { text, title, key } or plain text). The first column
+   *  (data.frozen: that many) stays in place when the table scrolls sideways. A click on a header sorts by it, blanks last. */
+  function table(id, data, kind) {
+    const element = $(id); element.innerHTML = ''; if (!data || !data.header) return;
+    const box = { 'table-calls': 'all-call-columns', 'table-metrics': 'all-metric-columns', 'table-counts': 'all-count-columns' }[id], everything = !!(box && $(box).checked);
+    const callOfRow = kind ? callReader(kind, data) : () => undefined, flip = kind === 'counts' && data.rows.length >= 1 && data.rows.length <= 4;
+    let columns = data.columns || tableColumns(kind, data, everything), rows = data.rows;
+    if (flip) ({ columns, rows } = turned(columns, rows, callOfRow));
+    const given = (v) => v && typeof v === 'object' ? v : { text: v == null || v === '' ? '–' : String(v), key: v == null ? '' : v };
+    const shown = rows.map((row) => ({ row, cells: columns.map((c) => c.given ? given(row[c.index]) : shownCell(c, row, callOfRow)) }));
+    const frozen = data.frozen || 1, cellColumn = kind && !flip ? data.header.indexOf('Cell') : -1;
+    const head = element.createTHead().insertRow(), body = element.createTBody(); let sorted = -1, direction = 1;
+    /** Frozen columns after the first stand where the ones before them end. */
+    const pin = () => { if (frozen < 2) return; let left = 0;
+      for (let k = 0; k < frozen && head.cells[k]; k++) { for (const tr of element.rows) if (tr.cells[k]) tr.cells[k].style.left = left + 'px'; left += head.cells[k].getBoundingClientRect().width; } };
+    const fill = (list) => { body.innerHTML = '';
+      if (!list.length) { const td = body.insertRow().insertCell(); td.colSpan = Math.max(1, columns.length); td.className = 'empty-table'; td.textContent = 'No rows were saved for this table.'; return; }
+      for (const { row, cells } of list) { const tr = body.insertRow(); if (cellColumn >= 0) { tr.dataset.cell = row[cellColumn]; tr.classList.toggle('on', row[cellColumn] === S.cell); }
+        cells.forEach((cell, k) => { const td = tr.insertCell(); td.textContent = cell.text; if (cell.title) td.title = cell.title; if (cell.num) td.className = 'num'; if (k < frozen) td.classList.add('cell-column'); }); }
+      pin();
+    };
+    const blank = (key) => key === '' || key == null || (typeof key === 'number' && !isFinite(key));
+    const compare = (a, b) => blank(a) || blank(b) ? (blank(a) ? 1 : 0) - (blank(b) ? 1 : 0) : direction * (typeof a === 'number' && typeof b === 'number' ? a - b : String(a).localeCompare(String(b), undefined, { numeric: true }));
+    columns.forEach((c, k) => { const th = document.createElement('th'), title = headerTitle(c); th.textContent = headerText(c); if (title) th.title = title; if (k < frozen) th.classList.add('cell-column'); head.appendChild(th);
+      if (flip) { th.classList.add('fixed'); return; }
+      th.addEventListener('click', () => { direction = sorted === k ? -direction : 1; sorted = k; for (const other of head.children) other.classList.remove('up', 'down'); th.classList.add(direction > 0 ? 'up' : 'down');
+        fill(shown.slice().sort((a, b) => compare(a.cells[k].key, b.cells[k].key))); }); });
+    body.addEventListener('click', (event) => { const tr = event.target.closest('tr'); if (tr && tr.dataset.cell) chooseCell(tr.dataset.cell); });
+    fill(shown);
+  }
+  const showCalls = () => table('table-calls', S.results.tables.calls, 'calls');
+  const showCounts = () => table('table-counts', S.results.tables.counts, 'counts');
 
   // ---------------------------------------------------------------- the processed data, cell by cell
   const Data = { signal: 'dff', first: 0, page: 50 };
@@ -2048,7 +2220,8 @@
     for (let i = 0; i < r.time.length; i++) rows.push([i + 1, r.time[i]].concat(names.map((n) => finite(traces[n][i]) ? traces[n][i] : '')).join(','));
     return rows.join('\n') + '\n';
   }
-  /** Fifty frames at a time on screen (the saved file has them all); cells are headed "Cell 1", with the ID in the tooltip. */
+  /** Fifty frames at a time on screen (the saved file has them all); cells are headed "Cell 1", with the ID in the tooltip.
+   *  Frame and time stay in place when the table scrolls sideways. */
   function showData() {
     const r = S.results; if (!r) return;
     for (const option of $('data-signal').options) option.disabled = option.value !== 'dff' && !hasTable(option.value);
@@ -2056,7 +2229,11 @@
     const traces = dataTraces(), names = S.info.names.filter((n) => traces[n]), total = r.time.length;
     Data.first = Math.max(0, Math.min(Data.first, Math.floor((total - 1) / Data.page) * Data.page)); const last = Math.min(total, Data.first + Data.page);
     const rows = []; for (let i = Data.first; i < last; i++) rows.push([i + 1, r.time[i]].concat(names.map((n) => finite(traces[n][i]) ? traces[n][i] : '')));
-    table('table-data', { header: ['Frame', 'Time (s)'].concat(names.map(shortName)), rows });
+    // the saved names are those of the file (dataCsv): Frame, Time_s and each cell's full ID
+    const unit = Data.signal === 'raw' || Data.signal === 'corrected' ? GRAY : DFF;
+    const columns = [{ saved: 'Frame', name: 'Frame', unit: '', decimals: 0 }, { saved: 'Time_s', name: 'Time', unit: SEC, decimals: DECIMALS[SEC] }]
+      .concat(names.map((n) => ({ saved: n, name: shortName(n), unit: '', measured: unit, decimals: DECIMALS[unit] }))).map((c, index) => Object.assign(c, { index, numeric: true, measured: c.measured || '' }));
+    table('table-data', { header: columns.map((c) => c.saved), columns, rows, frozen: 2 });
     $('data-range').textContent = 'Frames ' + (Data.first + 1) + '–' + last + ' of ' + total + ' · ' + names.length + ' cells';
     $('data-back').disabled = Data.first === 0; $('data-forward').disabled = last >= total;
   }
@@ -2112,7 +2289,8 @@
   const Fig = { plot: Object.assign({}, STYLE.plot), heatmap: Object.assign({}, STYLE.heatmap), open: null, queued: false, drawn: null, earlier: { plot: {}, heatmap: {}, save: {} }, rows: {} };
   /** The boxes of the figure editor, in order: [section, key, label, type, more]; key is an entry of the style table. Types:
    *  number (unit, with the least and the most it takes, or "above": the number it must be greater than; an empty box is
-   *  "auto" where the default is null), text (the figure's own text until one is typed), choice, tick, colour, and page (a list
+   *  "auto" where the default is null; scale: what the box shows for 1 of the entry, 100 for an opacity typed in %), text
+   *  (the figure's own text until one is typed), choice, tick, colour, and page (a list
    *  or a tick box that lives on the page, such as the heatmap's colours or its cell names, shown here too so one place has
    *  everything: its key is the id of the page's control). "when" leaves out a box for something the plot on screen does not show. */
   const FIGURE_SIZE = [['Size', 'width', 'Width', 'number', { unit: 'in', least: 1, most: 20 }], ['Size', 'height', 'Height', 'number', { unit: 'in', least: 1, most: 20 }],
@@ -2131,7 +2309,9 @@
       ['Lines', 'meanWidth', 'Mean line', 'number', { unit: 'pt', least: 0.25, most: 10 }], ['Lines', 'colourMean', 'Mean colour', 'colour', { when: () => S.plotMode !== 'calls' }],
       ['Lines', 'sem', 'SEM', 'choice', { options: [['band', 'Shaded band'], ['none', 'Not shown']] }],
       ['Lines', 'cellWidth', 'Cell line', 'number', { unit: 'pt', least: 0.25, most: 10, when: cellDrawn }], ['Lines', 'colourCell', 'Cell colour', 'colour', { when: cellDrawn }],
-      ['Lines', 'traceWidth', 'All traces', 'number', { unit: 'pt', least: 0.1, most: 6, when: () => S.every }], ['Lines', 'colourTrace', 'Single cells', 'colour', { when: () => S.every }],
+      ['Lines', 'traceWidth', 'Trace line', 'number', { unit: 'pt', least: 0.1, most: 6, when: () => S.every }], ['Lines', 'colourTrace', 'Trace colour', 'colour', { when: () => S.every }],
+      ['Lines', 'traceOpacity', 'Trace opacity', 'number', { unit: '%', least: 1, most: 100, scale: 100, when: () => S.every }],
+      ['Lines', 'responderWidth', 'Responder line', 'number', { unit: 'pt', least: 0.1, most: 6, when: () => S.every }], ['Lines', 'responderOpacity', 'Responder opacity', 'number', { unit: '%', least: 1, most: 100, scale: 100, when: () => S.every }],
       ['Lines', 'colourResponded', 'Responded', 'colour', { when: () => S.every || byCall() }], ['Lines', 'colourNot', 'Did not respond', 'colour', { when: byCall }],
       ['Marks', 'legend', 'Legend', 'choice', { options: [['top', 'Above the plot'], ['right', 'Right of the plot'], ['none', 'Not shown']] }], ['Marks', 'stimulus', 'Stimulus line', 'tick'], ['Marks', 'stimulusText', 'Stimulus label', 'text'],
       ['Marks', 'baseline', 'Baseline', 'tick'], ['Marks', 'window', 'Response window', 'tick'],
@@ -2147,11 +2327,15 @@
   /** Whether a value may be kept for a box by the box's own limits: the one rule for what is typed and for what comes back from the preferences. */
   function figureValid(kind, key, value) {
     const field = FIGURE_FIELDS[kind].find((f) => f[1] === key), type = field && field[3], more = (field && field[4]) || {};
-    if (type === 'number') return value === null ? STYLE[kind][key] === null : finite(value) && (more.least == null || value >= more.least) && (more.most == null || value <= more.most) && (more.above == null || value > more.above);
+    if (type === 'number') { if (value === null) return STYLE[kind][key] === null; if (!finite(value)) return false; const v = boxUnits(more, value);
+      return (more.least == null || v >= more.least) && (more.most == null || v <= more.most) && (more.above == null || v > more.above); }
     if (type === 'text') return value === null || (typeof value === 'string' && value.length <= 80);
     if (type === 'tick') return typeof value === 'boolean'; if (type === 'colour') return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
     return type === 'choice' && more.options.some((option) => option[0] === value);
   }
+  /** A number of the style table as its box shows it, and a number typed in a box as the style table keeps it (more.scale). */
+  const boxUnits = (more, value) => more.scale ? +(value * more.scale).toPrecision(12) : value;
+  const styleUnits = (more, value) => more.scale && finite(value) ? value / more.scale : value;
   /** The ends of a figure's axes before a limit is typed for them in the editor, as the painters find them: the time shown and,
    *  for the plot, the Y range. The colour scale has none: a limit typed for one of its ends moves the other (heatmapRange). */
   function figureAuto(kind) {
@@ -2280,7 +2464,7 @@
         // and the figure keeps the number it had.
         box = document.createElement('input'); box.type = 'text'; box.inputMode = 'decimal'; if (STYLE[kind][key] === null) box.placeholder = 'auto';
         const note = document.createElement('i'); note.className = 'range-note'; note.hidden = true; Fig.rows[key] = { box, note, why: '', remark: '' };
-        const show = () => { box.value = fig[key] == null ? '' : String(fig[key]); }, judged = () => { const value = typedNumber(box.value); return { value, why: figureRefusal(kind, key, value) }; };
+        const show = () => { box.value = fig[key] == null ? '' : String(boxUnits(options, fig[key])); }, judged = () => { const value = styleUnits(options, typedNumber(box.value)); return { value, why: figureRefusal(kind, key, value) }; };
         const take = () => { const { value, why } = judged(); if (why || value === fig[key]) return false; fig[key] = value; return true; };
         numbers.push({ take, mark: () => { const why = judged().why; figureSay(key, { why }); if (!why) show(); } }); show();
         box.addEventListener('input', () => figureSay(key, { why: judged().why }));
@@ -2576,19 +2760,21 @@
     // side in one picture (pairCanvas). Its two boxes open on the frames suggested (pairFrames); a frame typed over a
     // suggestion is kept, for as long as the suggestion stays the same. A box that does not hold a frame of the recording
     // keeps what was typed, is marked, and says beside it which frames there are; nothing is saved meanwhile, and the
-    // panel opens on the suggestion again.
-    const framesPanel = $('frames-options'), framesEvery = () => Math.round(Number($('frames-every').value)), framesWay = () => framesPanel.querySelector('[data-frames].on').dataset.frames;
+    // panel opens on the suggestion again. "Every" goes by the same rule: a number of frames it cannot use, also "2.5", is
+    // not rounded to one it can.
+    const framesPanel = $('frames-options'), framesEvery = () => typedWhole($('frames-every').value), framesWay = () => framesPanel.querySelector('[data-frames].on').dataset.frames;
     const fileWords = () => (Save.format === 'tiff' ? 'TIFF ' + Save.compression.toUpperCase() : 'PNG') + ', ' + Save.dpi + ' dpi.';
-    const Pair = { suggested: {}, typed: {} }, pairBoxes = { baseline: 'frames-baseline', peak: 'frames-peak' }, pairFrame = (key) => { const frame = wholeIn($(pairBoxes[key])); return frame >= 1 && frame <= S.info.frames ? frame : NaN; };
+    const Pair = { suggested: {}, typed: {} }, pairBoxes = { baseline: 'frames-baseline', peak: 'frames-peak' }, pairFrame = (key) => { const frame = typedWhole($(pairBoxes[key]).value); return frame >= 1 && frame <= S.info.frames ? frame : NaN; };
+    /** Marks a box of the panel that holds no number it can use, and says beside it which numbers there are. */
+    const framesMark = (id, bad) => { const box = $(id), range = $(id + '-range'); if (bad) box.setAttribute('aria-invalid', 'true'); else box.removeAttribute('aria-invalid'); range.hidden = !bad; range.textContent = '1 to ' + S.info.frames; };
     const framesCount = () => {
       const pair = framesWay() === 'pair', go = $('frames-go');
       $('frames-every-row').hidden = pair; $('frames-baseline-row').hidden = $('frames-peak-row').hidden = $('frames-download').hidden = !pair;
       go.textContent = pair ? 'Save picture' : 'Save frames'; go.title = pair ? 'Saves the picture and how it was made into the plots folder' : 'Saves the frames into a folder of their own inside the plots folder';
-      if (!pair) { const every = framesEvery(), ok = every >= 1 && every <= S.info.frames; go.disabled = !ok;
-        $('frames-count').textContent = ok ? plural(Math.ceil(S.info.frames / every), 'picture') + (Math.ceil(S.info.frames / every) > 1 ? ' and one with all of them' : '') + ', ' + fileWords() : 'A whole number from 1 to ' + S.info.frames + '.'; return; }
+      if (!pair) { const every = framesEvery(), ok = every >= 1 && every <= S.info.frames; go.disabled = !ok; framesMark('frames-every', !ok);
+        $('frames-count').textContent = ok ? plural(Math.ceil(S.info.frames / every), 'picture') + (Math.ceil(S.info.frames / every) > 1 ? ' and one with all of them' : '') + ', ' + fileWords() : ''; return; }
       let ok = true;
-      for (const key of Object.keys(pairBoxes)) { const box = $(pairBoxes[key]), range = $(pairBoxes[key] + '-range'), bad = !finite(pairFrame(key)); ok = ok && !bad;
-        if (bad) box.setAttribute('aria-invalid', 'true'); else box.removeAttribute('aria-invalid'); range.hidden = !bad; range.textContent = '1 to ' + S.info.frames; }
+      for (const key of Object.keys(pairBoxes)) { const bad = !finite(pairFrame(key)); ok = ok && !bad; framesMark(pairBoxes[key], bad); }
       go.disabled = $('frames-download').disabled = !ok;
       const laid = ok ? pairLayout(savedArea()) : null; $('frames-count').textContent = ok ? 'One picture, ' + Math.round(laid.wide * laid.at.scale) + ' × ' + Math.round(laid.high * laid.at.scale) + ' px, ' + fileWords() : '';
     };
@@ -2602,7 +2788,7 @@
       const note = $('picture-saved'); note.className = 'save-note';
       if (still()) { note.className = 'save-note bad'; note.textContent = 'Choose a recording view first: this view is one still picture.'; return; }
       if (!framesPanel.hidden) { framesPanel.hidden = true; return; }
-      $('frames-every').value = stored('step4.every') || '50'; $('frames-every').max = S.info.frames;
+      $('frames-every').value = stored('step4.every') || '50';
       const suggested = pairFrames(); for (const key of Object.keys(pairBoxes)) { if (Pair.suggested[key] !== suggested[key]) delete Pair.typed[key]; $(pairBoxes[key]).value = Pair.typed[key] === undefined ? suggested[key] : Pair.typed[key]; } Pair.suggested = suggested;
       framesCount(); openBeside(framesPanel, $('save-frames'));
       const first = $(framesWay() === 'pair' ? 'frames-baseline' : 'frames-every'); first.focus(); first.select(); event.stopPropagation();
@@ -2662,27 +2848,23 @@
     $('figure-editor').addEventListener('mousedown', (event) => { if (event.target === $('figure-editor')) closeFigure(); });
     document.addEventListener('keydown', (event) => { if (Fig.open && event.key === 'Escape') { closeFigure(); event.preventDefault(); event.stopPropagation(); } }, true);   // before the page's own keys
     window.addEventListener('resize', previewFigure);
-    const metricsName = () => exportName($('metrics-table').value === 'summary' ? 'metrics_summary' : 'table_' + $('metrics-table').value, 'csv');
-    $('metrics-download').addEventListener('click', () => download(new Blob([csvText(metricRows())], { type: 'text/csv' }), metricsName()));
-    $('metrics-save').addEventListener('click', async () => {
-      const note = $('metrics-saved'); note.className = 'save-note'; note.textContent = 'Saving…';
-      try {
-        const reply = await api('export', { name: metricsName().replace(/\.csv$/, ''), csv: csvText(metricRows()) });
-        note.textContent = 'Saved in ' + reply.folderName + ': ' + reply.saved[0] + ' ';
-        const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open folder'; open.addEventListener('click', () => api('open', { what: 'plots' }).catch(() => { })); note.appendChild(open);
-      } catch (error) { note.className = 'save-note bad'; note.textContent = 'Not saved: ' + (/fetch/i.test(error.message) ? 'Fiji is not connected.' : error.message); }
-    });
+    // Every table tab has one Export menu: a CSV into the plots folder, with the record of how the page was set beside it
+    // (exportMetadata), or a CSV through the browser. [tab, file name, CSV text]
+    const tableExports = [['metrics', () => $('metrics-table').value === 'summary' ? 'metrics_summary' : 'table_' + $('metrics-table').value, () => csvText(metricRows())],
+      ['calls', () => 'responder_calls', () => csvText(savedRows('calls'))], ['counts', () => 'responder_counts', () => csvText(savedRows('counts'))], ['data', dataKind, dataCsv]];
+    for (const [tab, kind, csv] of tableExports) {
+      $(tab + '-download').addEventListener('click', () => download(new Blob([csv()], { type: 'text/csv' }), exportName(kind(), 'csv')));
+      $(tab + '-save').addEventListener('click', async () => {
+        const note = $(tab + '-saved'); note.className = 'save-note'; note.textContent = 'Saving…';
+        try {
+          const reply = await api('export', { name: exportName(kind(), 'csv').replace(/\.csv$/, ''), csv: csv(), metadata: exportMetadata() });
+          note.textContent = 'Saved in ' + reply.folderName + ': ' + reply.saved[0] + ' ';
+          const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open folder'; open.addEventListener('click', () => api('open', { what: 'plots' }).catch(() => { })); note.appendChild(open);
+        } catch (error) { note.className = 'save-note bad'; note.textContent = 'Not saved: ' + (/fetch/i.test(error.message) ? 'Fiji is not connected.' : error.message); }
+      });
+    }
     $('data-signal').addEventListener('change', () => setSignal($('data-signal').value));
     $('data-back').addEventListener('click', () => { Data.first -= Data.page; showData(); }); $('data-forward').addEventListener('click', () => { Data.first += Data.page; showData(); });
-    $('data-download').addEventListener('click', () => download(new Blob([dataCsv()], { type: 'text/csv' }), exportName(dataKind(), 'csv')));
-    $('data-save').addEventListener('click', async () => {
-      const note = $('data-saved'); note.className = 'save-note'; note.textContent = 'Saving…';
-      try {
-        const reply = await api('export', { name: exportName(dataKind(), 'csv').replace(/\.csv$/, ''), csv: dataCsv(), metadata: exportMetadata() });
-        note.textContent = 'Saved in ' + reply.folderName + ': ' + reply.saved[0] + ' ';
-        const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open folder'; open.addEventListener('click', () => api('open', { what: 'plots' }).catch(() => { })); note.appendChild(open);
-      } catch (error) { note.className = 'save-note bad'; note.textContent = 'Not saved: ' + error.message; }
-    });
     for (const tab of document.querySelectorAll('.tab')) tab.addEventListener('click', () => showTab(tab.dataset.tab));
     $('toggle-settings').addEventListener('click', () => { const hidden = document.body.classList.toggle('no-side'), button = $('toggle-settings'); button.textContent = hidden ? '›' : '‹'; button.setAttribute('aria-label', hidden ? 'Show settings' : 'Hide settings'); button.title = hidden ? 'Show the settings' : 'Hide the settings'; redraw(); });
     $('side').addEventListener('input', (event) => {
@@ -2728,7 +2910,7 @@
     }
     $('protocol-import').addEventListener('change', async () => {
       const file = $('protocol-import').files[0]; if (!file) return;
-      try { let parsed; try { parsed = JSON.parse(await file.text()); } catch (bad) { throw new Error(file.name + ' is not a valid JSON file (' + bad.message + '). Choose a protocol exported from SimpleCa²⁺ or this page.'); }
+      try { let parsed; try { parsed = JSON.parse(await file.text()); } catch (bad) { throw new Error(file.name + ' is not a valid JSON file (' + bad.message + '). Choose a protocol file.'); }
         const timingOf = (protocol) => JSON.stringify([(protocol.windows || []).map((w) => [w.Role].concat(TIME_KEYS.map((k) => (w[k] == null || w[k] === '' ? null : Number(w[k]))))), protocol.field_overrides || null]);
         const result = await api('protocol', { protocol: parsed }); const draft = collectDraft(), before = timingOf(draft.protocol); draft.protocol = result.protocol; S.protocolDrafts = {}; S.note = null; S.unlinked.clear(); fillDraft(draft);
         const changed = timingOf(collectDraft().protocol) !== before; if (changed) $('confirmed').checked = false; draftChanged();
@@ -2766,7 +2948,7 @@
     $('table-flagged').addEventListener('click', (event) => { const tr = event.target.closest('tr'); if (!tr || !tr.dataset.cell) return;
       const name = tr.dataset.cell; if (S.group !== 5) showGroup(5); chooseCell(name); showTab('review'); $('quality-review').open = false; });
     $('group').addEventListener('change', () => { if (Number($('group').value) !== 5 && S.qualityFlag) { S.qualityFlag = null; showQuality(); } });
-    $('all-call-columns').addEventListener('change', () => table('table-calls', S.results.tables.calls));
+    $('all-call-columns').addEventListener('change', showCalls); $('all-count-columns').addEventListener('change', showCounts); $('all-metric-columns').addEventListener('change', showMetricTable);
     $('response-window').addEventListener('change', () => { S.window = $('response-window').value; updateWindow(); });
     $('metrics-table').addEventListener('change', showMetricTable);
     $('below-zero').addEventListener('change', () => { S.withoutBelowZero = $('below-zero').checked; showTiles(); Plot.dirty = true; drawPlot(); });   // the plot leaves the same cells out
@@ -2878,5 +3060,5 @@
 
   wire();
   start().catch((problem) => { $('lost').classList.add('on'); $('status').textContent = problem.message; });
-  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, STYLE, place, viewArea, savedArea, viewCanvas, pairCanvas, scaleBarLength, pictureKey, cellNumber, plotCells, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, legendLayout, exportMetadata, heatmapAt, heatmapData, pictureRecord };   // for the browser test
+  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, STYLE, place, viewArea, savedArea, viewCanvas, pairCanvas, scaleBarLength, pictureKey, cellNumber, plotCells, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, legendLayout, exportMetadata, heatmapAt, heatmapData, pictureRecord, decimal, columnWords, metricSummary, showCalls, showCounts, showMetricTable, COLUMN_WORDS, SUMMARY_ROWS };   // for the browser test
 })();

@@ -307,8 +307,10 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        cannot use stays in the box, marked, and the line under it says what the box
                        takes ("1 to 20 in", "Minimum must be below maximum", "Too large for this
                        figure size"); the figure keeps the number it had. Text that leaves the plot
-                       less than 40 % of the figure is said under Text size. A title or legend entry
-                       too long for the figure is shortened with an ellipsis. Size, font, colours and
+                       less than 40 % of the figure is said under Text size. A title too long for the
+                       figure is shortened with an ellipsis; a legend entry goes on two lines. With All
+                       traces on, Lines also sets the traces' opacity in percent (empty: auto, fainter
+                       the more cells there are) and the responders' line. Size, font, colours and
                        thicknesses are kept for the next recording, and the editor says in one line
                        when kept settings are in use; the title and the axis numbers are not kept.
                        Reset to defaults puts every box of the editor back to its built-in value,
@@ -570,7 +572,9 @@ Show. Warnings do not automatically exclude cells or change saved calls.
 Where things are since 2026.11.20.19: a warning or error about a setting sits under that setting, and
 the Run box only says how many there are ("1 warning above"; click it to go there). The result figures
 at the top are figures only; Show, beside Cell, is the one cell filter.
-Legacy whole-recording AUC, peak timestamp and rise time are labelled separately from the
-stimulus-window metrics. See docs/SIMPLECA.md for the definitions.
+Whole-recording AUC, peak timestamp and rise time are labelled separately from the
+response-window metrics. See docs/SIMPLECA.md for the definitions.
+The tables name each column in words with its unit; pointing at a header gives its saved name,
+pointing at a number the saved value. Saved CSVs keep every column under its saved name.
 Each measurement has a separate review page and preserved inputs. Keep Fiji open; you may
 close the cell-selection window. Close analysis releases that page's temporary inputs.

@@ -149,7 +149,7 @@ const assert = require('assert/strict');
     assert.ok(await page.evaluate(() => document.getElementById('plot-card').contains(document.getElementById('verdict')) && document.getElementById('plot-card').contains(document.getElementById('cell-quality'))));
     assert.ok(await page.evaluate(() => document.getElementById('result-tiles').contains(document.getElementById('quality-review'))));
     assert.equal(await page.locator('#result-tiles button.tile, #result-tiles [data-group]').count(), 0);
-    assert.deepEqual(await page.locator('details.export').evaluateAll((menus) => menus.map((m) => m.id + ':' + m.querySelectorAll('button').length)), ['export-picture:4', 'export-plot:3', 'export-heatmap:3', 'export-metrics:2', 'export-data:2']);
+    assert.deepEqual(await page.locator('details.export').evaluateAll((menus) => menus.map((m) => m.id + ':' + m.querySelectorAll('button').length)), ['export-picture:4', 'export-plot:3', 'export-heatmap:3', 'export-metrics:2', 'export-calls:2', 'export-data:2', 'export-counts:2']);
     assert.equal(await page.locator('main button', { hasText: /^(Save|Download)/ }).evaluateAll((buttons) => buttons.filter((b) => !b.closest('details.export, .save-options')).length), 0, 'every save button is in an Export menu');
     const initial = await page.evaluate(() => window.calciumStep4.collectDraft());
     const originalProtocol = initial.protocol;
@@ -164,6 +164,11 @@ const assert = require('assert/strict');
     await slider(7); await page.locator('#export-picture > summary').click(); await page.click('#save-frames');
     assert.deepEqual(await page.locator('#frames-options [data-frames]').evaluateAll((buttons) => buttons.map((b) => b.textContent + (b.getAttribute('aria-pressed') === 'true' && b.classList.contains('on') ? '*' : ''))), ['Every Nth frame*', 'Baseline and peak']);
     assert.ok(await page.isVisible('#frames-every') && await page.isHidden('#frames-baseline') && await page.isHidden('#frames-peak') && await page.isHidden('#frames-download') && await text('#frames-go') === 'Save frames', 'Every Nth frame is as it was');
+    // "Every" takes a whole number of frames that the recording has, as typed: "2.5" is not rounded to 3, nor "1e1" read as 10.
+    // What it cannot use stays in the box, marked, with the frames there are beside it, and nothing is saved.
+    { const frames = await page.evaluate(() => window.calciumStep4.S.info.frames), everySays = async () => [await page.inputValue('#frames-every'), await page.getAttribute('#frames-every', 'aria-invalid'), await page.isVisible('#frames-every-range') && await text('#frames-every-range'), await page.isDisabled('#frames-go'), await text('#frames-count')];
+      for (const typed of ['0', '2.5', '1e1', 'abc', '', String(frames + 1)]) { await page.fill('#frames-every', typed); assert.deepEqual(await everySays(), [typed, 'true', '1 to ' + frames, true, ''], 'every "' + typed + '" frames is kept as typed, marked, and not saved'); }
+      await page.fill('#frames-every', '10'); const said = await everySays(); assert.deepEqual(said.slice(0, 4), ['10', null, false, false]); assert.match(said[4], /^\d+ pictures and one with all of them, PNG, 300 dpi\.$/); }
     await page.click('[data-frames=pair]');
     assert.ok(await page.isHidden('#frames-every') && await page.isVisible('#frames-download') && await text('#frames-go') === 'Save picture');
     assert.deepEqual([await page.inputValue('#frames-baseline'), await page.inputValue('#frames-peak')], ['7', '7'], 'before an analysis both boxes hold the frame on screen');
@@ -267,10 +272,12 @@ const assert = require('assert/strict');
     await slider(3); assert.ok(await gray() < 60, 'scrubbing back changes the actual image to the resting frame');
     assert.match(await text('#time-label'), /1\.00 s.*Frame 3 \/ 30/);
 
-    // Playback: 10× by default, on a clock in recording time, from a buffer that makes scrubbing back free.
-    assert.equal(await page.inputValue('#speed'), '10');
+    // Playback: 10× by default, on a clock in recording time, from a buffer that makes scrubbing back free. (Waits for the movie
+    // are given 30 s: on a busy computer the frames come slowly, and what is checked is that they come, not how fast; the 10×
+    // timing below is the one check of speed.)
+    assert.equal(await page.inputValue('#speed'), '10'); const movieWait = { timeout: 30000 };
     let frameRequests = 0; const countFrames = (request) => { if (request.url().includes('/api/frame?')) frameRequests++; }; page.on('request', countFrames);
-    await slider(1); const started = Date.now(); await page.click('#play');
+    await slider(1); const started = Date.now(); await page.click('#play', movieWait);
     await page.waitForFunction(() => window.calciumStep4.S.timer === null, null, { timeout: 15000 });
     const took = (Date.now() - started) / 1000;
     assert.equal(await page.inputValue('#time'), '30', 'playback stops at the last frame');
@@ -279,14 +286,14 @@ const assert = require('assert/strict');
     for (const f of [24, 17, 9, 2]) await slider(f);
     assert.equal(frameRequests, 0, 'scrubbing back over frames already seen makes no requests');
     page.off('request', countFrames);
-    await page.selectOption('#speed', '50'); await page.click('#play');
-    await page.waitForFunction(() => /playing every 4th frame/.test(document.getElementById('picture-note').textContent));
-    await page.click('#play');
+    await page.selectOption('#speed', '50', movieWait); await page.click('#play', movieWait);
+    await page.waitForFunction(() => /playing every 4th frame/.test(document.getElementById('picture-note').textContent), null, movieWait);
+    await page.click('#play', movieWait);
     assert.ok(!(await page.evaluate(() => window.calciumStep4.S.timer)));
     // A manual seek stops the timer.
     await slider(3);
-    await page.selectOption('#speed', '0.5'); await page.click('#play');
-    await page.waitForFunction(() => window.calciumStep4.S.frame >= 5);
+    await page.selectOption('#speed', '0.5', movieWait); await page.click('#play', movieWait);
+    await page.waitForFunction(() => window.calciumStep4.S.frame >= 5, null, movieWait);
     await slider(12);
     assert.equal(await page.evaluate(() => window.calciumStep4.S.timer), null);
     assert.equal(await text('#play'), '▶ Play');
@@ -396,18 +403,19 @@ const assert = require('assert/strict');
     assert.equal(submitted.windows[1].Floor_local_fraction, 0.4);
     assert.match(sent.timestamps_sha256, /^[a-f0-9]{64}$/);
     assert.equal(sent.input_mode, 'background_corrected_fluorescence');
-    assert.match(await text('#tile-responding'), /67%.*2 of 3 evaluable/);
+    assert.match(await text('#tile-responding'), /66\.7%.*2 of 3 evaluable/);
     assert.equal((await text('#tile-registered')).replace(/\D/g, ''), '6');
     // All cells lead the headline; the quiet cells follow on a line of their own; every figure comes from the tally worked out in Fiji.
-    assert.match(await page.locator('#tile-responding > b').textContent(), /^67%$/);
-    assert.match(await page.locator('#tile-responding .tile-line').last().textContent(), /^Quiet enough to detect a 30 % rise: \d+% \(\d+ of \d+\)$/);
+    // A share of cells reads one way everywhere on the page: one decimal and "%" (2 of 3 is 66.7%, not 67%).
+    assert.match(await page.locator('#tile-responding > b').textContent(), /^66\.7%$/);
+    assert.match(await page.locator('#tile-responding .tile-line').last().textContent(), /^Quiet enough to detect a 30 % rise: \d+\.\d% \(\d+ of \d+\)$/);
     // The cell that went below zero stays counted until the switch leaves it out; then every figure follows, and comes back.
     const counted = await text('#tile-responding'), tally = await page.evaluate(() => window.calciumStep4.S.results.tally);
     assert.deepEqual(tally.belowZero, ['Cell005']); assert.equal(await text('#below-zero-text'), 'Leave out 1 cell below zero'); assert.ok(await page.isVisible('#below-zero-label') && !(await page.isChecked('#below-zero')));
     const allRow = tally.rows.find((row) => row.key === 'all'); assert.deepEqual(allRow.counted.slice(0, 2), [2, 3]);
     await page.check('#below-zero');
     assert.match(await text('#tile-responding'), new RegExp('Capsaicin: ' + allRow.without[0] + ' of ' + allRow.without[1] + ' evaluable cells · 1 below zero left out'));
-    assert.equal(await page.locator('#tile-responding > b').textContent(), Math.round(100 * allRow.without[0] / allRow.without[1]) + '%');
+    assert.equal(await page.locator('#tile-responding > b').textContent(), (100 * allRow.without[0] / allRow.without[1]).toFixed(1) + '%');
     await page.uncheck('#below-zero'); assert.equal(await text('#tile-responding'), counted);
     // The rule line says what is applied: samples in a row, also for a length typed in seconds.
     assert.match(await text('#rule-summary-0'), /for 2 samples in a row$/);
@@ -490,7 +498,7 @@ const assert = require('assert/strict');
       try { if (figure) f.figureCanvas('plot', 96); else window.dispatchEvent(new Event('resize')); } finally { Object.assign(P, was); }
       seen.texts = window.asWritten(seen.texts); const d = figure ? f.Fig.drawn : f.Plot.geom, l = d.legend, top = figure ? d.top : 0;
       return Object.assign(seen, { top, L: d.L, T: d.T, W: d.W, H: d.H, lo: d.lo, hi: d.hi, x0: d.x0, x1: d.x1, ink: figure ? f.Fig.plot.ink : '#3e4c59', legend: d.items.map((i) => i.text), items: d.items.map((i) => ({ text: i.text, kind: i.kind, colour: i.colour, dashed: !!i.dash })),
-        places: l ? l.layout.places.map((place) => [place.x, place.y]) : [], legendAt: l ? [l.x, l.y] : null, legendWidth: l ? l.layout.width : 0, legendBox: l ? [l.x, top + l.y, l.layout.width, l.layout.height] : null });
+        places: l ? l.layout.places.map((place) => [place.x, place.y]) : [], wrapped: l ? l.layout.places.map((place) => place.lines) : [], legendAt: l ? [l.x, l.y] : null, legendWidth: l ? l.layout.width : 0, legendBox: l ? [l.x, top + l.y, l.layout.width, l.layout.height] : null });
     }, figure);
     const figureStyle = (changes) => page.evaluate((changes) => { const f = window.calciumStep4; Object.assign(f.Fig.plot, f.STYLE.plot, changes); }, changes || {});   // the built-in look, with these entries changed
     // No extra words on a plot. Outside its legend the painter writes its two axis titles, its tick labels and "stimulus", and nothing
@@ -506,7 +514,8 @@ const assert = require('assert/strict');
     const entriesOf = (seen) => seen.items.map((item) => item.text === 'single cells' ? item.text : item.kind === 'line' ? item.colour + (item.dashed ? ' dashed' : '') : 'box ' + item.colour).sort();
     const clean = (seen, view) => {
       assert.deepEqual(wordsOf(seen), ['Time (s)', 'stimulus', 'ΔF/F₀'], view + ': outside the legend, only the axis titles, the tick labels and "stimulus" are written');
-      assert.deepEqual(seen.texts.filter((t) => inLegend(seen, t.x, t.y)).map((t) => t.text), seen.legendBox ? seen.legend : [], view + ': the legend holds its entries and nothing else');
+      assert.deepEqual(seen.texts.filter((t) => inLegend(seen, t.x, t.y)).map((t) => t.text), seen.wrapped.flat(), view + ': the legend holds its entries and nothing else');
+      assert.deepEqual(seen.wrapped.map((lines) => lines.join(' ')), seen.legendBox ? seen.legend : [], view + ': every entry whole, on one line or more');
       assert.deepEqual(marksOf(seen), entriesOf(seen), view + ': legend entries and drawn marks, one to one');
       return seen; };
     const cleanBoth = async (view) => { clean(await drawing(false), view + ', on the page'); return clean(await drawing(true), view + ', in the figure'); };
@@ -580,12 +589,12 @@ const assert = require('assert/strict');
       { mean: [-0.25, 0.45], traces: [-0.75, 1.5], cell: [-2.5, 22.5] });
     // Legend rows are even: as few rows as the width allows, with the entries shared out between them (2 + 2, 3 + 2, 3 + 3), so that
     // none is left alone on the last row. Every row starts at the left edge, with one gap between entries. No entry is wider than
-    // the room: one that would be is shortened, with an ellipsis for what is left out. (Text of 10 pixels a letter; a swatch takes
-    // 21 and a gap 14.)
+    // the room: a single word that would be is shortened, with an ellipsis for what is left out. (Text of 10 pixels a letter; a
+    // swatch takes 21 and a gap 14.)
     assert.deepEqual(await page.evaluate(() => { const f = window.calciumStep4, ctx = { measureText: (text) => ({ width: 10 * text.length }) }, look = { px: 12 }, entries = (lengths) => lengths.map((n) => ({ kind: 'line', text: 'x'.repeat(n) }));
       const rows = (lengths, width) => { const l = f.legendLayout(ctx, entries(lengths), width, look, false), out = []; for (const place of l.places) { const row = place.y / l.rowHeight; (out[row] = out[row] || []).push(place.x); } return { rows: out, width: l.width, height: l.height / l.rowHeight }; };
       const stacked = f.legendLayout(ctx, entries([8, 30]), 120, look, true);
-      return [rows([8, 8, 8, 13], 340), rows([6, 6, 6, 6, 10], 380), rows([6, 6, 6, 6, 6, 6], 400), rows([3, 3, 3, 36], 400), rows([8, 8, 8], 340), rows([40, 2, 2], 100), f.legendLayout(ctx, entries([40, 2, 2]), 100, look, false).places.map((place) => place.text),
+      return [rows([8, 8, 8, 13], 340), rows([6, 6, 6, 6, 10], 380), rows([6, 6, 6, 6, 6, 6], 400), rows([3, 3, 3, 36], 400), rows([8, 8, 8], 340), rows([40, 2, 2], 100), f.legendLayout(ctx, entries([40, 2, 2]), 100, look, false).places.map((place) => place.text), rows([30, 30, 8, 6, 12], 340),
         stacked.places.map((place) => [place.x, place.y]), stacked.places.map((place) => place.text), stacked.width]; }),
       [{ rows: [[0, 115], [0, 115]], width: 266, height: 2 },                      // three would fit on the first row and leave the fourth alone: two and two
         { rows: [[0, 95, 190], [0, 95]], width: 271, height: 2 },                  // four would fit: three and two
@@ -594,7 +603,16 @@ const assert = require('assert/strict');
         { rows: [[0, 115, 230]], width: 331, height: 1 },                           // what fits on one row stays on one row
         { rows: [[0], [0, 55]], width: 96, height: 2 },                             // an entry wider than the room has a row to itself,
         ['xxxxxx…', 'xx', 'xx'],                                                    // shortened to the room (21 + 70 of 100)
+        { rows: [[0], [0], [0], [0, 95]], width: 321, height: 4 },                  // two long entries and three short ones: the last row has two, not one
         [[0, 0], [0, 18]], ['xxxxxxxx', 'xxxxxxxx…'], 111]);                        // stacked: one under the other, none wider than the room (120)
+    // An entry of several words wider than the room goes on two lines or more, broken between words and never inside "± SEM" or the
+    // number of cells, and nothing of it is lost; its row is taller by a line (15) for each line more, and the next row starts under it.
+    assert.deepEqual(await page.evaluate(() => { const f = window.calciumStep4, ctx = { measureText: (text) => ({ width: 10 * text.length }) }, look = { px: 12 }, entries = (texts) => texts.map((text) => ({ kind: 'line', text }));
+      const laid = (texts, width, stacked) => { const l = f.legendLayout(ctx, entries(texts), width, look, stacked); return [l.places.map((place) => [place.x, place.y, place.lines]), l.width, l.height]; };
+      return [laid(['all cells ± SEM (n = 4)', 'baseline'], 120, true), laid(['all cells ± SEM (n = 4)', 'xx', 'xx'], 200, false), laid(['did not respond ± SEM (n = 116)'], 400, false)]; }),
+      [[[[0, 0, ['all cells', '± SEM', '(n = 4)']], [0, 48, ['baseline']]], 111, 66],     // three lines (18 + 15 + 15), then "baseline" under them
+        [[[0, 0, ['all cells ± SEM', '(n = 4)']], [0, 33, ['xx']], [55, 33, ['xx']]], 171, 51],
+        [[[0, 0, ['did not respond ± SEM (n = 116)']]], 331, 18]]);                    // what fits stays on one line
     // One cell. One threshold line, the required rise, with its entry; the response of a cell that responded is a band with its entry.
     // No name is written at a line or in the strip above the plot.
     await page.click('[data-plot=cell]'); await openCell('Cell001'); await page.uncheck('#every'); now = await plotNow(); fig = await cleanBoth('one cell');
@@ -617,6 +635,13 @@ const assert = require('assert/strict');
     const byNoise = { Baseline_SD: '0.0407', Noise_threshold: '0.1221', Floor_threshold: '0.1', Threshold_increase: '0.1221', Threshold_source: 'Baseline noise' }, byFloor = { Baseline_SD: '0.0253', Noise_threshold: '0.0759', Floor_threshold: '0.1', Threshold_increase: '0.1', Threshold_source: 'Floor' };
     const original = await page.evaluate(() => { const f = window.calciumStep4; return Object.assign({}, f.S.results.callsByWindow[f.S.window][f.S.cell]); });
     assert.match(await withCall(byNoise, 'verdict'), /\(needed 12\.2%, set by its noise\)$/); assert.match(await withCall(byFloor, 'verdict'), /\(needed 10\.0%, the minimum rise\)$/);
+    // For a responder the verdict says what the call rests on, from the saved call: the onset, how many frames the rise held and
+    // the latency; the largest rise and its time follow, worded apart from the onset, so a single higher frame before the held
+    // rise (cell 69 of Run2: largest rise at 92.0 s, held from 121.0 s) does not read as a peak before its own response.
+    assert.equal(await withCall({ Onset_s: '120.987414777279', Run_start_s: '120.987414777279', Run_samples: '2', Response_latency_s: '101.989390969276', Peak_s: '91.9904310703278', Peak_increase: '0.405565745971214', Threshold_increase: '0.303418646217159', Threshold_source: 'Baseline noise' }, 'verdict'),
+      'Cell001: Responded · rise held for 2 frames from 121.0 s, 102.0 s after the stimulus · largest rise 40.6% at 92.0 s (needed 30.3%, set by its noise)');
+    assert.match(await withCall({}, 'verdict'), /^Cell001: Responded · rise held from 4\.5 s · largest rise/, 'a call saved without run length or latency says what it has');
+    assert.equal(await withCall({ Status: 'Did not respond', Reason: 'No sustained threshold crossing', Peak_increase: '0.05' }, 'verdict'), 'Cell001: Did not respond · no sustained threshold crossing · largest rise 5.0% at 6.0 s (needed 10.0%, the minimum rise)', 'a cell that did not respond keeps the engine\'s reason');
     await page.check('#thresholds');
     for (const [call, entries, lines, view] of [
       [byNoise, ['required rise', 'minimum rise', 'baseline mean'], { '#177465': 0.1221, '#ad7423': 0.1, '#7c8794': 0 }, 'thresholds, the noise set the required rise'],
@@ -748,7 +773,7 @@ const assert = require('assert/strict');
     await page.mouse.dblclick(spots.empty.x, spots.empty.y); await settledPaint();
     assert.equal(await app('zoom'), 1, 'a double-click shows the whole picture'); assert.equal(await app('cell'), spots.cell.name, 'and keeps the cell'); assert.equal(await app('plot'), 'cell', 'and the plot');
     assert.equal(await page.inputValue('#cell'), spots.cell.name, 'the box shows the cell');
-    const boxLook = await page.evaluate(() => { const look = (e) => { const c = getComputedStyle(e); return [c.height, c.borderTopColor, c.borderRadius, c.fontSize, c.backgroundColor].join(' '); }; return [look(document.getElementById('cell')), look(document.querySelector('input[type=number]'))]; });
+    const boxLook = await page.evaluate(() => { const look = (e) => { const c = getComputedStyle(e); return [c.height, c.borderTopColor, c.borderRadius, c.fontSize, c.backgroundColor].join(' '); }; return [look(document.getElementById('cell')), look(document.getElementById('y-min'))]; });   // (the frames boxes, once the page's number boxes, are text boxes now, as the other boxes of the page)
     assert.equal(boxLook[0], boxLook[1], 'the Cell box looks like the other boxes');
     // (the ✕ shows on hover, left of the list's arrow; found by clicking from the text towards the arrow)
     const cellBox = await page.locator('#cell').boundingBox(); let crossed = false;
@@ -1178,7 +1203,7 @@ const assert = require('assert/strict');
     // A box that does not hold a frame of the recording keeps what was typed and is marked; beside it, the frames there are; and
     // nothing can be saved until it does.
     await openCell('Cell001'); await openFrames(); assert.deepEqual(await pairBoxes(), ['5', '13', true]);
-    for (const typed of ['0', '31', '2.5', 'abc', '']) { await page.fill('#frames-peak', typed);
+    for (const typed of ['0', '31', '2.5', 'abc', '', '1e1', '0x10']) { await page.fill('#frames-peak', typed);
       assert.deepEqual([await page.inputValue('#frames-peak'), await page.getAttribute('#frames-peak', 'aria-invalid'), await page.isVisible('#frames-peak-range') && await text('#frames-peak-range'), await page.isDisabled('#frames-go'), await page.isDisabled('#frames-download'), await page.getAttribute('#frames-baseline', 'aria-invalid'), await page.isHidden('#frames-baseline-range')],
         [typed, 'true', '1 to 30', true, true, null, true], 'a peak frame of "' + typed + '" is kept as typed, marked, and not saved'); }
     await page.fill('#frames-baseline', '40'); assert.deepEqual([await page.getAttribute('#frames-baseline', 'aria-invalid'), await text('#frames-baseline-range')], ['true', '1 to 30']);
@@ -1383,32 +1408,114 @@ const assert = require('assert/strict');
     await page.waitForFunction(() => { const d = window.calciumStep4.Fig.drawn; return !window.calciumStep4.Fig.queued && d.kind === 'heatmap' && d.low === -0.5 && d.high === 2 && d.x0 === 2; });
     assert.deepEqual(await page.evaluate(() => window.calciumStep4.figureKept('heatmap')), {}, 'the time limits and the colour limits typed for this recording are not carried to the next');
     await page.click('#figure-reset'); await page.click('#figure-close'); await heatStyle();
+    // The tables: the saved columns named in words with their units, numbers rounded by their unit (time 2 decimals, ΔF/F₀ 3,
+    // percentages 1 with "%", gray levels 2), one dash for a missing value, the saved name and value when pointing at them.
+    // The saved files keep their names, values and every column.
+    const tableNow = (id) => page.evaluate((id) => { const t = document.getElementById(id), cells = (row) => [...row.cells];
+      return { head: cells(t.tHead.rows[0]).map((c) => c.textContent), titles: cells(t.tHead.rows[0]).map((c) => c.title), rows: [...t.tBodies[0].rows].map((r) => cells(r).map((c) => c.textContent)),
+        tips: [...t.tBodies[0].rows].map((r) => cells(r).map((c) => c.title)), frozen: cells(t.tHead.rows[0]).map((c) => c.classList.contains('cell-column')) }; }, id);
+    const at = (t, first, column, also) => { const r = t.rows.findIndex((row) => row[0] === first && (!also || row.includes(also))); return { text: t.rows[r][t.head.indexOf(column)], tip: t.tips[r][t.head.indexOf(column)] }; };
+    assert.deepEqual(await page.evaluate(() => { const d = window.calciumStep4.decimal; return [d(-5.186e-17, 3), d(-0.0004, 3), d(-1.5, 2), d(0.999895989894867, 2), d(4.99948, 2), d(200 / 3, 1, true), d(NaN, 2)]; }),
+      ['0.000', '0.000', '−1.50', '1.00', '5.00', '66.7%', '–'], 'fixed decimals, the true minus, no "−0.000" (a saved −5e−17), a dash for nothing');
     await page.click('.tab[data-tab=calls]'); assert.equal(await page.locator('#table-calls tbody tr').count(), 12);
-    const coreColumns = await page.locator('#table-calls thead th').count();
-    await page.check('#all-call-columns'); assert.ok(await page.locator('#table-calls thead th').count() > coreColumns);
+    let calls = await tableNow('table-calls');
+    assert.deepEqual(calls.head, ['Cell', 'Role', 'Stimulus', 'Call', 'Reason', 'Required rise', 'Required rise set by', 'Largest rise', 'Largest rise at, s', 'Onset, s', 'Baseline SD', 'Flags'], 'the short set, in words, with units');
+    assert.deepEqual([at(calls, 'Cell001', 'Required rise', 'Stimulus').text, at(calls, 'Cell001', 'Largest rise', 'Stimulus').text, at(calls, 'Cell001', 'Largest rise at, s', 'Stimulus').text, at(calls, 'Cell001', 'Onset, s', 'Stimulus').text, at(calls, 'Cell001', 'Flags', 'Stimulus').text],
+      ['10.0%', '100.0%', '6.00', '4.50', 'Duration under a frame'], 'rises in % as in the verdict, times with 2 decimals, flags in words');
+    assert.equal(at(calls, 'Cell001', 'Largest rise', 'Stimulus').tip, '1', 'pointing at a number shows the saved value');
+    assert.deepEqual(at(calls, 'Cell001', 'Required rise set by', 'Stimulus'), { text: 'Minimum rise', tip: 'Saved: Floor' }, 'what set the required rise, in the words of the verdict');
+    assert.ok(await page.locator('#table-calls').evaluate((t) => { const even = t.tBodies[0].rows[1], style = (e) => getComputedStyle(e).backgroundColor;
+      return style(even.cells[0]) === style(even) && style(even.cells[0]) !== style(t.tBodies[0].rows[0].cells[0]); }), 'the column that stays put takes the stripe of its row');
+    assert.deepEqual(at(calls, 'Cell002', 'Largest rise at, s', 'Stimulus'), { text: '–', tip: 'Saved: 3 · Did not respond' }, 'the timing of a cell that did not respond is a dash, its saved value in the tooltip');
+    assert.equal(at(calls, 'Cell002', 'Largest rise', 'Stimulus').text, '0.0%', 'its largest rise, the number compared with the threshold, is shown');
+    assert.equal(at(calls, 'Cell003', 'Required rise', 'Stimulus').text, '–', 'one dash for a value that was not saved');
+    assert.ok(calls.head.every((h) => !/_/.test(h)) && calls.rows.every((row) => ['Responded', 'Did not respond', 'Excluded', 'Unscorable'].includes(row[3])), 'no code names on screen; one set of words for the call');
+    assert.match(calls.titles[calls.head.indexOf('Baseline SD')], /response baseline.*Not the SD of the F₀ frames.*Saved as Baseline_SD, a fraction/, 'the tooltip knows the table: this Baseline SD is not the one of the metrics');
+    assert.match(calls.titles[calls.head.indexOf('Largest rise at, s')], /comes before the onset/, 'the time of the largest rise and the onset are told apart');
+    assert.ok(!calls.head.includes('Run start, s'), 'a column that is the same as another by definition is shown once');
+    await page.check('#all-call-columns'); calls = await tableNow('table-calls');
+    assert.ok(calls.head.length > 12 && calls.head.includes('Run start, s') && calls.head.includes('Minimum rise threshold'), 'every saved column, the twins too');
+    assert.equal(at(calls, 'Cell001', 'Window cut short', 'Stimulus').text, 'no', 'TRUE and FALSE read yes and no');
+    assert.match(calls.titles[calls.head.indexOf('Run start, s')], /the same as Onset_s by definition/);
     await page.locator('#table-calls').evaluate((e) => e.parentElement.scrollLeft = 800);
     assert.ok(await page.locator('#table-calls tbody .cell-column').first().evaluate((e) => {const a=e.getBoundingClientRect(),b=e.closest('.scroller').getBoundingClientRect();return a.left>=b.left-1&&a.left<b.left+5;}));
     await page.uncheck('#all-call-columns');
+    // A click on a header sorts by it; cells with no value go last both ways.
+    const sortedBy = async (id, column) => { const before = await tableNow(id), k = before.head.indexOf(column); await page.locator('#' + id + ' thead th').nth(k).click(); return (await tableNow(id)).rows.map((row) => row[k]); };
+    assert.deepEqual(await sortedBy('table-calls', 'Onset, s'), ['4.00', '4.50'].concat(Array(10).fill('–')), 'rising, the cells with no onset last');
+    assert.deepEqual(await sortedBy('table-calls', 'Onset, s'), ['4.50', '4.00'].concat(Array(10).fill('–')), 'falling, and those cells still last');
     await page.screenshot({ path: path.join(out, 'page-calls.png') });
+    // The calls tab has its own Export: the saved table as it is, with the record of how the page was set beside it.
+    await page.locator('#export-calls > summary').click(); await page.click('#calls-save');
+    await page.waitForFunction(() => /^Saved in plots: /.test(document.getElementById('calls-saved').textContent));
+    { const saved = (await text('#calls-saved')).match(/^Saved in plots: (\S+\.csv)/)[1], file = fs.readFileSync(path.join(out, 'plots', saved), 'utf8');
+      assert.match(saved, /^Fixture_recording_responder_calls_\d{8}-\d{6}\.csv$/);
+      assert.deepEqual(file.trim().split('\n')[0], (await page.evaluate(() => window.calciumStep4.S.results.tables.calls.header.join(','))), 'every saved column under its saved name');
+      assert.ok(fs.existsSync(path.join(out, 'plots', saved.replace(/\.csv$/, '.metadata.json')))); }
     await page.click('.tab[data-tab=counts]');
     assert.deepEqual(await page.evaluate(() => { const t = document.getElementById('table-tally'); return { head: [...t.tHead.rows[0].cells].slice(0, 4).map((c) => c.textContent), first: [...t.tBodies[0].rows[0].cells].slice(0, 4).map((c) => c.textContent), rows: t.tBodies[0].rows.length }; }),
-      { head: ['Cells', '% responding', 'Responded', 'Evaluable'], first: ['All cells', '66.7', '2', '3'], rows: 2 }, 'the same tally on the Responder counts tab');
+      { head: ['Cells', '% responding', 'Responded', 'Evaluable'], first: ['All cells', '66.7%', '2', '3'], rows: 2 }, 'the same tally on the Responder counts tab, its share as in the headline');
+    // The counts have one row for each window: shown turned, a row for each column, so the 27 saved columns need no sideways scroll.
+    let counts = await tableNow('table-counts');
+    assert.deepEqual(counts.head, ['', 'Capsaicin', 'Ionomycin (control)']);
+    assert.deepEqual(counts.rows.find((row) => row[0] === '% responding'), ['% responding', '66.7%', '33.3%'], 'the saved Percent_responding reads as the headline does');
+    assert.deepEqual(counts.rows.find((row) => row[0] === 'Minimum rise'), ['Minimum rise', '10.0%', '10.0%']);
+    assert.ok(counts.frozen[0] && !counts.rows.some((row) => row[0] === 'Recording'), 'the names stay in view; the short set leaves out the recording');
+    await page.check('#all-count-columns'); counts = await tableNow('table-counts');
+    assert.ok(counts.rows.some((row) => row[0] === 'Gap rule') && counts.rows.length === 25, 'every saved column but the stimulus, which heads the table, and the recording, the same in both');
+    await page.uncheck('#all-count-columns');
+    await page.locator('#export-counts > summary').click(); await page.click('#counts-save');
+    await page.waitForFunction(() => /^Saved in plots: \S+responder_counts_\S+\.csv/.test(document.getElementById('counts-saved').textContent));
     await page.click('.tab[data-tab=metrics]');
-    // The summary: each metric once, with its unit and where it is measured; saved columns with the same numbers share a row;
-    // the timing and shape of a response are given only for cells that responded.
-    const summary = await page.evaluate(() => { const t = document.getElementById('table-metrics'), saved = window.calciumStep4.S.results.tables.metrics;
-      return { head: [...t.tHead.rows[0].cells].map((c) => c.textContent), rows: [...t.tBodies[0].rows].map((r) => [...r.cells].map((c) => c.textContent)), frozen: t.tHead.rows[0].cells[0].classList.contains('cell-column'), savedHeader: saved.header }; });
-    assert.deepEqual(summary.head.slice(0, 3), ['Metric', 'Unit', 'Measured']); assert.equal(summary.head[summary.head.length - 1], 'Saved as'); assert.ok(summary.frozen, 'the metric names stay in view');
-    const savedAs = (row) => row[row.length - 1].split(', '), rowOf = (column) => summary.rows.find((row) => savedAs(row).includes(column)), allSaved = summary.rows.flatMap(savedAs);
-    assert.equal(new Set(allSaved).size, allSaved.length, 'no saved column is summarised twice'); assert.ok(allSaved.every((name) => summary.savedHeader.includes(name)));
-    assert.equal(rowOf('Peak_dFF0'), rowOf('Response_Amplitude'), 'columns with the same numbers share a row'); assert.deepEqual(rowOf('Peak_dFF0').slice(0, 3), ['Peak', 'ΔF/F₀', 'whole recording']);
-    assert.notEqual(rowOf('Time_to_Peak'), rowOf('Time_to_50_Peak')); assert.deepEqual(rowOf('Time_to_Peak').slice(0, 3), ['Peak time', 's', 'from recording start']);
-    const notResponded = summary.head.indexOf('Did not respond'), responded = summary.head.indexOf('Responded');
-    for (const column of ['Time_to_Peak', 'Time_to_50_Peak', 'Rise_Time', 'FWHM']) { assert.equal(rowOf(column)[notResponded], '–', column + ' is not given for cells that did not respond'); assert.match(rowOf(column)[responded], /n = \d/); }
-    assert.match(rowOf('Peak_dFF0')[notResponded], /n = \d/, 'the peak is given for every cell'); assert.match(await text('#metric-help'), /cells that responded/);
+    // The summary: each metric once, under a name of its own, with its unit and where it is measured; columns that are the same by
+    // definition share a row (pointing at the name gives the saved columns); n has a column of its own; the timing and shape of a
+    // response are given only for cells that responded; All cells leaves out the excluded cells.
+    const summary = await tableNow('table-metrics');
+    assert.deepEqual(summary.head, ['Metric', 'Unit', 'Measured', 'All cells', 'n', 'Responded', 'n', 'Did not respond', 'n'], 'no columns for how cells were chosen when they were all chosen one way');
+    assert.ok(summary.frozen[0], 'the metric names stay in view'); assert.equal(new Set(summary.rows.map((row) => row[0])).size, summary.rows.length, 'no two rows share a name');
+    const rowOf = (name) => summary.rows.find((row) => row[0] === name), tipOf = (name) => summary.tips[summary.rows.indexOf(rowOf(name))][0];
+    assert.deepEqual(rowOf('Peak'), ['Peak', 'ΔF/F₀', 'whole recording', '0.750 ± 0.250', '4', '1.000 ± 0.000', '2', '0.000', '1'], 'mean ± SEM with the same decimals, n beside it');
+    assert.equal(tipOf('Peak'), 'Saved as Peak_dFF0, Response_Amplitude', 'twins by definition share a row');
+    assert.deepEqual(rowOf('Largest rise').slice(0, 5), ['Largest rise', '%', 'response window, of the local level', '66.7 ± 33.3%', '3'], 'from the calls when there are no window metrics');
+    assert.deepEqual(rowOf('F₀').slice(3, 5), ['10.00 ± 0.00', '4'], 'gray levels with 2 decimals; the two excluded cells are not in All cells');
+    assert.deepEqual(rowOf('Onset').slice(3), ['4.25 ± 0.25', '2', '4.25 ± 0.25', '2', '–', '0'], 'the onset is the timing of a response'); assert.equal(tipOf('Onset'), 'Saved as Onset_s, Run_start_s');
+    assert.ok(await page.locator('#table-metrics').evaluate((t) => [...t.tBodies[0].rows].every((r) => [...r.cells].slice(3).every((c) => c.classList.contains('num')))), 'a dash stands right like the numbers of its column');
+    assert.equal(await page.locator('#metrics-table').evaluate((s) => getComputedStyle(s).maxWidth), 'none', 'the list of tables is not cut off ("Summary: mean ± SEM of each metri…")');
+    for (const name of ['Time to peak', 'Time to 50% of peak', 'Rise time', 'FWHM']) { assert.match(rowOf(name)[2], /^whole recording/, name + ' is named for the whole recording'); assert.equal(rowOf(name)[7], '–', name + ' is not given for cells that did not respond'); }
+    assert.ok(!summary.rows.some((row) => row[0] === 'Window AUC'), 'a column this analysis did not save is not a row on screen');
+    assert.match(await text('#metric-help'), /cells that responded/); assert.ok(await page.isHidden('#all-metric-columns-label'));
+    const long = await page.evaluate(() => window.calciumStep4.metricSummary().long), groupsOf = (await page.evaluate(() => window.calciumStep4.S.results.chosenBlind)) ? 5 : 3;
+    assert.deepEqual(long[0], ['Metric', 'Unit', 'Measured', 'Saved_as', 'Group', 'Mean', 'SD', 'SEM', 'N_cells'], 'the saved summary keeps its columns');
+    assert.equal(long.length - 1, (await page.evaluate(() => window.calciumStep4.SUMMARY_ROWS.length)) * groupsOf, 'and has the same rows for every recording');
+    assert.deepEqual(long.find((row) => row[0] === 'Window AUC' && row[4] === 'All cells').slice(3), ['', 'All cells', '', '', '', 0], 'a metric not saved has no cells, not no row');
+    assert.equal(long.find((row) => row[0] === 'Largest rise' && row[4] === 'All cells')[5], 200 / 3, 'in the unit it is shown in, at full precision');
+    assert.ok(await page.locator('#metrics-table option').evaluateAll((options) => options.every((o) => !/Legacy/.test(o.textContent))), 'the word Legacy is not shown');
+    await page.locator('#export-metrics > summary').click(); await page.click('#metrics-save');
+    await page.waitForFunction(() => /^Saved in plots: /.test(document.getElementById('metrics-saved').textContent));
+    { const saved = (await text('#metrics-saved')).match(/^Saved in plots: (\S+\.csv)/)[1]; assert.match(saved, /_metrics_summary_/);
+      assert.ok(fs.existsSync(path.join(out, 'plots', saved.replace(/\.csv$/, '.metadata.json'))), 'the summary is saved with the record of how the page was set'); }
     await page.selectOption('#metrics-table', 'groups');
     assert.match(await text('#table-metrics'), /No rows were saved/);
-    await page.selectOption('#metrics-table', 'metrics'); assert.match(await text('#metric-help'), /signed net integral/);
+    await page.selectOption('#metrics-table', 'metrics'); assert.match(await text('#metric-help'), /signed/); assert.doesNotMatch(await text('#metric-help'), /Legacy/);
+    let metrics = await tableNow('table-metrics');
+    assert.deepEqual(metrics.head, ['Cell', 'Call', 'Normalization', 'Peak, ΔF/F₀', 'Time to peak, s', 'Rise time, s', 'FWHM, s', 'AUC, ΔF/F₀ × s', 'Signal-to-noise', 'Baseline SD, ΔF/F₀', 'F₀, gray levels'],
+      'the call beside the cell; the saved Status under a heading of its own');
+    assert.deepEqual([at(metrics, 'Cell001', 'Call').text, at(metrics, 'Cell001', 'Normalization').text, at(metrics, 'Cell001', 'Time to peak, s').text, at(metrics, 'Cell001', 'F₀, gray levels').text], ['Responded', 'Included', '6.00', '10.00']);
+    assert.deepEqual(at(metrics, 'Cell002', 'Time to peak, s'), { text: '–', tip: 'Saved: 2.5 · Did not respond' }, 'whole-recording timing of a cell that did not respond: a dash');
+    assert.ok(await page.isVisible('#all-metric-columns-label'));
+    await page.check('#all-metric-columns'); metrics = await tableNow('table-metrics');
+    assert.ok(metrics.head.includes('Peak above baseline, ΔF/F₀') && at(metrics, 'Cell005', 'FWHM cut off').text === 'yes', 'every saved column with the box ticked');
+    await page.uncheck('#all-metric-columns');
+    // Processed data: Frame and Time stay in view when the cells scroll sideways; headers say what the file calls them.
+    await page.click('.tab[data-tab=data]');
+    const data = await tableNow('table-data');
+    assert.deepEqual([data.head.slice(0, 3), data.titles.slice(0, 3), data.rows[1].slice(0, 2), data.frozen.slice(0, 3)],
+      [['Frame', 'Time, s', 'Cell001'], ['Frame. Saved as Frame.', 'Time. Saved as Time_s.', 'Cell001, ΔF/F₀. Saved as Cell001.'], ['2', '0.50'], [true, true, false]]);
+    assert.ok(data.rows.every((row) => row.slice(2).every((v) => v === '–' || /^−?\d+\.\d{3}$/.test(v))), 'ΔF/F₀ with 3 decimals');
+    assert.ok(await page.locator('#table-data').evaluate((t) => { const box = t.parentElement; box.style.maxWidth = '180px'; box.scrollLeft = 400;
+      const s = box.getBoundingClientRect(), frame = t.tBodies[0].rows[0].cells[0].getBoundingClientRect(), time = t.tBodies[0].rows[0].cells[1].getBoundingClientRect(); const ok = box.scrollLeft > 0 && Math.abs(frame.left - s.left) < 3 && Math.abs(time.left - frame.right) < 2;
+      box.style.maxWidth = ''; box.scrollLeft = 0; return ok; }), 'Frame and Time stay in place side by side');
+    await page.click('.tab[data-tab=metrics]');
     await page.click('#log'); await page.waitForFunction(() => /Opened .* on the Fiji computer/.test(document.getElementById('open-feedback').textContent));
 
     const opened = page.waitForResponse((response) => response.url().endsWith('/api/open') && response.status() === 200);
@@ -1565,7 +1672,22 @@ const assert = require('assert/strict');
         told[box.id.replace('figure-', '')] = ['abc', '1e1', '0x10'].map((text) => { type(box, text); return box.value === text && box.getAttribute('aria-invalid') === 'true' && !note.hidden ? note.textContent : 'taken'; }).filter((words, i, all) => all.indexOf(words) === i).join(' / '); type(box, held); }
       return Object.assign(told, { unchanged: JSON.stringify(f.Fig.plot) === was, boxes: document.querySelectorAll('#figure-controls input[inputmode=decimal]').length }); }),
       { width: '1 to 20 in', height: '1 to 20 in', text: '4 to 48 pt', titleText: '4 to 72 pt', xMin: 'Not a number', xMax: 'Not a number', xStep: 'Above 0', yMin: 'Not a number', yMax: 'Not a number', yStep: 'Above 0',
-        axisWidth: '0.25 to 6 pt', meanWidth: '0.25 to 10 pt', traceWidth: '0.1 to 6 pt', unchanged: true, boxes: 13 });
+        axisWidth: '0.25 to 6 pt', meanWidth: '0.25 to 10 pt', traceWidth: '0.1 to 6 pt', traceOpacity: '1 to 100 %', responderWidth: '0.1 to 6 pt', responderOpacity: '1 to 100 %', unchanged: true, boxes: 16 });
+    // Single cells: the line, colour and opacity of the traces of cells that did not respond, and the line and opacity of the
+    // responders' traces drawn over them. Opacity is typed in percent; an empty box is "auto", fainter the more cells there are.
+    {
+      const singles = async () => { const seen = await drawing(true), inks = await page.evaluate(() => [window.calciumStep4.STYLE.plot.colourTrace, window.calciumStep4.STYLE.plot.colourResponded]), PT = 96 / 72;
+        const of = (ink) => seen.lines.filter((l) => l.ink === ink && l.alpha < 1 && !inLegend(seen, l.x0, l.y0)).map((l) => [+l.alpha.toFixed(3), +(l.width / PT).toFixed(3)]);
+        return { others: [...new Set(of(inks[0]).map(String))], responders: [...new Set(of(inks[1]).map(String))] }; };
+      const auto = await singles(); assert.ok(auto.others.length === 1 && auto.responders.length === 1, 'the fixture draws both kinds of trace: ' + JSON.stringify(auto));
+      assert.deepEqual([await page.getAttribute('#figure-traceOpacity', 'placeholder'), await page.inputValue('#figure-traceOpacity'), await page.inputValue('#figure-responderWidth')], ['auto', '', '0.9']);
+      await typeBox('traceOpacity', '35'); await typeBox('responderWidth', '2'); await typeBox('responderOpacity', '80');
+      assert.deepEqual([(await figureNow()).traceOpacity, (await figureNow()).responderWidth, (await figureNow()).responderOpacity, await boxSays('traceOpacity'), await singles()],
+        [0.35, 2, 0.8, ['35', false, ''], { others: ['0.35,0.6'], responders: ['0.8,2'] }], 'the boxes reach the drawing: opacity in percent, lines in points');
+      for (const typed of ['0', '0.5', '150', 'abc']) { await typeBox('responderOpacity', typed); assert.deepEqual([await boxSays('responderOpacity'), (await figureNow()).responderOpacity], [[typed, true, '1 to 100 %'], 0.8], 'an opacity of "' + typed + '" is not taken'); }
+      await typeBox('traceOpacity', ''); await typeBox('responderOpacity', ''); await typeBox('responderWidth', '0.9');
+      assert.deepEqual([(await figureNow()).traceOpacity, (await figureNow()).responderOpacity, await boxSays('traceOpacity'), await singles()], [null, null, ['', false, ''], auto], 'emptied, opacity is automatic again');
+    }
     // Axis limits. A minimum at or above the maximum is not taken: the box just typed in is marked and says so, and the figure keeps
     // the limits it had. A number that waits in its box is taken as soon as the other end lets it.
     const allTime = (await drawnNow()).x; assert.deepEqual(allTime, [0, 19.5]);
@@ -1620,19 +1742,23 @@ const assert = require('assert/strict');
     assert.match(await page.textContent('#figure-pixels'), /^390 × 390 pixels: no room for the plot\. Choose smaller text or a larger size\.$/);
     assert.ok(await page.isDisabled('#figure-save') && await page.isDisabled('#figure-download')); assert.deepEqual(await boxSays('text'), ['9', false, 'Too large for this figure size']);
     await typeBox('text', '5'); assert.ok((await drawnNow()).room >= 4 && await page.isEnabled('#figure-save'), 'smaller text gives the plot its room back'); await page.click('#figure-reset'); await previewReady();
-    // Small figures. A title too long for the figure is shortened, with an ellipsis; so is a legend entry too long for its row, and
-    // the entries of a legend at the right, which takes no more than a third of the width; so are the axis titles and the stimulus
-    // label. Nothing runs out of the figure, and the legend still wraps by whole entries.
+    // Small figures. A title too long for the figure is shortened, with an ellipsis; so are the axis titles and the stimulus label.
+    // A legend entry too long for its row goes on two lines or more instead, whole, at the top and in a legend at the right, which
+    // takes no more than a third of the width and stays clear of the figure's edge. Nothing runs out of the figure, the legend still
+    // wraps by whole entries, and the plot starts under it.
     await page.click('#figure-close'); const longTitle = '2026-11-18_C1-Control_Run2_Capsaicin-0.5uM_300fr_src008';
     await figureStyle({ width: 2, title: longTitle }); fig = await drawing(true);
     const inFigure = (seen, wide) => seen.texts.filter((t) => t.align === 'left' && t.m.startsWith('1,0,0,1')).every((t) => t.x >= 0 && t.x + t.w <= wide * 96 + 0.5), titleOf = (seen) => seen.texts[seen.texts.length - 1];   // (text that starts at its x: the title, the legend)
     assert.ok(/^2026-11-18.+…$/.test(titleOf(fig).text) && longTitle.startsWith(titleOf(fig).text.slice(0, -1)) && titleOf(fig).x === fig.L, 'the title is shortened: ' + titleOf(fig).text);
     assert.ok(inFigure(fig, 2), 'title and legend end inside a figure 2 in wide');
     assert.deepEqual(fig.legend, ['all cells ± SEM (n = 4)', 'single cells', 'baseline', 'response window']); assert.equal(new Set(fig.places.map((place) => place[1])).size, 4, 'each entry on a row of its own');
-    assert.deepEqual(fig.texts.filter((t) => inLegend(fig, t.x, t.y)).map((t) => t.text).filter((words) => !fig.legend.includes(words)).map((words) => /^all cells.*…$/.test(words)), [true], 'the one entry too long for its row is shortened');
+    const whole = (seen) => seen.wrapped.every((lines, i) => lines.join(' ') === seen.legend[i]) && !seen.texts.some((t) => inLegend(seen, t.x, t.y) && /…/.test(t.text));
+    assert.ok(fig.wrapped[0].length > 1 && fig.wrapped.slice(1).every((lines) => lines.length === 1) && whole(fig), 'the one entry too long for its row goes on two lines, whole: ' + JSON.stringify(fig.wrapped));
+    assert.ok(fig.legendBox[1] + fig.legendBox[3] <= fig.top + fig.T, 'the plot starts under the taller legend');
     await figureStyle({ title: longTitle }); fig = await drawing(true); assert.equal(titleOf(fig).text, longTitle, 'a title that fits is written whole');
     await figureStyle({ width: 3, legend: 'right' }); fig = await drawing(true);
-    assert.ok(fig.legendWidth <= 96 + 0.5 && inFigure(fig, 3) && fig.texts.some((t) => /^all cells.*…$/.test(t.text)) && fig.W > 96, 'a legend at the right takes at most a third of the width: ' + [fig.legendWidth, fig.W]);
+    assert.ok(fig.legendWidth <= 96 + 0.5 && inFigure(fig, 3) && fig.wrapped.some((lines) => lines.length > 1) && whole(fig) && fig.W > 96, 'a legend at the right takes at most a third of the width, its entries whole: ' + [fig.legendWidth, fig.W, JSON.stringify(fig.wrapped)]);
+    assert.ok(3 * 96 - (fig.legendAt[0] + fig.legendWidth) >= 6 && fig.legendAt[0] >= fig.L + fig.W, 'and stays clear of the plot and of the figure\'s edge: ' + [fig.legendAt[0], fig.legendWidth, fig.L + fig.W]);
     await figureStyle({ width: 3, xTitle: 'x'.repeat(80), yTitle: 'y'.repeat(80), stimulusText: 's'.repeat(80) }); fig = await drawing(true);
     assert.deepEqual(['x', 'y', 's'].map((letter) => { const t = fig.texts.find((t) => t.text.startsWith(letter + letter)); return !!t && /…$/.test(t.text) && t.lw <= (letter === 'y' ? 4 : 3) * 96; }), [true, true, true], 'the axis titles and the stimulus label are shortened to the figure');
     await figureStyle();
@@ -1712,7 +1838,7 @@ const assert = require('assert/strict');
     await page.evaluate(() => { window.calciumStep4.S.note = 'an old message'; });
     await page.click('#discard'); await page.waitForFunction(() => !window.calciumStep4.S.state.settingsPending);
     assert.equal(await page.evaluate(() => window.calciumStep4.S.note), null);
-    assert.match(await page.title(), /6 cells · SimpleCa/);
+    assert.match(await page.title(), /^6 cells · Step 4 · Fixture recording · /);
     // The page loaded anew with a format, a resolution and a figure width kept from before. The page's own lists show them from the
     // start, so the editor, which shows those lists, opens on the format that is in use; it says that kept settings are in use; and
     // Reset to defaults clears them all.
