@@ -4166,8 +4166,10 @@ class CalciumWebBundle {
  *  the recording it was added on; and for each outline kept from elsewhere, the recording it was kept for. An outline is named
  *  by its ID (CalciumMeasurement.idFor). An outline with no note was not added by the plugin: it is from before. Nothing is
  *  written into the outlines, so the files saved with a measurement are what they always were. The notes of where outlines
- *  were added last as long as the list: an outline cleared and later opened again from a saved RoiSet is still known.
- *  A recording is known by its print (CalciumSteps.printOf), not by its name: two recordings of the same name are two.
+ *  were added last as long as the list: an outline cleared and later opened again from a saved RoiSet is still known. Closing
+ *  the ROI Manager's window ends the list; the next ROI Manager is a new list with no notes.
+ *  A recording is known by its print (CalciumSteps.printOf), not by its name: two recordings of the same name are two. For its
+ *  outlines the time base and pixel size do not count (same): setting them in Image > Properties keeps the outlines its own.
  *  Every start of the plugin runs in a class loader of its own, so the notes are kept outside its classes (Swing's table of
  *  defaults, by list, dropped with the list) and hold nothing but text. */
 class CalciumOutlines {
@@ -4176,7 +4178,8 @@ class CalciumOutlines {
     static final String NEXT='\u0000next'
     /** Put before a recording's mark: drawn by hand on that recording's own window before the plugin started on it. */
     static final String BEFORE='\u0000before\u0000'
-    /** The note of an outline cleared at the start whose recording was not known: if it comes back, it is asked about again. */
+    /** The note of an outline cleared at the start whose recording was not known: if Undo brings it back in the window that
+     *  cleared it, it is asked about again there. Anywhere else it counts as no note. */
     static final String UNKNOWN='\n\n'
     /** Where a kept outline came from, when it was drawn on this same recording before the plugin started. */
     static final String HERE='\u0000here'
@@ -4184,8 +4187,9 @@ class CalciumOutlines {
     static final String WINDOW='calcium.steps.window'
     /** The name under which a start of the plugin notes that it is under way, from Step 1 until it ends. */
     static final String STARTING='calcium.steps.starting'
-    static final String STARTING_TEXT='The plugin is already starting. Its window opens once that start is done.'
-    static final List<String> CHOICES=['Clear them','Keep them for this recording','Cancel']
+    static final String STARTING_TEXT='The plugin is already starting. Finish or cancel that start first.'
+    /** The buttons of the question about n outlines. */
+    static List<String> choices(int n){n==1 ? ['Clear it','Keep it for this recording','Cancel'] : ['Clear them','Keep them for this recording','Cancel']}
     static final String KEEP_ONLY_IF='Keep outlines only if this recording shows the same cells in the same place. Kept outlines are recorded as carried over, never as chosen blind.'
 
     static Map<String,String> notes(Object list,String which) {
@@ -4217,10 +4221,13 @@ class CalciumOutlines {
     }
     static String nameOf(String mark){mark==null?'':mark.split('\n',-1)[0]}
     static String printPart(String mark){List parts=mark.split('\n',-1) as List;parts.size()==3?parts[2]:''}
-    /** The same recording: the same print (size, frames, time base, pixel size and pixels), whatever its name or file. */
+    /** A recording's print without its time base and pixel size: size, frame count, bit depth and the first, middle and last frame. */
+    static String pixels(String print){List p=print.split(':',-1) as List;p.size()==5?([p[0]]+p.drop(2)).join(':'):print}
+    /** The same recording for its outlines: the same size, frame count, bit depth and first, middle and last frame, whatever its
+     *  name, file, time base or pixel size. (Taking up a reopened recording also needs the same time base and pixel size.) */
     static boolean same(String a,String b) {
         if(a==null||b==null||a==NEXT||b==NEXT||a.startsWith(BEFORE)||b.startsWith(BEFORE))return false
-        String x=printPart(a);x.contains(':')&&x==printPart(b)
+        String x=printPart(a);x.contains(':')&&pixels(x)==pixels(printPart(b))
     }
     /** Where an outline came from, seen from a recording: the name of the recording it was added on, HERE when it was drawn on
      *  this same recording before the plugin started, or '' when that is not known. */
@@ -4236,10 +4243,14 @@ class CalciumOutlines {
     }
     /** An outline the plugin added on a recording. addCell gives it an ID that no other outline in the list has. */
     static void made(Object list,Roi outline,String recording){String id=CalciumMeasurement.idFor(outline);notes(list,KEPT).remove(id);notes(list,MADE)[id]=recording}
-    /** Outlines drawn on this window's picture and added with the ROI Manager's own Add (the t key) are this recording's too. */
-    static void claim(Object list,Roi[] outlines,String recording,int pictureId) {
+    /** Outlines drawn on this window's picture and added with the ROI Manager's own Add (the t key) are this recording's too.
+     *  One that is new in the list since the last look (seen: the IDs of that look) is noted as made here, also when an outline
+     *  of the same shape was noted on another recording before. Outlines that were already in the list keep their notes. */
+    static void claim(Object list,Roi[] outlines,String recording,int pictureId,Set<String> seen) {
         Map made=notes(list,MADE),kept=notes(list,KEPT)
-        outlines.each{Roi outline->if(outline!=null&&outline.isArea()&&pictureId!=0&&outline.getImageID()==pictureId){String id=CalciumMeasurement.idFor(outline);if(!made.containsKey(id)&&!kept.containsKey(id))made[id]=recording}}
+        outlines.each{Roi outline->if(outline!=null&&outline.isArea()&&pictureId!=0&&outline.getImageID()==pictureId){String id=CalciumMeasurement.idFor(outline)
+            if(!seen.contains(id)){made[id]=recording;kept.remove(id)}else if(!made.containsKey(id)&&!kept.containsKey(id))made[id]=recording}}
+        seen.clear();outlines.each{Roi outline->if(outline!=null)seen.add(CalciumMeasurement.idFor(outline))}
     }
     /** At the start on a recording, before anything is changed: what each outline the list holds is. 'own': added by the plugin
      *  on this recording; 'carried': kept for it, at Change recording or by an earlier answer; 'here': drawn on this recording's
@@ -4250,7 +4261,10 @@ class CalciumOutlines {
             String kind=null
             if(outline!=null&&outline.isArea()){
                 String id=idOf(outline),on=made[id],forWhich=kept[id]
-                boolean here=on==null?recordingId!=0&&outline.getImageID()==recordingId:origin(on,recording)==HERE
+                if(on==UNKNOWN)on=null   // cleared at another start, and not known: as if never noted
+                // Only the ROI Manager's own Add takes an outline from the recording's own window (the plugin adds from its colour
+                // picture), so such an outline was drawn there, also when an outline of the same shape was noted elsewhere before.
+                boolean here=(recordingId!=0&&outline.getImageID()==recordingId)||(on!=null&&origin(on,recording)==HERE)
                 kind=same(on,recording)?'own':(forWhich==NEXT||same(forWhich,recording))?'carried':here?'here':'ask'
                 (by[kind] as List)<<outline
             }
@@ -4295,10 +4309,12 @@ class CalciumOutlines {
         outlines.each{Roi outline->String id=CalciumMeasurement.idFor(outline);if(same(kept[id],recording)&&!same(made[id],recording))out[id]=origin(made[id],recording)}
         out
     }
-    /** Outlines added on another recording, or cleared at the start, that were not kept for this one. */
-    static List<Roi> foreign(Object list,Roi[] outlines,String recording) {
+    /** Outlines added on another recording, or cleared at this window's start (clearedHere, by ID), that were not kept for this
+     *  one. An outline cleared at another window's start, whose recording was not known, is not among them. */
+    static List<Roi> foreign(Object list,Roi[] outlines,String recording,Set<String> clearedHere) {
         Map made=notes(list,MADE),kept=notes(list,KEPT)
-        outlines.findAll{Roi outline->String id=CalciumMeasurement.idFor(outline);made[id]!=null&&!same(made[id],recording)&&!same(kept[id],recording)&&origin(made[id],recording)!=HERE} as List<Roi>
+        outlines.findAll{Roi outline->String id=CalciumMeasurement.idFor(outline),on=made[id];if(on==UNKNOWN&&!clearedHere.contains(id))on=null
+            on!=null&&!same(on,recording)&&!same(kept[id],recording)&&origin(on,recording)!=HERE} as List<Roi>
     }
     /** How many of these outlines the plugin added on this recording. */
     static int madeHere(Object list,Roi[] outlines,String recording){Map made=notes(list,MADE);outlines.count{Roi outline->same(made[CalciumMeasurement.idFor(outline)],recording)} as int}
@@ -4308,18 +4324,22 @@ class CalciumOutlines {
     /** "The ROI Manager holds 115 outlines from another recording: P3 Run1." */
     static String held(Set<String> from,int n) {
         from==([''] as Set)?'The ROI Manager already holds '+count(n)+', and the plugin cannot tell which recording '+(n==1?'it is':'they are')+' from.':
-            from.size()==1?'The ROI Manager holds '+count(n)+' from another recording: '+from.first()+'.':'The ROI Manager holds '+count(n)+' from other recordings.'
+            from.size()==1?'The ROI Manager holds '+count(n)+' from another recording: '+from.first()+'.':from.contains('')?'The ROI Manager holds '+count(n)+' '+CalciumOutlines.from(from)+'.':'The ROI Manager holds '+count(n)+' from other recordings.'
     }
     /** The question about outlines that are not this recording's: asked of them; of the others, own were added by the plugin on
      *  this recording, and all of them stay. */
     static String question(Set<String> from,int asked,int own,int others) {
-        String rest=others<=0?'':' The other '+count(others)+(own==others?(others==1?' was made on this recording and stays.':' were made on this recording and stay.'):(others==1?' stays.':' stay.'))
+        String rest=others<=0?'':others==1?(own==1?' The other outline was made on this recording and stays.':' The other outline stays.'):' The other '+count(others)+(own==others?' were made on this recording and stay.':' stay.')
         held(from,asked)+rest+' '+KEEP_ONLY_IF
     }
-    /** Where outlines came from, for the record: "from P3 Run1", "from an unknown recording", "from other recordings". */
+    /** Where outlines came from, for the record: "from P3 Run1", "from an unknown recording", "from other recordings", and with
+     *  outlines from before among them "from P3 Run1 or from before" or "from other recordings or from before". */
     static String from(Collection<String> names) {
         Set distinct=names as LinkedHashSet
-        distinct==([''] as Set)?'from an unknown recording':distinct.size()==1?'from '+distinct.first():'from other recordings'
+        if(distinct==([''] as Set))return 'from an unknown recording'
+        if(distinct.size()==1)return 'from '+distinct.first()
+        Set named=distinct-['']
+        (named.size()==1?'from '+named.first():'from other recordings')+(distinct.contains('')?' or from before':'')
     }
     /** How one carried-over cell is named in the registry and in the list of how cells were chosen. */
     static String carriedText(String origin){origin==HERE?'Drawn on this recording before the plugin started':'Carried over '+from([origin?:''])}
@@ -4843,7 +4863,7 @@ else if (heldBefore.length > 0) {
     int answer = 1
     if (!asked.isEmpty()) {
         int others = (sorted.kinds as List).count { it != null } - asked.size()
-        answer = CalciumOutlines.ask(null, "Outlines in the ROI Manager", CalciumOutlines.question(CalciumOutlines.origins(rm, asked, startMark), asked.size(), (sorted.own as List).size(), others), CalciumOutlines.CHOICES)
+        answer = CalciumOutlines.ask(null, "Outlines in the ROI Manager", CalciumOutlines.question(CalciumOutlines.origins(rm, asked, startMark), asked.size(), (sorted.own as List).size(), others), CalciumOutlines.choices(asked.size()))
         if (answer != 0 && answer != 1) { IJ.showStatus(CalciumRelease.NAME + ": cancelled"); return }
     }
     Map madeOn = CalciumOutlines.notes(rm, CalciumOutlines.MADE)
@@ -4854,8 +4874,8 @@ else if (heldBefore.length > 0) {
         clearedFrom = CalciumOutlines.from(CalciumOutlines.origins(rm, asked, startMark))
         outlinesSaid << "Outlines cleared: " + CalciumOutlines.count(asked.size()) + " " + clearedFrom + " " + (asked.size() == 1 ? "was" : "were") + " in the ROI Manager when this recording was chosen and " + (asked.size() == 1 ? "was" : "were") + " cleared before any cell was chosen."
     }
-    if (!away.isEmpty()) outlinesSaid << "Outlines carried over: " + CalciumOutlines.count(away.size()) + " " + CalciumOutlines.from(away) + " " + (away.size() == 1 ? "was" : "were") + " in the ROI Manager when this recording was chosen and " + (away.size() == 1 ? "was" : "were") + " kept for it. Kept outlines were not chosen on this recording and are never counted as chosen blind."
-    if (here > 0) outlinesSaid << "Outlines drawn before the plugin started: " + CalciumOutlines.count(here) + " drawn on this recording " + (here == 1 ? "was" : "were") + " in the ROI Manager when the plugin started and " + (here == 1 ? "was" : "were") + " kept. They were not chosen in the plugin and are never counted as chosen blind."
+    if (!away.isEmpty()) outlinesSaid << "Outlines carried over: " + CalciumOutlines.count(away.size()) + " " + CalciumOutlines.from(away) + " " + (away.size() == 1 ? "was" : "were") + " in the ROI Manager when this recording was chosen and " + (away.size() == 1 ? "was" : "were") + " kept for it."
+    if (here > 0) outlinesSaid << "Outlines drawn before the plugin started: " + CalciumOutlines.count(here) + " drawn on this recording " + (here == 1 ? "was" : "were") + " in the ROI Manager when the plugin started and " + (here == 1 ? "was" : "were") + " kept."
     settleOutlines = { -> clearedAtStart.addAll(CalciumOutlines.settle(rm, heldBefore, sorted, startMark, answer == 0)) }
 }
 
@@ -4934,7 +4954,9 @@ String whyShown = ""             // and what the card says after it
 Closure whenReopened = null      // set below: Step 4 goes on with the reopened recording too
 def describeRecording = { ->
     recordingName.setWhole(imp.getTitle())
-    String closedLine = closedShown ? "<font color='" + CalciumTheme.hex(CalciumTheme.BAD) + "'><b>" + CalciumSteps.CLOSED + "</b>" + (whyShown ? " " + CalciumInstaller.escape(whyShown) : "") + "</font><br>" : ""
+    // a recording that did not come from a file cannot be opened again, so the card does not say to open it again
+    String closedHead = recordingFile == "" ? "The recording is closed in Fiji." : CalciumSteps.CLOSED
+    String closedLine = closedShown ? "<font color='" + CalciumTheme.hex(CalciumTheme.BAD) + "'><b>" + closedHead + "</b>" + (whyShown ? " " + CalciumInstaller.escape(whyShown) : "") + "</font><br>" : ""
     recordingNote.setText("<html>" + closedLine + "<font color='" + MUTED + "'>" + steps.n + " frames · " + (steps.blind ? "cells chosen blind on frames " + steps.blindFirst + "–" + steps.blindLast : steps.found ? "response near frame " + steps.onset + " (magenta)" : (steps.looked ? "no response found (no magenta)" : "response not looked for")) + "</font>" + (movedNote() ? "<br><font color='#9A5B00'>" + movedNote() + "</font>" : "") + "</html>")
     recordingNote.setToolTipText(imp.getTitle() + ". " + (steps.blind ? "Cells are chosen on frames " + steps.blindFirst + "–" + steps.blindLast + ", before the response" + (steps.found ? "; the cells start to rise near frame " + steps.onset : "") + ". The response is not shown while choosing." : steps.found ? "Brightness rises near frame " + steps.onset + "; the response can be shown in magenta." : (steps.looked ? "No response was found, so there is no magenta. Every cell is still shown in green." : "The response has not been looked for. Choose Response in Step 2 to look for it.")))
 }
@@ -4942,7 +4964,7 @@ describeRecording()
 def changeBtn = btn("‹ Change recording")
 changeBtn.setToolTipText("Back to the first screen, to choose another recording or results folder")
 def reopenBtn = btn("Open the recording again"); reopenBtn.setVisible(false)   // shown only while the recording is closed and its file is there
-reopenBtn.setToolTipText("Reads the recording's file again. The plugin goes on with the same cells when it holds the same frames.")
+reopenBtn.setToolTipText("Reads the recording's file again. The plugin goes on with the same cells when it is the same recording.")
 s1.body.add(recordingName); s1.body.add(recordingNote); s1.body.add(row(changeBtn, reopenBtn))
 def canReopen = { -> recordingFile != "" && new File(recordingFile).isFile() }
 // Every action that reads the recording's frames asks here first. False while the recording is closed in Fiji. When the same
@@ -4951,7 +4973,7 @@ def recordingReady = { ->
     boolean ready = !CalciumSteps.closed(steps.movie)
     if (!ready) try { ready = steps.recordingReady() } catch (Throwable ignored) { ready = false }
     if (ready && !steps.movie.is(imp)) { imp = steps.movie; reopenProblem = ""; if (whenReopened != null) whenReopened.call(imp) }
-    String why = ready ? "" : recordingFile == "" ? "It did not come from a file, so the plugin cannot open it again." : canReopen() ? reopenProblem : "The file is no longer there: " + recordingFile
+    String why = ready ? "" : recordingFile == "" ? "It did not come from a file, so it cannot be opened again." : canReopen() ? reopenProblem : "The file is no longer there: " + recordingFile
     if (closedShown == ready || why != whyShown) {
         closedShown = !ready; whyShown = why
         describeRecording(); reopenBtn.setVisible(!ready && canReopen()); frame.refreshContents()
@@ -5175,12 +5197,13 @@ analyzeBtn.addActionListener({ e ->
 } as java.awt.event.ActionListener)
 classicBtn.addActionListener({ e -> if (analysisMeasurement != null) { reveal(); openFijiWindow() } } as java.awt.event.ActionListener)
 // Browser pages keep their own measurement snapshots until Close analysis or Fiji exits.
+Set<String> seenIds = new HashSet<String>()   // the outline IDs of the last look: an outline not among them is new in the list
 def cellRois = { ->
     Roi[] accepted=rm.getRoisAsArray()
     Roi[] unique=accepted.collect{it} as Roi[]
     CalciumMeasurement.ensureIds(unique)
     for(int i=0;i<accepted.length;i++)if(!accepted[i].is(unique[i]))rm.setRoi(unique[i],i)
-    CalciumOutlines.claim(rm,unique,ownMark,steps.colourPic.getID())
+    CalciumOutlines.claim(rm,unique,ownMark,steps.colourPic.getID(),seenIds)
     def all = unique as List
     all.findAll { it != null && it.isArea() }.collect { def r = (Roi) it.clone(); r.setPosition(0); r } as Roi[]
 }
@@ -5351,7 +5374,7 @@ def addCell = { Roi r0 ->
     // An outline identical to one the list already holds gets an ID of its own now, as it would at the next look, so that the
     // other one keeps its note of where it came from.
     String id = CalciumOutlines.idOf(r)
-    if (rm.getRoisAsArray().any { it != null && CalciumOutlines.idOf(it) == id }) { r = new ij.io.RoiDecoder(RoiEncoder.saveAsByteArray(r), 'cell.roi').getRoi(); CalciumMeasurement.assignId(r, true) }
+    if (rm.getRoisAsArray().any { it != null && CalciumOutlines.idOf(it) == id }) { String name = r.getName(); r = new ij.io.RoiDecoder(RoiEncoder.saveAsByteArray(r), 'cell.roi').getRoi(); r.setName(name); CalciumMeasurement.assignId(r, true) }   // the copy keeps the name, so the ROI Manager labels it as before
     int before = rm.getCount(); rm.addRoi(r)
     if (rm.getCount() > before) CalciumOutlines.made(rm, rm.getRoi(rm.getCount() - 1), ownMark)   // (the ROI Manager turns down an outline equal to its last one)
 }
@@ -5742,16 +5765,13 @@ suggestBtn.addActionListener({ e ->
     forceFresh = proposals.any { (it.blind == true) == (steps.blind == true) }
     detecting = true
     detectionRunner.start(suggestBtn, detectionProgress,
-        { task ->   // the recording closed in Fiji while the suggestions were made: said in plain words
-            String said
-            try { said = suggest(task) } catch (Throwable problem) { if (recordingClosed()) return CalciumSteps.CLOSED; throw problem }
-            !task.succeeded && recordingClosed() ? CalciumSteps.CLOSED : said },
+        { task -> suggest(task) },   // reads only the pictures made at the start, so it needs no frame once it runs
         { String message ->
             detecting = false
             if (hiddenKinds.removeAll(['g0', 'g1', 'g2', 'g3'])) paintLegend()      // new suggestions are never made invisible by an old legend click
             suggestBtn.setText(proposals.isEmpty() ? "Suggest cells automatically" : "Suggest cells again")
             // a finished run is already reported under the button; only a problem is repeated here, where the eye is
-            info.setText("<html>" + (message ==~ /\d+ suggestions.*/ ? "&nbsp;" : message == CalciumSteps.CLOSED ? message : "Suggestions: " + CalciumOutlineProgress.escape(message)) + "</html>")
+            info.setText("<html>" + (message ==~ /\d+ suggestions.*/ ? "&nbsp;" : "Suggestions: " + CalciumOutlineProgress.escape(message)) + "</html>")
             if (!cellposeBusy) showCellposeState(null)
             refresh(true)
         },
@@ -5849,9 +5869,9 @@ def askChange = { String lead ->
         if (CalciumOutlines.ask(frame, 'Change recording', lead + 'Go back to choose another recording?', ['Go back', 'Cancel']) == 0) changeRecording(1)
         return
     }
-    String unmeasured = analysisMeasurement == null ? ' They have not been measured yet.' : ''
+    String unmeasured = analysisMeasurement == null ? (count == 1 ? ' It has not been measured yet.' : ' They have not been measured yet.') : ''
     int answer = CalciumOutlines.ask(frame, 'Change recording', lead + 'The ROI Manager holds ' + CalciumOutlines.count(count) + '.' + unmeasured +
-        ' Keep them only if the next recording shows the same cells in the same place. On another recording, kept outlines are recorded as carried over, never as chosen blind.',
+        (count == 1 ? ' Keep it' : ' Keep them') + ' only if the next recording shows the same cells in the same place. On another recording, kept outlines are recorded as carried over, never as chosen blind.',
         ['Clear outlines and go back', 'Keep outlines and go back', 'Cancel'])
     if (answer == 0 || answer == 1) changeRecording(answer)
 }
@@ -5862,7 +5882,7 @@ frame.getRootPane().putClientProperty(CalciumOutlines.WINDOW, [recording: imp.ge
     if (javax.swing.SwingUtilities.isEventDispatchThread()) offer.run() else javax.swing.SwingUtilities.invokeAndWait(offer)
 }])
 // Open the recording again: the file is read the way the plugin opens a file at the start. Whatever opens is taken only when it
-// holds the same frames (recordingReady); the cells, the pictures and everything chosen so far stay as they are.
+// is the same recording (recordingReady); the cells, the pictures and everything chosen so far stay as they are.
 Closure openAgain = { String path -> IJ.run("Bio-Formats Importer", "open=[" + path + "] color_mode=Grayscale view=Hyperstack stack_order=XYCZT") }
 reopenBtn.addActionListener({ e ->
     reopenBtn.setEnabled(false)
@@ -5873,7 +5893,7 @@ reopenBtn.addActionListener({ e ->
         javax.swing.SwingUtilities.invokeLater {
             reopenBtn.setEnabled(true)
             // the Recording card says what happened: the file is gone, it did not open, or it opened as another recording
-            if (!recordingReady() && canReopen()) { reopenProblem = opened ? "The file did not open with the same frames." : "The file could not be opened."; recordingReady() }
+            if (!recordingReady() && canReopen()) { reopenProblem = opened ? "The file did not open as the same recording." : "The file could not be opened."; recordingReady() }
             refresh(true)
         }
     }
@@ -5883,15 +5903,15 @@ frame.addWindowListener(new java.awt.event.WindowAdapter() { void windowClosing(
 // Sensitivity check after blind selection: response-assisted detection once, compared with the blind suggestions. Returns the
 // comparison and its report, or a message saying why it did not run. Its outlines are never added to the cells or measured.
 def runSensitivity = { Roi[] cells, String prefix, Closure tell ->
-    if (recordingClosed()) return [text: CalciumSteps.CLOSED]
+    if (recordingClosed()) return [text: 'Sensitivity check not run: ' + CalciumSteps.CLOSED.uncapitalize()]
     if (!steps.found) return [text: 'Sensitivity check not run: no response was found, so there is no response-assisted picture to compare with.']
     def assisted = [], blindSuggestions = []
     javax.swing.SwingUtilities.invokeAndWait { blindSuggestions.addAll(proposals.findAll { it.blind }) }
     def task = new CalciumOutlineTask(progress: { p, s, d -> tell('Sensitivity check: ' + s.toLowerCase() + '…') })
     String how
     try { how = suggest(task, [picture: steps.responseOutlinePicture(), dir: new File(outDir, 'automatic_outlines'), into: assisted]) }
-    catch (Throwable t) { return [text: recordingClosed() ? CalciumSteps.CLOSED : 'Sensitivity check failed: ' + t] }
-    if (!task.succeeded) return [text: recordingClosed() ? CalciumSteps.CLOSED : 'Sensitivity check not completed: ' + how]
+    catch (Throwable t) { return [text: 'Sensitivity check failed: ' + t] }
+    if (!task.succeeded) return [text: 'Sensitivity check not completed: ' + how]
     def m = CalciumSensitivity.compare(assisted, blindSuggestions, cells, edgeBox.isSelected())
     CalciumSensitivity.save(m, prefix)
     String text = CalciumSensitivity.report(m, how)
@@ -5904,22 +5924,24 @@ go.addActionListener({ e ->
     // added on another recording that were not kept for this one.
     if (!recordingReady()) { result.setText("<html>" + CalciumSteps.CLOSED + "</html>"); return }
     def sp = splitCells()
-    List<Roi> foreign = CalciumOutlines.foreign(rm, sp.all as Roi[], ownMark)
+    List<Roi> foreign = CalciumOutlines.foreign(rm, sp.all as Roi[], ownMark, clearedAtStart)
     if (!foreign.isEmpty()) {
         Set<String> origins = CalciumOutlines.origins(rm, foreign, ownMark)
         int others = (sp.all as Roi[]).length - foreign.size()
-        int answer = CalciumOutlines.ask(frame, "Measure and save", CalciumOutlines.question(origins, foreign.size(), CalciumOutlines.madeHere(rm, sp.all as Roi[], ownMark), others), CalciumOutlines.CHOICES)
+        boolean one = foreign.size() == 1
+        String pressed = go.getText()   // Measure and save, or Measure again once measured
+        int answer = CalciumOutlines.ask(frame, pressed, CalciumOutlines.question(origins, foreign.size(), CalciumOutlines.madeHere(rm, sp.all as Roi[], ownMark), others), CalciumOutlines.choices(foreign.size()))
         if (answer == 1) {
             CalciumOutlines.keep(rm, foreign, ownMark)
-            steps.say("Outlines carried over: " + CalciumOutlines.count(foreign.size()) + " " + CalciumOutlines.from(origins) + " " + (foreign.size() == 1 ? "was" : "were") + " in the ROI Manager at measuring and " + (foreign.size() == 1 ? "was" : "were") + " kept for this recording. Kept outlines were not chosen on this recording and are never counted as chosen blind.")
+            steps.say("Outlines carried over: " + CalciumOutlines.count(foreign.size()) + " " + CalciumOutlines.from(origins) + " " + (one ? "was" : "were") + " in the ROI Manager when the cells were measured and " + (one ? "was" : "were") + " kept for this recording.")
         } else {
             if (answer == 0) {
                 Set<String> gone = foreign.collect { CalciumMeasurement.idFor(it) } as Set
                 Roi[] now = rm.getRoisAsArray()
                 cellEdits.remove((0..<now.length).findAll { gone.contains(CalciumMeasurement.idFor(now[it])) })
                 refresh(true)
-                result.setText("<html>" + CalciumOutlines.count(foreign.size()) + " " + CalciumInstaller.escape(CalciumOutlines.from(origins)) + " " + (foreign.size() == 1 ? "was" : "were") + " removed. Nothing was measured. Check the cells, then press Measure and save.</html>")
-            } else result.setText("<html>Not measured. " + CalciumInstaller.escape(CalciumOutlines.held(origins, foreign.size())) + " Clear them or keep them for this recording, then measure.</html>")
+                result.setText("<html>" + CalciumOutlines.count(foreign.size()) + " " + CalciumInstaller.escape(CalciumOutlines.from(origins)) + " " + (one ? "was" : "were") + " removed. Nothing was measured. Check the cells, then press " + CalciumInstaller.escape(pressed) + ".</html>")
+            } else result.setText("<html>Not measured. " + CalciumInstaller.escape(CalciumOutlines.held(origins, foreign.size())) + (one ? " Clear it or keep it" : " Clear them or keep them") + " for this recording, then measure.</html>")
             return
         }
     }
@@ -5957,8 +5979,10 @@ go.addActionListener({ e ->
                 chosenRows = [['cell', 'chosen']] + names.collect { [it, measuredCarried.containsKey(it) ? CalciumOutlines.carriedText(measuredCarried[it]).uncapitalize() : chosenBlind[it] ? 'blind (frames ' + steps.blindFirst + '-' + steps.blindLast + ')' : 'after the response was shown'] }
                 steps.say('Chosen blind or later: ' + nBlind + ' of the ' + cells.length + ' cells were chosen blind on frames ' + steps.blindFirst + '-' + steps.blindLast + ' and are unchanged since; ' + (cells.length - nBlind - measuredCarried.size()) + ' were added or reshaped after the response was shown' + (carriedAway.isEmpty() ? '' : '; ' + carriedAway.size() + (carriedAway.size() == 1 ? ' was' : ' were') + ' carried over and not chosen on this recording') + (drawnHere == 0 ? '' : '; ' + drawnHere + (drawnHere == 1 ? ' was' : ' were') + ' drawn before the plugin started') + '. Step 4 gives % responding for each group; only the blind group is free of selection on the response. List: ' + base + '_cells_chosen_blind_or_after_response.csv')
             }
-            if (!carriedAway.isEmpty()) steps.say('Carried over: the outlines of ' + carriedAway.size() + ' of the ' + cells.length + ' cells were carried over ' + CalciumOutlines.from(carriedAway) + '. They were not chosen on this recording and are never counted as chosen blind. Step 4 gives % responding for them separately.')
-            if (drawnHere > 0) steps.say('Drawn before the plugin started: the outlines of ' + drawnHere + ' of the ' + cells.length + ' cells were drawn on this recording before the plugin started. They were not chosen in the plugin and are never counted as chosen blind. Step 4 counts them under Carried over.')
+            if (carriedAway.size() == 1) steps.say('Carried over: the outline of 1 of the ' + cells.length + ' cells was carried over ' + CalciumOutlines.from(carriedAway) + '. It was not chosen on this recording and is never counted as chosen blind. Step 4 gives % responding for it separately.')
+            else if (!carriedAway.isEmpty()) steps.say('Carried over: the outlines of ' + carriedAway.size() + ' of the ' + cells.length + ' cells were carried over ' + CalciumOutlines.from(carriedAway) + '. They were not chosen on this recording and are never counted as chosen blind. Step 4 gives % responding for them separately.')
+            if (drawnHere == 1) steps.say('Drawn before the plugin started: the outline of 1 of the ' + cells.length + ' cells was drawn on this recording before the plugin started. It was not chosen in the plugin and is never counted as chosen blind. Step 4 counts it under Carried over.')
+            else if (drawnHere > 0) steps.say('Drawn before the plugin started: the outlines of ' + drawnHere + ' of the ' + cells.length + ' cells were drawn on this recording before the plugin started. They were not chosen in the plugin and are never counted as chosen blind. Step 4 counts them under Carried over.')
             def summary = steps.measureAndSave(cells, names, outDir.getPath() + File.separator + base + "_")
             if (chosenRows != null) CalciumCsv.write(new File(outDir, base + '_cells_chosen_blind_or_after_response.csv'), chosenRows)
             if (corrected != null && saveMovie.isSelected()) IJ.saveAsTiff(corrected, outDir.getPath() + File.separator + base + "_background_corrected_movie.tif")
@@ -6014,7 +6038,7 @@ go.addActionListener({ e ->
 if (!clearedAtStart.isEmpty()) {
     Roi[] held = rm.getRoisAsArray()
     int gone = cellEdits.remove((0..<held.length).findAll { clearedAtStart.contains(CalciumOutlines.idOf(held[it])) })
-    if (gone > 0) updateEditHint("Cleared " + CalciumOutlines.count(gone) + " " + CalciumInstaller.escape(clearedFrom) + " when this recording was chosen. <b>Undo</b> brings them back.")
+    if (gone > 0) updateEditHint("Cleared " + CalciumOutlines.count(gone) + " " + CalciumInstaller.escape(clearedFrom) + " when this recording was chosen. <b>Undo</b> brings " + (gone == 1 ? "it" : "them") + " back.")
 }
 if (testGui) { binding.setVariable("hooks", [nextLine: nextLine, addRespondersBtn: addRespondersBtn, addMissedBtn: addMissedBtn, continueBtn: continueBtn, acceptAllBtn: acceptAllBtn, autoSuggestAsked: { -> autoSuggestAsked }, legendClicked: { String k, boolean o -> legendClicked.call(k, o) }, hiddenKinds: hiddenKinds, cellRois: cellRois, sensBox: sensBox, basisFor: basisFor, responseSeen: { -> responseSeen }, reveal: { -> reveal() }, runSensitivity: runSensitivity, trace: trace, respondsLegend: respondsLegend, viewAllBtn: viewAllBtn, viewBaselineBtn: viewBaselineBtn, viewResponseBtn: viewResponseBtn, selectionNote: selectionNote, selectionBasis: { -> selectionBasis }, changeBtn: changeBtn, changeRecording: changeRecording, continueBtn: continueBtn, backToCellsBtn: backToCellsBtn, backToMeasureBtn: backToMeasureBtn, cards: [s1, s2, s3, s4], recordingNote: recordingNote, detectionProgress: detectionProgress, suggestBtn: suggestBtn, edgeBox: edgeBox, addBtn: addBtn, setForceFresh: { boolean v -> forceFresh = v }, setupCellpose: setupCellpose, findCellposePython: findCellposePython, setupBtn: setupBtn, setupRow: setupRow, cpLabel: cpLabel, showCellposeState: showCellposeState, setupText: SETUP_TEXT, saveMovie: saveMovie, makeMovie: makeMovie, rm: rm, refresh: refresh, go: go, status: status, steps: steps, outDir: outDir, viewSwitch: viewSwitch, hiddenLine: hiddenLine, showSwitches: legendEntries, moreBtn: moreBtn, recordingName: recordingName, frame: frame, suggest: suggest, acceptAt: acceptAt, acceptAll: acceptAll, hoverAt: hoverAt, proposals: proposals, result: result, info: info, removeSelected: removeSelected, undoLast: undoLast, root: root, ownMark: ownMark, reopenBtn: reopenBtn, recordingReady: recordingReady, recordingClosed: recordingClosed, carriedIn: carriedIn, setOpenAgain: { Closure c -> openAgain = c }, analysisMeasurement: { -> analysisMeasurement }, editHint: editHint, undoBtn: undoBtn, askChange: askChange, cellEdits: cellEdits]); refresh(true); return }
 frame.setVisible(true)

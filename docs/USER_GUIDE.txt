@@ -373,9 +373,9 @@ EDGE_MARGIN in the settings block.
 
 OUTLINES ALREADY IN THE ROI MANAGER
 Fiji has one ROI Manager. Outlines left in it from another recording would be measured on the next
-one. The plugin notes on which recording it added each outline. The notes last until Fiji is
-closed. Nothing is written into the outlines before you answer, so the saved RoiSet files are as
-before.
+one. The plugin notes on which recording it added each outline. The notes are kept beside the ROI
+Manager, not in the outlines, and last until the ROI Manager or Fiji is closed. Saved RoiSet files
+are as before.
 When the plugin starts and the ROI Manager already holds outlines, it asks once, before any cell
 is shown:
     Clear them                    the default. These outlines are removed; Undo brings them back.
@@ -386,9 +386,11 @@ leaves the outlines as they were.
 It does not ask when the ROI Manager is empty, when the outlines were made on this same
 recording, for example after its plugin window was closed and the plugin started on it again, or
 when they were drawn on this recording's own window before the plugin started. The same recording
-means the same size, number of frames, time base, pixel size and pixels, whatever its name.
+means the same size, number of frames, and first, middle and last frame, whatever its name, time
+base or pixel size.
 Outlines opened from a RoiSet file before the plugin starts are outlines from before: unless the
-plugin added them in this Fiji session, it cannot tell which recording they are from, so it asks.
+plugin added them while this ROI Manager was open, it cannot tell which recording they are from, so
+it asks.
 To measure outlines saved from this recording, open them in the ROI Manager once the plugin window
 is open on it. They are then this recording's own, as before.
 
@@ -403,7 +405,7 @@ as chosen blind:
 Outlines drawn on this recording's own window before the plugin started are kept without a
 question. They were not chosen in the plugin either: the record says "drawn before the plugin
 started", and Step 4 counts them under Carried over.
-When no outline was carried over, every saved file is as before.
+With an empty ROI Manager at the start and the recording left open, every saved file is as before.
 
 "‹ Change recording" asks its own question: Clear outlines and go back, Keep outlines and go back,
 or Cancel. On another recording, kept outlines are recorded as carried over, never as chosen
@@ -420,28 +422,29 @@ The plugin has one window. Starting it from the menu while that window is open b
 forward and offers Change recording, instead of opening a second window. With the ROI Manager
 empty it asks "Go back to choose another recording?". Starting it while another start is still
 under way, for example while the first start makes its pictures, opens nothing and says "The
-plugin is already starting. Its window opens once that start is done." To work on another
-recording, use Change recording.
+plugin is already starting. Finish or cancel that start first." To work on another recording, use
+Change recording.
 
 THE RECORDING IS CLOSED
 "The recording is closed in Fiji. Open it again to go on." means that the recording's own window
 was closed in Fiji while the plugin window stayed open. Its frames are no longer in memory, so
-nothing that reads them can run: Measure and save, Suggest cells automatically, the picture of
-other frames before the response, looking for the response, a cell's trace, the sensitivity check
-and the movie in Step 4. Each one shows this sentence instead, also when the recording is closed
-while it runs, and nothing is saved or changed. Pictures already made, such as All frames or a
-response already found, can still be shown. The Recording card says it too, in red. The cells
-chosen so far stay as they are.
+nothing that reads them can run: Measure and save, the picture of other frames before the response,
+looking for the response, a cell's trace and the movie in Step 4. Each one shows this sentence
+instead, also when the recording is closed while it runs, and nothing is saved or changed. Suggest
+cells automatically shows it too when pressed while the recording is closed. Pictures already made,
+such as All frames or a response already found, can still be shown. The Recording card says it too,
+in red. The cells chosen so far stay as they are.
 To go on, press "Open the recording again" on the Recording card, or open the same file in Fiji.
 The button is shown only while Fiji knows the recording's file and the file is there. The plugin
 goes on only with the same recording: the same size, number of frames, time base, pixel size, and
 first, middle and last frame. Another recording with the same name is not taken. When it cannot go
 on, the card says why:
-    The file is no longer there: and the file
+    The file is no longer there: with the file's path
     The file could not be opened.
-    The file did not open with the same frames.
-    It did not come from a file, so the plugin cannot open it again.
-Once the plugin goes on, _what_was_done.txt says that the recording was closed and opened again.
+    The file did not open as the same recording.
+    It did not come from a file, so it cannot be opened again.
+When the cells are measured again, _what_was_done.txt says that the recording was closed and opened
+again.
 Step 4 goes on with it too, also a Step 4 page or window opened while it was closed.
 
 DIM CELLS AND PERCENT RESPONDING

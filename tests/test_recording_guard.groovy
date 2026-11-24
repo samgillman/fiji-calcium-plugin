@@ -22,12 +22,15 @@ import java.util.zip.ZipFile
 
 String pluginPath = System.getProperty('calcium.test.plugin') ?: 'scripts/Plugins/Calcium Imaging/Calcium_Cells_Step_By_Step.groovy'
 List<String> ALL_PARTS = ['replay', '1', '2', '3', '4', '5', 'double', 'sameid', 'sametitle', 'handdrawn', 'undoclear', 'step4closed', 'wording',
-                          'calibration', 'closemeasure', 'claim', 'reopenmsg', 'cancelids', 'zip', 'emptysecond', 'response', 'workclose', 'noside']
+                          'calibration', 'closemeasure', 'claim', 'reopenmsg', 'cancelids', 'zip', 'emptysecond', 'response', 'workclose', 'noside',
+                          'unknownzip', 'claimsame', 'calibchange', 'dupname', 'singular']
 List<String> parts = System.getProperty('calcium.test.parts') ? System.getProperty('calcium.test.parts').split(',')*.trim() : ALL_PARTS
 String CLOSED = 'The recording is closed in Fiji. Open it again to go on.'
 String NAME = 'Ca²⁺ Imaging (Wang Lab)'
 String KEEP_ONLY_IF = 'Keep outlines only if this recording shows the same cells in the same place. Kept outlines are recorded as carried over, never as chosen blind.'
 String CHANGE_KEEP = 'Keep them only if the next recording shows the same cells in the same place. On another recording, kept outlines are recorded as carried over, never as chosen blind.'
+String CLOSED_NO_FILE = 'The recording is closed in Fiji. It did not come from a file, so it cannot be opened again.'
+List<String> ONE = ['Clear it', 'Keep it for this recording', 'Cancel'], MANY = ['Clear them', 'Keep them for this recording', 'Cancel']
 def onUI = { Closure c -> SwingUtilities.invokeAndWait(c as Runnable) }
 def clean = { s -> s == null ? '' : s.toString().replaceAll('<[^>]+>', ' ').replaceAll('&nbsp;', ' ').replaceAll('\\s+', ' ').trim() }
 def work = new File(System.getProperty('calcium.test.work') ?: 'build/test-output/recording-guard').absoluteFile; work.deleteDir(); work.mkdirs()
@@ -122,7 +125,7 @@ def closeWindow = { hooks -> onUI { hooks.detectionProgress.close(); hooks.frame
 def text = { File dir, String suffix -> new File(dir, dir.name + suffix).getText('UTF-8') }
 def chosenList = { File dir -> text(dir, '_cells_chosen_blind_or_after_response.csv').readLines().drop(1)*.split(',', 2)*.getAt(1) }
 // Each part starts as Fiji does after a restart: no plugin window, no picture, an empty ROI Manager, and no note of where
-// outlines were made (those notes live as long as Fiji runs).
+// outlines were made (those notes live as long as the ROI Manager).
 def fresh = { ->
     onUI {
         UIManager.put('calcium.outlines', null)
@@ -165,7 +168,7 @@ try {
         // B starts with A's three outlines in the ROI Manager
         boolean askedAtStart = !b.asked.isEmpty()
         if (!askedAtStart) faults << 'B started with the 3 outlines of A in the ROI Manager and no question was asked'
-        else assert b.asked.size() == 1 && b.asked[0].title == 'Outlines in the ROI Manager' && b.asked[0].choices == ['Clear them', 'Keep them for this recording', 'Cancel'] && !b.asked[0].pictureMade &&
+        else assert b.asked.size() == 1 && b.asked[0].title == 'Outlines in the ROI Manager' && b.asked[0].choices == MANY && !b.asked[0].pictureMade &&
             b.asked[0].text == 'The ROI Manager holds 3 outlines from another recording: A.tif. ' + KEEP_ONLY_IF : b.asked
         draw(b.hooks, cellsB)
         assert manager.getCount() == 5
@@ -178,7 +181,7 @@ try {
         else {
             assert chosenB == ['carried over from A.tif'] * 3 + ['blind (frames 1-10)'] * 2 : chosenB
             // with no question at the start, Measure and save asks instead (the answer is the same) and the record says when
-            assert recordB.contains('Outlines carried over: 3 outlines from A.tif were in the ROI Manager ' + (askedAtStart ? 'when this recording was chosen and were kept for it.' : 'at measuring and were kept for this recording.') + ' Kept outlines were not chosen on this recording and are never counted as chosen blind.')
+            assert recordB.readLines().contains('Outlines carried over: 3 outlines from A.tif were in the ROI Manager ' + (askedAtStart ? 'when this recording was chosen and were kept for it.' : 'when the cells were measured and were kept for this recording.'))
             assert recordB.contains('Chosen blind or later: 2 of the 5 cells were chosen blind on frames 1-10 and are unchanged since; 0 were added or reshaped after the response was shown; 3 were carried over and not chosen on this recording.')
             assert recordB.contains('Carried over: the outlines of 3 of the 5 cells were carried over from A.tif. They were not chosen on this recording and are never counted as chosen blind. Step 4 gives % responding for them separately.')
             assert recordB.contains('Cell selection basis: Before the response, blind (frames 1-10); 3 of the 5 outlines carried over from A.tif.')
@@ -196,7 +199,8 @@ try {
         if (again.startsWith('Done.')) faults << 'A was measured again with B\'s outlines and its tables were overwritten: "' + again.take(40) + '"'
         else {
             assert again == 'Not measured. The ROI Manager holds 2 outlines from another recording: B.tif. Clear them or keep them for this recording, then measure.' : again
-            assert a.asked.size() == askedBefore + 1 && a.asked[-1].title == 'Measure and save' && a.asked[-1].text == 'The ROI Manager holds 2 outlines from another recording: B.tif. The other 3 outlines were made on this recording and stay. ' + KEEP_ONLY_IF : a.asked[-1].text
+            // A was measured, so its button reads Measure again, and so does the question's title
+            assert a.asked.size() == askedBefore + 1 && a.asked[-1].title == 'Measure again' && a.asked[-1].text == 'The ROI Manager holds 2 outlines from another recording: B.tif. The other 3 outlines were made on this recording and stay. ' + KEEP_ONLY_IF : a.asked[-1].title + ': ' + a.asked[-1].text
             assert filesOf(a.hooks.outDir) == tablesA : 'a refused Measure and save writes nothing'
         }
         tablesA = filesOf(a.hooks.outDir)
@@ -207,7 +211,7 @@ try {
         else {
             assert !afterClose.contains('java') && !afterClose.contains('Exception')
             assert filesOf(a.hooks.outDir) == tablesA : 'nothing is saved or changed'
-            onUI { a.hooks.refresh(false); assert clean(a.hooks.recordingNote.text).startsWith(CLOSED + ' It did not come from a file, so the plugin cannot open it again.') : 'the Recording card says so too: ' + a.hooks.recordingNote.text }
+            onUI { a.hooks.refresh(false); assert clean(a.hooks.recordingNote.text).startsWith(CLOSED_NO_FILE + ' 30 frames') : 'the Recording card says so too: ' + a.hooks.recordingNote.text }
         }
         assert faults.isEmpty() : 'What happened on 23 Nov 2026 happens with this plugin file:\n  - ' + faults.join('\n  - ')
         println 'PASS: replay of 23 Nov 2026: a second start offers Change recording in the open window; started beside it, B asks about A\'s outlines, records the kept ones as carried over from A and none as chosen blind; A\'s window refuses to measure B\'s outlines; with A\'s recording closed it gives the plain message and writes nothing'
@@ -246,7 +250,7 @@ try {
             c.hooks.viewBaselineBtn.doClick(); assert clean(c.hooks.selectionNote.text) == CLOSED && c.hooks.steps.blind : 'nothing is changed by the refused action'
             c.hooks.viewAllBtn.doClick()   // the all-frames picture is already made: it needs no frame
             assert !c.hooks.steps.blind && c.hooks.hoverAt(70, 70).contains('Your cell 1') && c.hooks.trace.vals == null && c.hooks.trace.caption == CLOSED && c.hooks.trace.visible
-            assert c.hooks.runSensitivity(c.hooks.cellRois(), new File(work, 'never_').path, { }).text == CLOSED && !new File(work, 'never_sensitivity_check.csv').exists()
+            assert c.hooks.runSensitivity(c.hooks.cellRois(), new File(work, 'never_').path, { }).text == 'Sensitivity check not run: the recording is closed in Fiji. Open it again to go on.' && !new File(work, 'never_sensitivity_check.csv').exists()
             // the Fiji Step 4 window: the movie view says so instead of a frame
             fijiStep4.showFrame(6); assert fijiStep4.cellPicture.note == CLOSED && !fijiStep4.player.running
         }
@@ -264,7 +268,7 @@ try {
         assert text(c.hooks.outDir, '_what_was_done.txt').contains('Recording: it was closed in Fiji and opened again. The plugin went on with the reopened recording after comparing its size, frame count, time base, pixel size and first, middle and last frame.')
         assert session.frame(5, 'raw').length > 100 : 'the Step 4 page goes on with the reopened recording too'
         onUI { fijiStep4.showFrame(5); assert fijiStep4.cellPicture.note == 'frame 5 as recorded'; fijiStep4.dispose() }
-        println 'PASS: the recording was closed: Measure and save, Suggest cells, the pictures, a trace, the sensitivity check, the Step 4 page\'s and the Fiji Step 4 window\'s frames say "' + CLOSED + '" and change nothing; the Recording card says so; another recording of the same name is not taken; Open the recording again goes on with the same cells'
+        println 'PASS: the recording was closed: Measure and save, Suggest cells, the picture of frames before the response, a trace, the Step 4 page\'s and the Fiji Step 4 window\'s frames say "' + CLOSED + '" and change nothing; the sensitivity check says it was not run; the Recording card says so; another recording of the same name is not taken; Open the recording again goes on with the same cells'
         closeWindow(c.hooks)
     }
 
@@ -277,7 +281,7 @@ try {
         def cancelled = start(D, [script: shared, answers: [reply: { title, said -> 'Cancel' }]])
         assert cancelled.asked.size() == 1 : 'D started with the 3 outlines of F in the ROI Manager and ' + (cancelled.asked ? 'asked ' + cancelled.asked.size() + ' questions' : 'no question was asked')
         assert cancelled.hooks == null && manager.getCount() == 3 && WindowManager.getImage('colour_D.tif') == null : 'Cancel stops the start and leaves the outlines'
-        assert cancelled.asked[0].title == 'Outlines in the ROI Manager' && cancelled.asked[0].choices == ['Clear them', 'Keep them for this recording', 'Cancel'] && !cancelled.asked[0].pictureMade &&
+        assert cancelled.asked[0].title == 'Outlines in the ROI Manager' && cancelled.asked[0].choices == MANY && !cancelled.asked[0].pictureMade &&
             cancelled.asked[0].text == 'The ROI Manager holds 3 outlines from another recording: F.tif. ' + KEEP_ONLY_IF : cancelled.asked
         // the same recording, started again after its window was closed: its own outlines, no question
         def f2 = start(F, [script: shared])
@@ -292,8 +296,9 @@ try {
         draw(d.hooks, cellsB)
         closeWindow(d.hooks)
         onUI { manager.addRoi(new OvalRoi(100, 60, 20, 20)) }
-        def d2 = start(D, [script: shared, answers: [reply: { title, said -> 'Clear them' }]])
+        def d2 = start(D, [script: shared, answers: [reply: { title, said -> 'Clear it' }]])
         assert d2.asked.size() == 1 && d2.asked[0].text == 'The ROI Manager already holds 1 outline, and the plugin cannot tell which recording it is from. The other 2 outlines were made on this recording and stay. ' + KEEP_ONLY_IF : d2.asked
+        assert d2.asked[0].choices == ONE && !d2.asked[0].pictureMade
         assert manager.getCount() == 2
         // Change recording keeps its own question, and the next start does not ask again: the outlines are carried over
         d2.answers.reply = { title, said -> 'Keep outlines and go back' }
@@ -336,7 +341,8 @@ try {
         String recordH = text(h.hooks.outDir, '_what_was_done.txt')
         assert recordH.contains('Chosen blind or later: 2 of the 4 cells were chosen blind on frames 1-10 and are unchanged since; 0 were added or reshaped after the response was shown; 2 were carried over and not chosen on this recording.') :
             'the 2 outlines of G kept for H are counted as chosen on H: "' + recordH.readLines().find { it.startsWith('Chosen blind or later') }?.take(140) + '"'
-        assert recordH.contains('Outlines carried over: 2 outlines from G.tif were in the ROI Manager when this recording was chosen and were kept for it.')
+        assert recordH.readLines().contains('Outlines carried over: 2 outlines from G.tif were in the ROI Manager when this recording was chosen and were kept for it.')
+        assert recordH.count('never counted as chosen blind') == 1 : 'the record says more than once that the kept outlines are never counted as chosen blind'
         assert recordH.contains('Carried over: the outlines of 2 of the 4 cells were carried over from G.tif.') && recordH.contains('Cell selection basis: Before the response, blind (frames 1-10); 2 of the 4 outlines carried over from G.tif.')
         assert chosenList(h.hooks.outDir) == ['carried over from G.tif'] * 2 + ['blind (frames 1-10)'] * 2
         Map handedH = h.hooks.analysisMeasurement()
@@ -370,7 +376,7 @@ try {
         Map percentM = percentRows(m.hooks.analysisMeasurement())
         assert !percentM.rows.containsKey('carried') && percentM.sentence == ' All 3 cells were chosen blind: 3 of 3 responded (100.0 %).' : percentM
         closeWindow(m.hooks)
-        println 'PASS: kept outlines are named as carried over in what_was_done.txt, the blind list, the registry and what Step 4 is handed, and have a row of their own in the percent table, Carried over, never under Chosen blind; without them every line is as before'
+        println 'PASS: kept outlines are named as carried over in what_was_done.txt, the blind list, the registry and what Step 4 is handed, and have a row of their own in the percent table, Carried over, never under Chosen blind; without them the Chosen blind line, the percent table and its sentence are as before'
     }
 
     // ------------------------------------------------------------------ 4. one plugin window (each start is a compile of its own)
@@ -406,16 +412,17 @@ try {
         Map tablesD = filesOf(d.hooks.outDir)
         d.answers.reply = { title, said -> 'Cancel' }
         String refused = measure(d.hooks)
-        assert refused == 'Not measured. The ROI Manager holds 1 outline from another recording: E.tif. Clear them or keep them for this recording, then measure.' : 'Measure and save with an outline of E in D\'s window said: "' + refused.take(60) + '"'
-        assert d.asked.size() == 1 && d.asked[0].title == 'Measure and save' && d.asked[0].choices == ['Clear them', 'Keep them for this recording', 'Cancel'] && filesOf(d.hooks.outDir) == tablesD
-        d.answers.reply = { title, said -> 'Clear them' }
+        assert refused == 'Not measured. The ROI Manager holds 1 outline from another recording: E.tif. Clear it or keep it for this recording, then measure.' : 'Measure and save with an outline of E in D\'s window said: "' + refused.take(60) + '"'
+        assert d.asked.size() == 1 && d.asked[0].title == 'Measure and save' && d.asked[0].choices == ONE && filesOf(d.hooks.outDir) == tablesD
+        d.answers.reply = { title, said -> 'Clear it' }
         assert measure(d.hooks) == '1 outline from E.tif was removed. Nothing was measured. Check the cells, then press Measure and save.' && manager.getCount() == 2 && filesOf(d.hooks.outDir) == tablesD
         onUI { d.hooks.undoLast(); assert manager.getCount() == 3 : 'the removal can be undone' }
-        d.answers.reply = { title, said -> 'Keep them for this recording' }
+        d.answers.reply = { title, said -> 'Keep it for this recording' }
         String kept = measure(d.hooks)
         assert kept.startsWith('Done. 3 cells measured') : kept
         String recordD = text(d.hooks.outDir, '_what_was_done.txt')
-        assert recordD.contains('Outlines carried over: 1 outline from E.tif was in the ROI Manager at measuring and was kept for this recording.') && recordD.contains('Carried over: the outlines of 1 of the 3 cells were carried over from E.tif.')
+        assert recordD.readLines().contains('Outlines carried over: 1 outline from E.tif was in the ROI Manager when the cells were measured and was kept for this recording.') : recordD
+        assert recordD.readLines().contains('Carried over: the outline of 1 of the 3 cells was carried over from E.tif. It was not chosen on this recording and is never counted as chosen blind. Step 4 gives % responding for it separately.') : recordD
         assert recordD.contains('; 1 was carried over and not chosen on this recording.')
         int questions = d.asked.size(); assert measure(d.hooks).startsWith('Done. 3 cells measured') && d.asked.size() == questions : 'kept once, not asked again'
         closeWindow(d.hooks)
@@ -438,6 +445,7 @@ try {
         int windows = 0; onUI { windows = java.awt.Window.getWindows().count { it instanceof JFrame && it.isDisplayable() && it.rootPane.getClientProperty('calcium.steps.window') != null } }
         assert second.hooks == null && windows == 1 : 'a start while the first start made its pictures opened a second plugin window: ' + windows + ' plugin windows'
         assert second.alreadyStarting && WindowManager.getImage('colour_DS.tif') == null && first.hooks != null
+        assert first.Outlines.STARTING_TEXT == 'The plugin is already starting. Finish or cancel that start first.'
         // once the first start has its window, a start finds that window
         first.answers.reply = { title, said -> 'Cancel' }
         def third = start(D)
@@ -463,9 +471,9 @@ try {
         assert manager.getCount() == 4
         sd.answers.reply = { title, said -> 'Cancel' }
         String said = measure(sd.hooks)
-        assert said == 'Not measured. The ROI Manager holds 1 outline from another recording: SE.tif. Clear them or keep them for this recording, then measure.' :
+        assert said == 'Not measured. The ROI Manager holds 1 outline from another recording: SE.tif. Clear it or keep it for this recording, then measure.' :
             'with the same outline added on SD, the outline of SE ' + (said.startsWith('Done.') ? 'was measured as SD\'s own: "' + said.take(40) + '"' : 'gave: "' + said + '"')
-        sd.answers.reply = { title, said2 -> 'Keep them for this recording' }
+        sd.answers.reply = { title, said2 -> 'Keep it for this recording' }
         assert measure(sd.hooks).startsWith('Done. 4 cells measured')
         assert text(sd.hooks.outDir, '_what_was_done.txt').contains('Chosen blind or later: 3 of the 4 cells were chosen blind on frames 1-10 and are unchanged since; 0 were added or reshaped after the response was shown; 1 was carried over and not chosen on this recording.')
         assert chosenList(sd.hooks.outDir) == ['blind (frames 1-10)'] * 2 + ['carried over from SE.tif', 'blind (frames 1-10)']
@@ -501,7 +509,7 @@ try {
         draw(h.hooks, [cellsA[0]])
         assert measure(h.hooks).startsWith('Done. 3 cells measured')
         String record = text(h.hooks.outDir, '_what_was_done.txt')
-        assert record.contains('Outlines drawn before the plugin started: 2 outlines drawn on this recording were in the ROI Manager when the plugin started and were kept. They were not chosen in the plugin and are never counted as chosen blind.') : record
+        assert record.readLines().contains('Outlines drawn before the plugin started: 2 outlines drawn on this recording were in the ROI Manager when the plugin started and were kept.') : record
         assert record.contains('Chosen blind or later: 1 of the 3 cells were chosen blind on frames 1-10 and are unchanged since; 0 were added or reshaped after the response was shown; 2 were drawn before the plugin started.')
         assert record.contains('Drawn before the plugin started: the outlines of 2 of the 3 cells were drawn on this recording before the plugin started. They were not chosen in the plugin and are never counted as chosen blind. Step 4 counts them under Carried over.')
         assert !record.contains('arried over from') && !record.readLines().any { it.startsWith('Carried over:') || it.startsWith('Outlines carried over:') }
@@ -517,6 +525,17 @@ try {
         ImagePlus HE = recording('HE.tif', 30, cellsA, 42); onUI { HE.show() }
         def other = start(HE, [script: shared, answers: [reply: { title, said -> 'Cancel' }]])
         assert other.asked.size() == 1 && other.asked[0].text == 'The ROI Manager holds 3 outlines from another recording: HD.tif. ' + KEEP_ONLY_IF : other.asked*.text
+        // one outline drawn before the start: every line about it in the singular
+        onUI { manager.reset() }
+        ImagePlus HF = recording('HF.tif', 30, cellsA + cellsB, 43); onUI { HF.show(); HF.setRoi(new OvalRoi(cellsB[0][0] - 9, cellsB[0][1] - 9, 18, 18)); manager.addRoi(HF.getRoi()); HF.deleteRoi() }
+        def one = start(HF, [script: shared]); assert one.hooks != null && one.asked.isEmpty()
+        draw(one.hooks, [cellsA[0]])
+        assert measure(one.hooks).startsWith('Done. 2 cells measured')
+        List oneRecord = text(one.hooks.outDir, '_what_was_done.txt').readLines()
+        assert oneRecord.contains('Outlines drawn before the plugin started: 1 outline drawn on this recording was in the ROI Manager when the plugin started and was kept.') : oneRecord
+        assert oneRecord.contains('Drawn before the plugin started: the outline of 1 of the 2 cells was drawn on this recording before the plugin started. It was not chosen in the plugin and is never counted as chosen blind. Step 4 counts it under Carried over.') : oneRecord
+        assert oneRecord.any { it.startsWith('Chosen blind or later: 1 of the 2 cells were chosen blind on frames 1-10 and are unchanged since; 0 were added or reshaped after the response was shown; 1 was drawn before the plugin started.') } : oneRecord
+        closeWindow(one.hooks)
         println 'PASS: handdrawn: outlines drawn on the recording\'s own window before the start are kept without a question and recorded as drawn before the plugin started, never as chosen blind and never as from another recording'
     }
 
@@ -588,7 +607,7 @@ try {
         def Steps = d.loader.loadClass('CalciumSteps')
         onUI { manager.addRoi(new OvalRoi(100, 60, 20, 20)); d.Outlines.made(manager, manager.getRoi(3), markOf(d.Outlines, Steps, WE)); d.hooks.refresh(true) }
         d.answers.reply = { title, said -> 'Cancel' }
-        assert measure(d.hooks) == 'Not measured. The ROI Manager holds 1 outline from another recording: WE.tif. Clear them or keep them for this recording, then measure.'
+        assert measure(d.hooks) == 'Not measured. The ROI Manager holds 1 outline from another recording: WE.tif. Clear it or keep it for this recording, then measure.'
         assert d.asked[-1].text == 'The ROI Manager holds 1 outline from another recording: WE.tif. The other 3 outlines stay. ' + KEEP_ONLY_IF :
             'the question at Measure and save says: "' + d.asked[-1].text + '"; 2 of the other 3 were carried over from WG.tif'
         closeWindow(d.hooks)
@@ -673,15 +692,15 @@ try {
         // it opens with other frames
         onUI { r.hooks.setOpenAgain { String path -> recording('RO.tif', 30, cellsA, 102).show() }; r.hooks.reopenBtn.doClick() }
         assert waitFor(20) { r.hooks.reopenBtn.enabled }
-        onUI { assert clean(r.hooks.recordingNote.text).startsWith(CLOSED + ' The file did not open with the same frames. 30 frames') : 'other frames: ' + clean(r.hooks.recordingNote.text) }
+        onUI { assert clean(r.hooks.recordingNote.text).startsWith(CLOSED + ' The file did not open as the same recording. 30 frames') : 'other frames: ' + clean(r.hooks.recordingNote.text) }
         closeWindow(r.hooks)
         // a recording that did not come from a file
         ImagePlus N = recording('RN.tif', 30, cellsA, 103); onUI { N.show(); manager.reset() }
         def n = start(N, [script: shared])
         onUI { closeInFiji(N); n.hooks.refresh(false) }
-        onUI { assert clean(n.hooks.recordingNote.text).startsWith(CLOSED + ' It did not come from a file, so the plugin cannot open it again.') && !n.hooks.reopenBtn.visible : clean(n.hooks.recordingNote.text) }
+        onUI { assert clean(n.hooks.recordingNote.text).startsWith(CLOSED_NO_FILE + ' 30 frames') && !clean(n.hooks.recordingNote.text).contains('Open it again') && !n.hooks.reopenBtn.visible : clean(n.hooks.recordingNote.text) }
         closeWindow(n.hooks)
-        println 'PASS: reopenmsg: the Recording card says when the file is no longer there, could not be opened, or opened with other frames, and when the recording did not come from a file; Open the recording again is offered only while the file is there'
+        println 'PASS: reopenmsg: the Recording card says when the file is no longer there, could not be opened, or did not open as the same recording, and when the recording did not come from a file, without saying to open it again; Open the recording again is offered only while the file is there'
     }
 
     // ------------------------------------------------------------------ cancelids: Cancel at the start changes nothing
@@ -715,7 +734,7 @@ try {
         assert said == 'Not measured. The ROI Manager holds 3 outlines from another recording: ZA.tif. Clear them or keep them for this recording, then measure.' :
             'the outlines of ZA opened from its RoiSet in the window of ZB: "' + said.take(40) + '"'
         closeWindow(zb.hooks)
-        println 'PASS: zip: a RoiSet of another recording measured in this Fiji session and opened by hand is asked about at Measure and save'
+        println 'PASS: zip: a RoiSet of another recording measured while the ROI Manager stayed open, opened by hand, is asked about at Measure and save'
     }
 
     // ------------------------------------------------------------------ emptysecond: a second start with the ROI Manager empty
@@ -764,7 +783,8 @@ try {
         ws.hooks.steps.metaClass.responseOutlinePicture = { -> def picture = realPicture.invoke(delegate); closeInFiji(WS); picture }
         Roi[] cells = null; onUI { cells = ws.hooks.cellRois() }
         def checked = ws.hooks.runSensitivity(cells, new File(work, 'ws_').path, { })
-        assert checked.text == CLOSED : 'the recording closed during the sensitivity check: "' + checked.text + '"'
+        // it reads only the pictures made at the start, so it runs on, and what it says is its own result (Cellpose fails here)
+        assert checked.text.startsWith('Sensitivity check not completed: Cellpose made no outlines') : 'the recording closed during the sensitivity check: "' + checked.text + '"'
         closeWindow(ws.hooks); onUI { manager.reset() }
         // the picture of other frames before the response
         ImagePlus WB = recording('WB.tif', 30, cellsA, 152); onUI { WB.show() }
@@ -781,9 +801,9 @@ try {
             Progress.metaClass.begin = { -> def task = realBegin.invoke(delegate); closeInFiji(WC); task } }])   // closed as the suggestions begin
         onUI { wc.hooks.suggestBtn.doClick() }
         assert waitFor(60) { wc.hooks.suggestBtn.enabled }
-        onUI { assert clean(wc.hooks.info.text) == CLOSED : 'the recording closed while the suggestions were made: "' + clean(wc.hooks.info.text) + '"' }
+        onUI { assert clean(wc.hooks.info.text).startsWith('Suggestions: Cellpose made no outlines') : 'the recording closed while the suggestions were made: "' + clean(wc.hooks.info.text) + '"' }
         closeWindow(wc.hooks)
-        println 'PASS: workclose: the recording closed while the sensitivity check, the picture of frames before the response or the suggestions are made: each says "' + CLOSED + '"'
+        println 'PASS: workclose: the recording closed while the picture of frames before the response is made: it says "' + CLOSED + '"; closed while Suggest cells or the sensitivity check runs, which read only the pictures made at the start: each reports its own result'
     }
 
     // ------------------------------------------------------------------ noside: looking whether the recording is closed touches nothing
@@ -801,6 +821,142 @@ try {
         assert Steps.closed(watched) && touched.get() == 0
         closeWindow(ns.hooks)
         println 'PASS: noside: looking whether the recording is closed reads nothing from it and changes nothing on it'
+    }
+
+    // ------------------------------------------------------------------ unknownzip: outlines of no known recording cleared at a start
+    if ('unknownzip' in parts) {
+        fresh()
+        // UZ was measured in an earlier Fiji session: its RoiSet is all that is left of it
+        ImagePlus UZ0 = recording('UZ.tif', 30, cellsA, 372); onUI { UZ0.show() }
+        def first = start(UZ0, [script: shared]); draw(first.hooks, cellsA)
+        assert measure(first.hooks).startsWith('Done. 3 cells measured')
+        File zip = new File(work, 'UZ_accepted_rois.zip'); zip.bytes = new File(first.hooks.outDir, 'UZ_accepted_rois.zip').bytes
+        closeWindow(first.hooks)
+        fresh()   // Fiji closed and started again: no notes
+        ImagePlus UY = recording('UY.tif', 30, cellsB, 371), UZ = recording('UZ.tif', 30, cellsA, 372); onUI { UY.show(); UZ.show(); manager.open(zip.path) }   // opened to look at it
+        def y = start(UY, [script: shared, answers: [reply: { title, said -> 'Clear them' }]])
+        assert y.asked.size() == 1 && y.asked[0].text.startsWith('The ROI Manager already holds 3 outlines, and the plugin cannot tell which recording they are from.') && manager.getCount() == 0 : y.asked*.text
+        // in the window that cleared them, Undo brings them back and they are asked about again
+        onUI { y.hooks.undoLast() }; assert manager.getCount() == 3
+        y.answers.reply = { title, said -> 'Cancel' }
+        assert measure(y.hooks) == 'Not measured. The ROI Manager already holds 3 outlines, and the plugin cannot tell which recording they are from. Clear them or keep them for this recording, then measure.'
+        y.answers.reply = { title, said -> 'Clear outlines and go back' }; onUI { y.hooks.changeBtn.doClick() }
+        assert manager.getCount() == 0
+        // UZ, started with the ROI Manager empty; its own RoiSet is opened once its window is open, as the guide says
+        def z = start(UZ, [script: shared]); assert z.hooks != null && z.asked.isEmpty()
+        onUI { manager.open(zip.path); z.hooks.refresh(true) }
+        z.answers.reply = { title, said -> 'Cancel' }
+        String said = measure(z.hooks)
+        assert said.startsWith('Done. 3 cells measured on 30 frames') : 'UZ with its own RoiSet, cleared before at the start of UY: "' + said + '"'
+        assert z.asked.isEmpty() && chosenList(z.hooks.outDir) == ['blind (frames 1-10)'] * 3 : chosenList(z.hooks.outDir)
+        closeWindow(z.hooks)
+        // the same with an outline from before that has no ID, and the window that cleared it closed instead
+        ImagePlus UB = recording('UB.tif', 30, cellsB, 301), UC = recording('UC.tif', 30, cellsA, 302)
+        onUI { manager.reset(); UB.show(); UC.show(); manager.addRoi(new OvalRoi(cellsA[0][0] - 9, cellsA[0][1] - 9, 18, 18)) }
+        def b = start(UB, [script: shared, answers: [reply: { title, said2 -> 'Clear it' }]])
+        String hint = null; onUI { hint = clean(b.hooks.editHint?.text) }
+        assert b.asked.size() == 1 && b.asked[0].choices == ONE && manager.getCount() == 0 : b.asked
+        assert hint == 'Cleared 1 outline from an unknown recording when this recording was chosen. Undo brings it back.' : hint
+        closeWindow(b.hooks)
+        def c = start(UC, [script: shared]); assert c.hooks != null && c.asked.isEmpty()
+        onUI { cellsA.each { p -> manager.addRoi(new OvalRoi(p[0] - 9, p[1] - 9, 18, 18)) }; c.hooks.refresh(true) }
+        c.answers.reply = { title, said2 -> 'Cancel' }
+        String saidC = measure(c.hooks)
+        assert saidC.startsWith('Done. 3 cells measured on 30 frames') && c.asked.isEmpty() && chosenList(c.hooks.outDir) == ['blind (frames 1-10)'] * 3 : saidC
+        closeWindow(c.hooks)
+        println 'PASS: unknownzip: outlines of no known recording cleared at one start are asked about again only in the window that cleared them; opened later in their own recording\'s window they are its own and chosen blind, as before'
+    }
+
+    // ------------------------------------------------------------------ claimsame: the ROI Manager's Add of a shape added on another recording
+    if ('claimsame' in parts) {
+        fresh()
+        ImagePlus QA = recording('QA.tif', 30, cellsA, 311), QB = recording('QB.tif', 30, cellsA + cellsB, 312); onUI { QA.show(); QB.show() }
+        def a = start(QA, [script: shared]); draw(a.hooks, cellsA)
+        assert measure(a.hooks).startsWith('Done. 3 cells measured')
+        a.answers.reply = { title, said -> 'Clear outlines and go back' }; onUI { a.hooks.changeBtn.doClick() }
+        def b = start(QB, [script: shared]); assert b.hooks != null && b.asked.isEmpty() && manager.getCount() == 0
+        // Edit > Selection > Restore Selection puts QA's first oval on QB's colour picture, and the ROI Manager's own Add takes it
+        onUI { def picture = b.hooks.steps.colourPic; picture.setRoi(new OvalRoi(cellsA[0][0] - 9, cellsA[0][1] - 9, 18, 18)); manager.addRoi(picture.getRoi()); picture.deleteRoi(); b.hooks.refresh(true) }
+        draw(b.hooks, cellsB)
+        b.answers.reply = { title, said -> 'Cancel' }
+        String said = measure(b.hooks)
+        assert said.startsWith('Done. 3 cells measured on 30 frames') : 'an outline drawn on QB in the place of one of QA\'s and added with the ROI Manager\'s Add: "' + said + '"'
+        assert b.asked.isEmpty() && chosenList(b.hooks.outDir) == ['blind (frames 1-10)'] * 3 : chosenList(b.hooks.outDir)
+        // an outline already in the list keeps its note: one noted on QA after it was seen here stays QA's
+        onUI { b.Outlines.made(manager, manager.getRoi(0), markOf(b.Outlines, b.loader.loadClass('CalciumSteps'), QA)); b.hooks.refresh(true) }
+        assert measure(b.hooks).startsWith('Not measured. The ROI Manager holds 1 outline from another recording: QA.tif.')
+        closeWindow(b.hooks)
+        println 'PASS: claimsame: an outline drawn on this recording\'s colour picture and added with the ROI Manager\'s Add is its own, also when an outline of the same shape was added on another recording before; an outline already in the list keeps its note'
+    }
+
+    // ------------------------------------------------------------------ calibchange: the frame interval or pixel size set after the outlines
+    if ('calibchange' in parts) {
+        fresh()
+        ImagePlus K = recording('KX.tif', 30, cellsA, 321); onUI { K.show() }
+        def k = start(K, [script: shared]); draw(k.hooks, cellsA)
+        assert measure(k.hooks).startsWith('Done. 3 cells measured'); closeWindow(k.hooks)
+        onUI { def cal = K.getCalibration(); cal.frameInterval = 2; cal.setTimeUnit('sec') }   // Image > Properties
+        def again = start(K, [script: shared, answers: [reply: { title, said -> 'Cancel' }]])
+        assert again.hooks != null && again.asked.isEmpty() : 'the frame interval set in Image > Properties made the recording another one for its own outlines: ' + again.asked*.text
+        assert measure(again.hooks).startsWith('Done. 3 cells measured') && again.hooks.analysisMeasurement().hz == 0.5d
+        assert chosenList(again.hooks.outDir) == ['blind (frames 1-10)'] * 3 : chosenList(again.hooks.outDir)
+        // Change recording with the outlines kept, then the same recording with another pixel size: its own, not carried over
+        again.answers.reply = { title, said -> 'Keep outlines and go back' }; onUI { again.hooks.changeBtn.doClick() }
+        onUI { K.getCalibration().pixelWidth = 0.5d; K.getCalibration().pixelHeight = 0.5d }
+        def third = start(K, [script: shared, answers: [reply: { title, said -> 'Cancel' }]])
+        assert third.hooks != null && third.asked.isEmpty()
+        onUI { assert third.hooks.carriedIn(third.hooks.cellRois()).isEmpty() }
+        assert !third.hooks.steps.log.any { it.startsWith('Outlines carried over') } : third.hooks.steps.log
+        closeWindow(third.hooks)
+        println 'PASS: calibchange: a recording whose frame interval or pixel size was set after its outlines were chosen keeps them as its own, with no question and nothing carried over'
+    }
+
+    // ------------------------------------------------------------------ dupname: the same outline added twice with the plugin's Add
+    if ('dupname' in parts) {
+        fresh()
+        ImagePlus DN = recording('DN.tif', 30, cellsA, 331); onUI { DN.show() }
+        def d = start(DN, [script: shared]); draw(d.hooks, cellsA); draw(d.hooks, [cellsA[0]])
+        List names = [], ids = []
+        onUI { d.hooks.refresh(true); names = (0..<manager.count).collect { manager.getName(it) }; ids = (0..<manager.count).collect { manager.getRoi(it).getProperty('calcium.roi.id') } }
+        assert names.size() == 4 && names[3] == names[0] : 'the same outline added twice is labelled in the ROI Manager: ' + names
+        assert ids.toSet().size() == 4
+        closeWindow(d.hooks)
+        println 'PASS: dupname: an outline added twice gets an ID of its own and the ROI Manager label it always had'
+    }
+
+    // ------------------------------------------------------------------ singular: one outline, said as one
+    if ('singular' in parts) {
+        fresh()
+        ImagePlus NA = recording('NA.tif', 30, cellsB, 341), NB = recording('NB.tif', 30, cellsA + cellsB, 342); onUI { NA.show(); NB.show() }
+        def a = start(NA, [script: shared]); draw(a.hooks, cellsB); closeWindow(a.hooks)
+        onUI { manager.addRoi(new OvalRoi(100, 60, 20, 20)) }   // and one outline from before
+        def mixed = start(NB, [script: shared, answers: [reply: { title, said -> 'Cancel' }]])
+        assert mixed.asked.size() == 1 && mixed.asked[0].text == 'The ROI Manager holds 3 outlines from NA.tif or from before. ' + KEEP_ONLY_IF && mixed.asked[0].choices == MANY : mixed.asked*.text
+        // one outline from before, cleared at the start
+        onUI { manager.reset(); manager.addRoi(new OvalRoi(100, 60, 20, 20)) }
+        def b = start(NB, [script: shared, answers: [reply: { title, said -> 'Clear it' }]])
+        assert b.hooks != null && b.asked.size() == 1 && b.asked[0].choices == ONE && b.asked[0].text == 'The ROI Manager already holds 1 outline, and the plugin cannot tell which recording it is from. ' + KEEP_ONLY_IF : b.asked
+        // one cell chosen here, and one outline the plugin added on NA in this window's list
+        draw(b.hooks, [cellsA[0]])
+        def Steps = b.loader.loadClass('CalciumSteps')
+        def addFromNA = { -> onUI { manager.addRoi(new OvalRoi(120, 60, 18, 18)); b.Outlines.made(manager, manager.getRoi(manager.count - 1), markOf(b.Outlines, Steps, NA)); b.hooks.refresh(true) } }
+        addFromNA()
+        b.answers.reply = { title, said -> 'Cancel' }
+        assert measure(b.hooks) == 'Not measured. The ROI Manager holds 1 outline from another recording: NA.tif. Clear it or keep it for this recording, then measure.'
+        assert b.asked[-1].title == 'Measure and save' && b.asked[-1].choices == ONE && b.asked[-1].text == 'The ROI Manager holds 1 outline from another recording: NA.tif. The other outline was made on this recording and stays. ' + KEEP_ONLY_IF : b.asked[-1].text
+        b.answers.reply = { title, said -> 'Clear it' }
+        assert measure(b.hooks) == '1 outline from NA.tif was removed. Nothing was measured. Check the cells, then press Measure and save.'
+        // Change recording with one outline, cancelled
+        b.answers.reply = { title, said -> 'Cancel' }; onUI { b.hooks.changeBtn.doClick() }
+        assert b.asked[-1].title == 'Change recording' && b.asked[-1].text == 'The ROI Manager holds 1 outline. It has not been measured yet. Keep it only if the next recording shows the same cells in the same place. On another recording, kept outlines are recorded as carried over, never as chosen blind.' : b.asked[-1].text
+        // once measured the button reads Measure again: so do the question and the message
+        assert measure(b.hooks).startsWith('Done.')
+        addFromNA()
+        b.answers.reply = { title, said -> 'Clear it' }
+        assert measure(b.hooks) == '1 outline from NA.tif was removed. Nothing was measured. Check the cells, then press Measure again.'
+        assert b.asked[-1].title == 'Measure again'
+        closeWindow(b.hooks)
+        println 'PASS: singular: one outline is said as one in the questions, their buttons, the messages and the record; outlines from a recording and from before are named so; Clear at Measure again names the button the window shows'
     }
     assert appeared.isEmpty() : 'windows appeared on screen: ' + appeared
 } catch (Throwable failure) {
