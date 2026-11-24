@@ -928,7 +928,7 @@ const assert = require('assert/strict');
     // the recording that is in the panel. A press in it puts that point in the middle of the view, a drag takes the view along, and the cell stays.
     assert.ok(await page.isHidden('#view-map'), 'no map at 1×'); for (let i = 0; i < 3; i++) await page.click('#zoom-in');
     const mapNow = () => page.evaluate(() => { const a = window.calciumStep4, m = document.getElementById('view-map'), b = m.getBoundingClientRect(), stage = document.getElementById('picture-stage').getBoundingClientRect(), f = a.Pic.map, ctx = m.getContext('2d'), dpr = m.width / m.clientWidth;
-      const light = (x, y) => { const d = ctx.getImageData(Math.round(x * dpr), Math.round(y * dpr), 1, 1).data; return d[0] + d[1] + d[2]; };
+      const light = (x, y) => { const d = ctx.getImageData(Math.floor(x * dpr), Math.floor(y * dpr), 1, 1).data; return d[0] + d[1] + d[2]; };
       return { box: [b.left, b.top, b.width, b.height], fromCorner: [stage.right - b.right, stage.bottom - b.bottom], frame: [f.x, f.y, f.width, f.height], edge: light(f.x + f.width / 2, f.y + 0.75), around: light(f.x + f.width / 2, Math.max(1, f.y / 2)), area: a.viewArea() }; });
     seen = await viewNow(); let map = await mapNow(); const perPixel = [map.box[2] / seen.iw, map.box[3] / seen.ih];   // the map's pixels to one of the recording, across and down (each side is a whole number of pixels)
     assert.ok(await page.isVisible('#view-map') && map.fromCorner.every((gap) => gap >= 4 && gap <= 12) && Math.abs(map.box[2] / map.box[3] - seen.iw / seen.ih) < 0.03, 'the map is on the bottom right corner, in the picture\'s shape: ' + JSON.stringify(map));
