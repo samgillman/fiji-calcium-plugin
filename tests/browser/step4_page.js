@@ -2079,6 +2079,12 @@ const assert = require('assert/strict');
       [[['Cell005', 'Did not respond', 'Low F₀ · Below zero']], ['Low F₀: 1 cell, 0 responders', 'Below zero: 1 cell, 0 responders'], 'Needs quality review (1)'], 'on the control window only the engine\'s flags are listed and counted');
     await openCell('Cell001'); assert.ok(await page.isHidden('#cell-checks'), 'and the cell panel has none');
     await page.selectOption('#response-window', 'Stimulus::Capsaicin');
+    // A check's filter left on for the primary stimulus is let go on the control window, before Show counts its cells.
+    await page.locator('#quality-review summary').click(); await page.locator('#quality-list .flag-filter', { hasText: 'Possible passing object' }).click();
+    await page.evaluate(() => { document.getElementById('quality-review').open = false; });
+    await page.selectOption('#response-window', 'Control::Ionomycin');
+    assert.deepEqual([(await page.locator('#group option').allTextContents())[5], await cellsOffered()], ['Needs quality review (1)', ['Cell005']], 'a check filter left on the primary stimulus is let go on the control window');
+    await page.selectOption('#response-window', 'Stimulus::Capsaicin'); await page.selectOption('#group', '0');
     // The form opens in place of the button. On a flagged responder its reason is the flag's; on a cell that did not respond none is chosen, and Save waits for one.
     await openCell('Cell002'); await page.click('#mark');
     assert.deepEqual(await page.evaluate(() => [document.getElementById('mark-reason').value, document.getElementById('mark-save').disabled]), ['', true], 'no reason chosen for a cell that did not respond, flag or no flag');
@@ -2307,6 +2313,8 @@ const assert = require('assert/strict');
     await page.selectOption('#response-window', 'Stimulus::Capsaicin');
     await openCell('Cell001'); await page.click('#mark'); await page.waitForFunction(() => Object.keys(window.calciumStep4.S.results.review.marks).length === 0);
     assert.ok((await text('#status')).endsWith(carried), 'what was carried over is still said once the carried mark is removed');
+    await page.evaluate(() => window.calciumStep4.loadResults());
+    assert.equal(await text('#status'), 'Done. ' + carried, 'and when the results are read again, as after a reload, until the next run');
     assert.deepEqual(await methodsLine(), [null, null], 'and the Methods line goes with the last mark');
     // A review file that does not match its analysis is not used: there is no mark button, and the page says why in Fiji's words,
     // as given. Fiji's sentence is the one it refuses a mark with while the file is there; the results it sends carry no marks then.

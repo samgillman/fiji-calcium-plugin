@@ -120,8 +120,7 @@ movement of the field was not saved, the list of flagged cells says so once, on 
 With no cell flagged, the button that opens the list then reads "Passing objects not checked", or
 "Checks note" when only the movement was not saved. In the Fiji window the flags, and the line of a
 cell that was not checked, are under the selected cell's call line too; a click on a flag goes to
-that frame in the Traces tab, and the finish message ends with why the analysis could not be
-checked.
+that frame in the Traces tab, and the finish message ends with the same note.
 
 REVIEWING THE CALLS
 An evaluable cell can be marked the other way after you have looked at it: a responder as
@@ -178,9 +177,10 @@ and counted by the plugin.
               review, the review file and its SHA-256, from the page and from the Fiji window. On
               the page the Exports of the calls table and of the metric summary record the same.
               Figures of the control window and the other tables' Exports record no review.
-              The Fiji window's trace plot carries no sentences, with or without marks: the cell and
-              its call, its local threshold and what the green dashed line is are under the plot on
-              screen, and the saved trace.png has none of them.
+              The Fiji window's trace plot carries no sentences or band names, with or without
+              marks: the cell and its call, its local threshold and what the green dashed line is
+              are under the plot on screen, pointing at a band names it, and the saved trace.png has
+              none of them and no time cursor.
   Saved       A mark is saved together with the percent table, or not at all. If the percent table
               is open in another program, close it and set the mark again.
   Methods     A sentence from the marks, for example "3 of 143 cells were reclassified after

@@ -201,9 +201,12 @@ assert savedB.size()==2 && savedB[1][0..5]==[id(2),'Responded','Did not respond'
 assert second.results.review.marks[id(2)].carriedFrom==A
 assert second.results.review.marks.keySet()==[id(2)] as Set && second.results.review.methods=='1 of 5 cells was reclassified after manual review: 1 from responder to non-responder (noise).'
 assert new File(folder,percentName(B)).readLines('UTF-8')[0].endsWith(',cells_reclassified') && new File(folder,reviewName(A)).isFile() : 'the earlier analysis keeps its own review'
-// the carried mark is removed: the status line no longer speaks of it
+// the carried mark is removed: the status line still names what was carried over and dropped, until the next run, and the
+// results read again say it too
 def removedB=page.call('api/review',[cell:id(2),remove:true])
-assert removedB[0]==200 && removedB[1].review.carried==null && !removedB[1].message.contains('Review marks') && removedB[1].message.contains('All cells: 4 of 5 responded (80.0 %).') : removedB[1].message
+assert removedB[0]==200 && removedB[1].review.carried==carried && removedB[1].message.endsWith(' '+carriedText) && removedB[1].message.contains('All cells: 4 of 5 responded (80.0 %).') : removedB[1].message
+assert page.call('api/results')[1].review.carried==carried : 'the results read again, as after a reload of the page'
+page.session.load(dirB);assert page.call('api/results')[1].review.carried==carried : 'and the results loaded again'
 // the next analysis takes the marks of the most recent earlier one, B, which has none now: the marks of A do not come back
 String C='SimpleCa-20261101-120000-cccccccc'
 File dirC=analysis(C,cellsB)

@@ -913,10 +913,10 @@
   // ---------------------------------------------------------------- saved results; selecting a window never recalculates a call
   async function loadResults() {
     S.results = await api('results'); const r = S.results;
-    // the marks carried over when this analysis was run, kept here: Fiji stops giving them once they are all removed
+    // the marks carried over when this analysis was run: Fiji gives them for this analysis until the next run, marks or none
     const carried = r.review && r.review.carried; S.carried = carried && carried.text ? { folder: r.folder, text: carried.text } : null;
     S.said = null; S.markSaid = null; closeMark();
-    const records =(data) => Object.fromEntries(((data && data.rows) || []).map((row) => [row[data.header.indexOf('Cell')], Object.fromEntries(data.header.map((key, i) => [key, row[i]]))]));
+    const records = (data) => Object.fromEntries(((data && data.rows) || []).map((row) => [row[data.header.indexOf('Cell')], Object.fromEntries(data.header.map((key, i) => [key, row[i]]))]));
     S.quality = records(r.tables.quality);
     const windows = r.windows && r.windows.length ? r.windows : [{ key: 'Stimulus::' + (r.counts.Stimulus || 'Stimulus'), role: 'Stimulus', stimulus: r.counts.Stimulus || 'Stimulus' }];
     const selector = $('response-window'); selector.innerHTML = '';
@@ -990,13 +990,14 @@
     for (const [id, key] of [['tile-excluded', 'Excluded'], ['tile-unscorable', 'Unscorable']]) $(id).classList.toggle('zero', whole(key) === '0');
   }
   function updateWindow() {
-    showTiles();
+    // the flagged list first: a filter whose flag this window does not have is let go before Show counts its group
+    showTiles(); showQuality();
     const group = $('group'); group.innerHTML = '';
     // while review marks apply to the window on screen, the two calls are those after review, and the marked cells are a group of their own
     const reviewing = !!marked() && primaryShown(); if (!reviewing && S.group === 6) S.group = 0;
     GROUPS.forEach((name, i) => { if (i === 6 && !reviewing) return; const o = document.createElement('option'); o.value = i;
       o.textContent = name + (reviewing && (i === 1 || i === 2) ? ' after review' : '') + ' (' + S.info.names.filter((n) => inGroup(callOf(n), i, n)).length + ')'; group.appendChild(o); });
-    group.value = S.group; showQuality(); Plot.dirty = true; listCells(); drawHeatmap();
+    group.value = S.group; Plot.dirty = true; listCells(); drawHeatmap();
   }
   /** Lists the cells of the chosen group, and draws only those on the picture and behind the mean. */
   function listCells() {

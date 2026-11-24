@@ -275,8 +275,9 @@ try {
         assert strip(ui.cellStatus.text)=='● Cell001: Did not respond after review · passing object: drifts in from the left · from an earlier analysis · automatic call Responded · sustained threshold crossing · largest rise 1.00 at 6 s (needed 0.10)' : strip(ui.cellStatus.text)
         assert ui.cellStatus.toolTipText.startsWith('<html>Marked '+mark.time+' in '+B+'<br>') : 'when and where the mark was made, in the tooltip'
         paint('fiji_traces_carried')
+        // the carried text stays until the next run, after the last mark is removed too
         ui.removeMark.doClick()
-        assert ui.status.text=='Complete. Protocol, inputs and tables saved in '+A+'. '+unchecked : 'the finish message follows the marks: '+ui.status.text
+        assert ui.status.text=='Complete. Protocol, inputs and tables saved in '+A+'. '+carried+' '+unchecked : 'the finish message follows the marks: '+ui.status.text
         assert ui.responding.value.text=='66.7 %' && !new File(work,'Review_reviewed_calls_'+A+'.csv').exists() : 'the tile and the review files are as before'
     }
     assert appeared.isEmpty() : 'a window appeared on screen: '+appeared
