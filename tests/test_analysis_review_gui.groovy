@@ -58,6 +58,8 @@ def paint={String name->layOut();def pane=ui.contentPane as JComponent
     javax.imageio.ImageIO.write(image.getSubimage(Math.max(0,top.x as int),Math.max(0,top.y as int),Math.min(head.width,pane.width-(top.x as int)),Math.min(head.height,pane.height-(top.y as int))),'png',new File(pictures,name+'_head.png'))}
 try {
     onUI {
+        // the look and feel's own list font is made unlike the window's, so a list left in it shows (on a Mac the two are alike)
+        UIManager.put('ComboBox.font',new javax.swing.plaf.FontUIResource(Theme.font().family,java.awt.Font.ITALIC,9))
         original=new ImagePlus('Review colour picture',new ColorProcessor(250,150))
         def frames=new ImageStack(250,150)
         (1..30).each{int f->def ip=new ij.process.ShortProcessor(250,150);ip.set(100);if(f>=10&&f<=20){ip.setRoi(30,50,20,20);ip.set(140);ip.resetRoi()};frames.addSlice(''+f,ip)}
@@ -88,7 +90,7 @@ try {
         ui.reasonBox.selectedItem='Noise';assert ui.saveMark.enabled : 'Save once a reason is chosen'
         ui.cancelMark.doClick();assert ui.formCell==null && !ui.reasonBox.visible && !ui.saveMark.visible && ui.cells.selectedItem=='Cell001' : 'Cancel closes the form and keeps the cell'
         // the run's own answer is kept: with its table taken away, the checks are still the run's (as the page takes them)
-        assert new File(work,'Review_call_checks_'+A+'.csv').delete()
+        assert new File(work,'Review_call_checks_'+A+'.csv').delete() : 'the checks table of the run can be taken away'
         ui.loadResults(dirA);assert ui.checks?.note==unchecked : 'the checks of the last run here are kept, not only the saved table'
     }
 
@@ -124,8 +126,8 @@ try {
         // without marks every view is as it was before review marks existed
         before=[status:ui.cellStatus.text,tip:ui.cellStatus.toolTipText,groups:(0..<ui.group.itemCount).collect{ui.group.getItemAt(it)},tile:ui.responding.value.text,caption:ui.responding.caption.text,
                 picture:new LinkedHashMap(ui.cellPicture.calls),heatmap:[ui.heatmap.names,ui.heatmap.calls].transpose(),plot:ui.plot.caption]
-        assert before.groups==['All cells (6)','Responded (2)','Did not respond (1)','Excluded or unscorable (3)'] && before.tile=='66.7 %' && strip(before.caption)=='Capsaicin: 2 of 3 evaluable cells'
-        assert strip(before.status)=='● Cell001: Responded · sustained threshold crossing · largest rise 1.00 at 6 s (needed 0.10)' && before.plot=='Cell001 · Responded · Sustained threshold crossing'
+        assert before.groups==['All cells (6)','Responded (2)','Did not respond (1)','Excluded or unscorable (3)'] && before.tile=='66.7 %' && strip(before.caption)=='Capsaicin: 2 of 3 evaluable cells' : before
+        assert strip(before.status)=='● Cell001: Responded · sustained threshold crossing · largest rise 1.00 at 6 s (needed 0.10)' && before.plot=='Cell001 · Responded · Sustained threshold crossing' : strip(before.status)+' | '+before.plot
         // the flag of the selected cell, in the checks' own words, and its link to the first frame of the event
         def flag=ui.flagRow.components[0]
         assert ui.flagRow.visible && ui.flagRow.componentCount==1 && flag.text==passing && flag.foreground==Theme.BLUE && flag.cursor.type==java.awt.Cursor.HAND_CURSOR : 'the flag in its own words, a link'
@@ -133,7 +135,7 @@ try {
         ui.view.selectedIndex=0;ui.tabs.selectedIndex=0;ui.showFrame(25)
         click(flag)
         assert ui.tabs.selectedIndex==1 && ui.view.selectedIndex==2 && ui.frame==12 && ui.slider.value==12 && ui.cellPicture.image.is(ui.frameImage) : 'a click shows the recording at the first frame of the event'
-        ui.view.selectedIndex=1;ui.showFrame(25);ui.playButton.doClick();assert ui.player.running
+        ui.view.selectedIndex=1;ui.showFrame(25);ui.playButton.doClick();assert ui.player.running : 'the movie plays'
         click(flag);assert !ui.player.running && ui.view.selectedIndex==1 && ui.frame==12 : 'a click stops playing; a movie view stays as it was chosen'
         // a flag without a first frame is plain text; a cell that could not be checked says so, in the recording whose rings were measured
         ui.cells.selectedItem='Cell005'
@@ -145,7 +147,7 @@ try {
         ui.cells.selectedItem='Cell002'
         assert ui.flagRow.components*.text==[edge] && ui.markButton.visible && ui.markButton.text=='Mark as a responder' : 'a cell that did not respond can be marked as a responder'
         ui.markButton.doClick();assert ui.reasonBox.selectedIndex==-1 && !ui.saveMark.enabled : 'never Passing object chosen on a cell that did not respond'
-        def nothing=snapshot();press(ui.reasonBox,KeyEvent.VK_ENTER);assert ui.formCell=='Cell002' && snapshot()==nothing : 'Enter saves nothing before a reason is chosen'
+        def nothing=snapshot();press(ui.reasonBox,KeyEvent.VK_ENTER);assert ui.formCell=='Cell002' && snapshot()==nothing && !ui.markProblem.visible : 'Enter does nothing before a reason is chosen: '+strip(ui.markProblem.text)
         ui.cancelMark.doClick()
         // no call to review: no button, no flags
         ['Cell003','Cell004','Cell006'].each{ui.cells.selectedItem=it;assert !ui.markRow.visible && !ui.markButton.visible && !ui.removeMark.visible && !ui.flagRow.visible : it+' has no call to review'}
@@ -153,9 +155,9 @@ try {
         layOut()
         [ui.markButton,ui.removeMark,ui.saveMark,ui.cancelMark].each{assert it.preferredSize.height==ui.previousCell.preferredSize.height && it.UI.class.name=='CalciumButtonUI' : 'a mark button is a button of this window: '+it.text}
         assert ui.saveMark.UI.primary && !ui.cancelMark.UI.primary && !ui.markButton.UI.primary : 'Save is the filled one'
-        assert ui.reasonBox.preferredSize.height==ui.group.preferredSize.height && ui.reasonBox.font==ui.group.font : 'the Reason list is a list like Show'
+        assert ui.reasonBox.preferredSize.height==ui.group.preferredSize.height && ui.reasonBox.font==ui.group.font && ui.reasonBox.font==Theme.font() : 'the Reason list is a list like Show'
         assert ui.noteField.preferredSize.height==ui.fields.sampling_hz.preferredSize.height && ui.noteField.font==ui.fields.sampling_hz.font : 'the Note box is a box like the settings'
-        assert ui.reasonLabel.font==Theme.font() && ui.noteLabel.font==Theme.font() && ui.reasonLabel.text=='Reason' && ui.noteLabel.text=='Note'
+        assert ui.reasonLabel.font==Theme.font() && ui.noteLabel.font==Theme.font() && ui.reasonLabel.text=='Reason' && ui.noteLabel.text=='Note' : 'the form\'s labels: '+ui.reasonLabel.text+', '+ui.noteLabel.text
 
         // ---- the form on a flagged responder: Passing object chosen; the refusals in the form, in CalciumReview's words
         ui.cells.selectedItem='Cell001';ui.markButton.doClick()
@@ -172,13 +174,13 @@ try {
         // the review's own refusals: a review file that is not this analysis's, a percent table open in another program, a run going on
         reviewB.text=Review.HEADER.join(',')+'\nCell002,Did not respond,Responded,Noise,,2026-11-01T10:00:00Z,another,x,,\n'
         refused('Passing object','','The review file Review_reviewed_calls_'+B+'.csv is for another analysis, so its marks are not used. Move it out of the folder to review this analysis again.')
-        assert reviewB.delete()
-        assert percentB.setWritable(false)
+        assert reviewB.delete() : 'the other analysis\'s review file is taken away'
+        assert percentB.setWritable(false) : 'the percent table is locked'
         try{refused('Passing object','','Close Review_percent_responding_'+B+'.csv if it is open in another program, then try again.')}finally{percentB.setWritable(true)}
         ui.busy=true;try{refused('Passing object','','Wait for the analysis to finish.');ui.showReview('Cell001');assert !ui.markRow.visible && ui.formCell==null : 'no mark controls while an analysis runs'}finally{ui.busy=false}
         ui.showReview('Cell001');assert ui.markRow.visible && !ui.markProblem.visible : 'and they come back'
         // the form closes when the cell changes; the arrows do not change it while the form is open; Esc closes it
-        ui.markButton.doClick();ui.noteField.text='=x';ui.saveMark.doClick();assert ui.markProblem.visible
+        ui.markButton.doClick();ui.noteField.text='=x';ui.saveMark.doClick();assert ui.markProblem.visible : 'a refused note is said in the form'
         ui.cells.selectedItem='Cell005';assert ui.formCell==null && !ui.reasonBox.visible && !ui.markProblem.visible : 'the form and its refusal go when the cell changes'
         ui.cells.selectedItem='Cell001';ui.markButton.doClick()
         ui.rootPane.getActionForKeyStroke(KeyStroke.getKeyStroke(KeyEvent.VK_RIGHT,0)).actionPerformed(new java.awt.event.ActionEvent(ui.rootPane,0,''))
@@ -189,7 +191,7 @@ try {
         assert !reviewB.exists() && percentB.bytes==percentBefore : 'no mark was saved'
 
         // ---- a mark saved: every view follows it at once, the cell stays selected and the time cursor stays
-        ui.showGroup(1);assert ui.cells.selectedItem=='Cell001'
+        ui.showGroup(1);assert ui.cells.selectedItem=='Cell001' : 'Cell001 is a responder'
         ui.markButton.doClick();ui.noteField.text='  drifts in from the left  '
         paint('fiji_traces_form')
         ui.showFrame(17);double moment=ui.plot.moment
@@ -198,13 +200,13 @@ try {
         Map mark=Review.read(dirB,ui.measurement).marks.Cell001
         assert mark.automatic=='Responded' && mark.reviewed=='Did not respond' && mark.reason=='Passing object' && mark.note=='drifts in from the left' : mark
         def saved=Csv.read(reviewB)
-        assert saved[0]==Review.HEADER && saved.size()==2 && saved[1][0..6]==['Cell001','Responded','Did not respond','Passing object','drifts in from the left',mark.time,B] && saved[1][7]==Installer.digest(new File(dirB,'responder_calls.csv').bytes)
+        assert saved[0]==Review.HEADER && saved.size()==2 && saved[1][0..6]==['Cell001','Responded','Did not respond','Passing object','drifts in from the left',mark.time,B] && saved[1][7]==Installer.digest(new File(dirB,'responder_calls.csv').bytes) : saved
         assert Csv.read(percentB)[0]==Settings.PERCENT_COLUMNS+Settings.REVIEW_COLUMNS : 'the percent table gives the figures after review beside the others'
         assert ui.responding.value.text=='33.3 %' && strip(ui.responding.caption.text)=='Capsaicin: 1 of 3 evaluable cells after review; 2 before review' : ui.responding.caption.text
-        assert (0..<ui.group.itemCount).collect{ui.group.getItemAt(it)}==['All cells (6)','Responded after review (1)','Did not respond after review (2)','Excluded or unscorable (3)','Marked (1)']
+        assert (0..<ui.group.itemCount).collect{ui.group.getItemAt(it)}==['All cells (6)','Responded after review (1)','Did not respond after review (2)','Excluded or unscorable (3)','Marked (1)'] : (0..<ui.group.itemCount).collect{ui.group.getItemAt(it)}
         assert ui.group.selectedIndex==0 && ui.cells.selectedItem=='Cell001' : 'the cell left Responded: all cells are listed and it stays selected'
         assert ui.frame==17 && ui.plot.moment==moment : 'the time cursor did not jump'
-        assert ui.cellPicture.calls.Cell001=='Did not respond' && ui.cellPicture.calls.Cell005=='Responded'
+        assert ui.cellPicture.calls.Cell001=='Did not respond' && ui.cellPicture.calls.Cell005=='Responded' : ui.cellPicture.calls
         assert ui.heatmap.calls[ui.heatmap.names.indexOf('Cell001')]=='Did not respond' && ui.heatmap.names.indexOf('Cell001')>ui.heatmap.names.indexOf('Cell005') : 'the heatmap orders and colours by the call after review'
         assert ui.plot.allCalls.count{it=='Responded'}==1 && ui.plot.allCalls.count{it=='Did not respond'}==2 : ui.plot.allCalls
         assert strip(ui.cellStatus.text)=='● Cell001: Did not respond after review · passing object: drifts in from the left · automatic call Responded · sustained threshold crossing · largest rise 1.00 at 6 s (needed 0.10)' : strip(ui.cellStatus.text)
@@ -213,14 +215,17 @@ try {
         assert ui.plot.caption=='Cell001 · Did not respond · Sustained threshold crossing' : ui.plot.caption
         assert ui.removeMark.visible && !ui.markButton.visible && ui.flagRow.visible : 'a marked cell has one button: Remove mark'
         paint('fiji_traces_marked')
+        // the long call line and the tile's caption wrap at the width they are given: nothing is cut off
+        [ui.cellStatus,ui.responding.caption].each{assert it.width>=it.preferredSize.width && it.height>=it.preferredSize.height : 'cut off: '+strip(it.text)+' '+it.size+' < '+it.preferredSize}
+        assert ui.responding.caption.y+ui.responding.caption.height<=ui.responding.height-ui.responding.insets.bottom : 'the tile holds its caption: '+ui.responding.caption.bounds+' in '+ui.responding.size
         // the Marked entry lists the marked cells, on the picture too
-        ui.showGroup(4);assert (0..<ui.cells.itemCount).collect{ui.cells.getItemAt(it)}==['Cell001'] && ui.cellPicture.only==['Cell001'] as Set && ui.plot.all.length==1
-        ui.showGroup(0);assert ui.cellPicture.only==null
+        ui.showGroup(4);assert (0..<ui.cells.itemCount).collect{ui.cells.getItemAt(it)}==['Cell001'] && ui.cellPicture.only==['Cell001'] as Set && ui.plot.all.length==1 : 'the Marked entry lists and draws only the marked cell'
+        ui.showGroup(0);assert ui.cellPicture.only==null : 'All cells draws every cell'
         // a control window keeps its automatic call: no marks, no flags, its own groups
         ui.stimuli.selectedItem='Ionomycin'
         assert !ui.markRow.visible && !ui.flagRow.visible && (0..<ui.group.itemCount).collect{ui.group.getItemAt(it)}==['All cells (6)','Responded (2)','Did not respond (1)','Excluded or unscorable (3)'] : 'the control window is never reviewed'
-        assert strip(ui.cellStatus.text).startsWith('● Cell001: Responded · ') && ui.plot.caption.startsWith('Cell001 · Responded · ')
-        ui.stimuli.selectedItem='Capsaicin';ui.cells.selectedItem='Cell001';assert ui.removeMark.visible
+        assert strip(ui.cellStatus.text).startsWith('● Cell001: Responded · ') && ui.plot.caption.startsWith('Cell001 · Responded · ') : 'the control window shows its automatic call: '+strip(ui.cellStatus.text)
+        ui.stimuli.selectedItem='Capsaicin';ui.cells.selectedItem='Cell001';assert ui.removeMark.visible : 'back on the stimulus, the mark can be removed'
         // saved plots say their groups follow the review marks, and which file the marks are in
         layOut();ui.exportPlots()
         def record=new groovy.json.JsonSlurper().parse(new File(dirB,'plot_provenance.json'))
@@ -229,10 +234,10 @@ try {
         // ---- the mark removed: everything is as it was before
         ui.removeMark.doClick()
         assert !reviewB.exists() && percentB.bytes==percentBefore : 'the review file goes and the percent table is as it was'
-        assert ui.responding.value.text==before.tile && ui.responding.caption.text==before.caption
-        assert (0..<ui.group.itemCount).collect{ui.group.getItemAt(it)}==before.groups && ui.cellPicture.calls==before.picture && [ui.heatmap.names,ui.heatmap.calls].transpose()==before.heatmap
-        assert ui.cellStatus.text==before.status && ui.cellStatus.toolTipText==before.tip && ui.plot.caption==before.plot && ui.cells.selectedItem=='Cell001'
-        assert ui.markButton.visible && ui.markButton.text=='Mark as not a responder' && !ui.removeMark.visible
+        assert ui.responding.value.text==before.tile && ui.responding.caption.text==before.caption : strip(ui.responding.caption.text)
+        assert (0..<ui.group.itemCount).collect{ui.group.getItemAt(it)}==before.groups && ui.cellPicture.calls==before.picture && [ui.heatmap.names,ui.heatmap.calls].transpose()==before.heatmap : 'the Show list, the picture and the heatmap are as before'
+        assert ui.cellStatus.text==before.status && ui.cellStatus.toolTipText==before.tip && ui.plot.caption==before.plot && ui.cells.selectedItem=='Cell001' : strip(ui.cellStatus.text)
+        assert ui.markButton.visible && ui.markButton.text=='Mark as not a responder' && !ui.removeMark.visible : 'the cell can be marked again'
         ui.exportPlots();record=new groovy.json.JsonSlurper().parse(new File(dirB,'plot_provenance.json'))
         assert !record.containsKey('calls') && !record.containsKey('review_file') : 'without marks the record is as it always was'
 
@@ -243,20 +248,22 @@ try {
         press(ui.reasonBox,KeyEvent.VK_ENTER)
         assert ui.formCell==null && Review.read(dirB,ui.measurement).marks.Cell002?.reviewed=='Responded' : 'Enter in the Reason list saves: '+strip(ui.markProblem.text)
         assert strip(ui.cellStatus.text)=='● Cell002: Responded after review · bad outline · automatic call Did not respond · no sustained threshold crossing · largest rise 0.00 at 3 s (needed 0.10)' : strip(ui.cellStatus.text)
-        assert ui.cellStatus.text.contains("<font color='"+Theme.hex(Calls.RESPONDED)+"'>●</font>")
-        assert (0..<ui.group.itemCount).collect{ui.group.getItemAt(it)}[-1]=='Marked (2)' && ui.responding.value.text=='66.7 %'
-        ui.removeMark.doClick();assert Review.read(dirB,ui.measurement).marks.keySet()==['Cell001'] as Set
+        assert ui.cellStatus.text.contains("<font color='"+Theme.hex(Calls.RESPONDED)+"'>●</font>") : 'the dot has the colour of Responded'
+        assert (0..<ui.group.itemCount).collect{ui.group.getItemAt(it)}[-1]=='Marked (2)' && ui.responding.value.text=='66.7 %' : 'two marks: '+ui.responding.value.text
+        ui.removeMark.doClick();assert Review.read(dirB,ui.measurement).marks.keySet()==['Cell001'] as Set : 'removing one mark keeps the other'
     }
 
     // ---- a run going on: no mark controls, and a mark is refused; then the next analysis takes the mark over
     def latch=new java.util.concurrent.CountDownLatch(1)
     onUI {
-        ui.cells.selectedItem='Cell005';ui.markButton.doClick();assert ui.formCell=='Cell005'
+        ui.cells.selectedItem='Cell005';ui.markButton.doClick();assert ui.formCell=='Cell005' : 'the form is open when the run starts'
         ui.performAnalysis={a,b,c,d,job->latch.await(20,java.util.concurrent.TimeUnit.SECONDS);dirA}
         ui.runButton.doClick()
         assert ui.busy && ui.formCell==null && !ui.markRow.visible && !ui.markButton.visible && !ui.removeMark.visible : 'no mark controls while an analysis runs'
+        ui.cells.selectedItem='Cell001';assert !ui.markRow.visible : 'no Remove mark while an analysis runs'
         def files=snapshot();ui.removeReviewMark('Cell001')
-        assert strip(ui.markProblem.text)=='Wait for the analysis to finish.' && snapshot()==files : 'a mark is refused while an analysis runs'
+        assert ui.markProblem.visible && strip(ui.markProblem.text)=='Wait for the analysis to finish.' && snapshot()==files : 'a mark is refused while an analysis runs'
+        ui.cells.selectedItem='Cell002';assert !ui.markProblem.visible : 'the refusal goes when another cell is chosen'
     }
     latch.countDown();finish()
     onUI {
@@ -264,13 +271,13 @@ try {
         assert ui.results==dirA && ui.status.text=='Complete. Protocol, inputs and tables saved in '+A+'. All cells: 2 of 3 responded (66.7 %), after review 1 of 3 (33.3 %). '+carried+' '+unchecked : ui.status.text
         ui.showGroup(0);ui.cells.selectedItem='Cell001'
         Map mark=Review.read(dirA,ui.measurement).marks.Cell001
-        assert mark.carriedFrom==B
+        assert mark.carriedFrom==B : mark
         assert strip(ui.cellStatus.text)=='● Cell001: Did not respond after review · passing object: drifts in from the left · from an earlier analysis · automatic call Responded · sustained threshold crossing · largest rise 1.00 at 6 s (needed 0.10)' : strip(ui.cellStatus.text)
         assert ui.cellStatus.toolTipText.startsWith('<html>Marked '+mark.time+' in '+B+'<br>') : 'when and where the mark was made, in the tooltip'
         paint('fiji_traces_carried')
         ui.removeMark.doClick()
         assert ui.status.text=='Complete. Protocol, inputs and tables saved in '+A+'. '+unchecked : 'the finish message follows the marks: '+ui.status.text
-        assert ui.responding.value.text=='66.7 %' && !new File(work,'Review_reviewed_calls_'+A+'.csv').exists()
+        assert ui.responding.value.text=='66.7 %' && !new File(work,'Review_reviewed_calls_'+A+'.csv').exists() : 'the tile and the review files are as before'
     }
     assert appeared.isEmpty() : 'a window appeared on screen: '+appeared
     onUI{assert !ui.visible && !ui.isDisplayable() : 'the window was never shown'}
