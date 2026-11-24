@@ -110,10 +110,10 @@ try {
         assert ui.flagRow.visible && flags().isEmpty() : 'no flag, and no "not checked" on each cell when the surroundings were not measured'
         assert ui.markRow.visible && ui.markButton.visible && ui.markButton.text=='Mark as not a responder' && !ui.removeMark.visible : 'a responder can be marked'
         // a responder without a flag: no reason is chosen for the user, and Save waits for one
-        ui.markButton.doClick()
+        asked.clear();ui.markButton.doClick()
         assert ui.formCell=='Cell001' && ui.reasonBox.visible && ui.noteField.visible && ui.saveMark.visible && ui.cancelMark.visible : 'the form opens in place'
         assert !ui.markButton.visible && !ui.removeMark.visible : 'the form takes the place of the button'
-        assert asked[-1].is(ui.reasonBox) : 'the focus goes to the Reason list'
+        assert asked.size()==1 && asked[0].is(ui.reasonBox) : 'the focus goes to the Reason list: '+asked
         assert ui.reasonBox.selectedIndex==-1 && !ui.saveMark.enabled : 'no reason is chosen on a cell without a flag'
         assert (0..<ui.reasonBox.itemCount).collect{ui.reasonBox.getItemAt(it)}==Review.REASONS : 'the reasons are the review file\'s'
         ui.reasonBox.selectedItem='Noise';assert ui.saveMark.enabled : 'Save once a reason is chosen'
@@ -210,8 +210,9 @@ try {
         assert ui.reasonLabel.font==Theme.font() && ui.noteLabel.font==Theme.font() && ui.reasonLabel.text=='Reason' && ui.noteLabel.text=='Note' : 'the form\'s labels: '+ui.reasonLabel.text+', '+ui.noteLabel.text
 
         // ---- the form on a flagged responder: Passing object chosen; the refusals in the form, in CalciumReview's words
-        ui.cells.selectedItem='Cell001';ui.markButton.doClick()
+        ui.cells.selectedItem='Cell001';asked.clear();ui.markButton.doClick()
         assert ui.formCell=='Cell001' && ui.reasonBox.selectedItem=='Passing object' && ui.saveMark.enabled && ui.noteField.hint=='Optional' && ui.noteField.text=='' : 'a cell that may have a passing object: Passing object is chosen'
+        assert asked.size()==1 && asked[0].is(ui.noteField) : 'with the reason chosen, the focus goes to the Note box: '+asked
         Map formOpen=heights()
         def refused={String reason,String note,String message->def files=snapshot();ui.reasonBox.selectedItem=reason;ui.noteField.text=note;ui.saveMark.doClick()
             assert said()==message : said()
