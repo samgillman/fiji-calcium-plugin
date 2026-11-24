@@ -18,7 +18,7 @@ const assert = require('assert/strict');
     let injectedFrameFailure = false;
     page.on('console', (message) => {
       if (message.type() !== 'error') return;
-      if (injectedFrameFailure && /503/.test(message.text())) return;
+      if (injectedFrameFailure && /503|410/.test(message.text())) return;
       problems.push('console: ' + message.text());
     });
     page.on('pageerror', (error) => problems.push('page error: ' + error.message));
@@ -266,6 +266,24 @@ const assert = require('assert/strict');
     // nothing is on its way when the route is removed: a request caught at that moment is never answered
     await page.waitForFunction(() => window.calciumStep4.Buf.inflight.size === 0, null, { polling: 100 });
     await page.unroute(failedFrame); await slider(10); injectedFrameFailure = false;
+    assert.equal(await page.evaluate(() => window.calciumStep4.Pic.error), null);
+
+    // The recording closed in Fiji: Fiji refuses every frame in plain words, the movie says them, and frames come back once it
+    // is open again. A frame already on its way when the recording closes is let through first; then every frame is refused.
+    const closedText = 'The recording is closed in Fiji. Open it again to go on.';
+    await page.waitForFunction(() => window.calciumStep4.Buf.inflight.size === 0 && window.calciumStep4.Buf.decoding.size === 0, null, { polling: 100 });
+    const anyFrame = '**/api/frame?*'; injectedFrameFailure = true;
+    await page.route(anyFrame, (route) => route.fulfill({ status: 410, contentType: 'application/json', body: JSON.stringify({ error: closedText }) }));
+    await page.evaluate(() => window.calciumStep4.resetFrames());
+    const askedForClosed = page.waitForRequest((request) => /\/api\/frame\?f=11&mode=raw&/.test(request.url()));
+    await page.locator('#time').evaluate((element) => { element.value = 11; element.dispatchEvent(new Event('input')); });
+    await askedForClosed;
+    await page.waitForFunction((said) => document.getElementById('movie-message').textContent === said, closedText, { polling: 100 });
+    assert.equal(await page.evaluate(() => window.calciumStep4.S.frame), 11);
+    assert.ok(!/java|Exception/.test(await text('#movie-message')));
+    await page.waitForFunction(() => window.calciumStep4.Buf.inflight.size === 0, null, { polling: 100 });
+    await page.unroute(anyFrame); await slider(10); injectedFrameFailure = false;
+    assert.equal(await page.evaluate(() => window.calciumStep4.Buf.closed), '', 'a frame that loads again clears the message');
     assert.equal(await page.evaluate(() => window.calciumStep4.Pic.error), null);
 
     // Portable JSON retains precise untouched values and imported timing overrides.
