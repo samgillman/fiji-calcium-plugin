@@ -155,7 +155,8 @@ const assert = require('assert/strict');
     assert.ok(await page.evaluate(() => document.getElementById('result-tiles').contains(document.getElementById('quality-review'))));
     assert.equal(await page.locator('#result-tiles button.tile, #result-tiles [data-group]').count(), 0);
     assert.deepEqual(await page.locator('details.export').evaluateAll((menus) => menus.map((m) => m.id + ':' + m.querySelectorAll('button').length)), ['export-picture:4', 'export-plot:3', 'export-heatmap:3', 'export-metrics:2', 'export-calls:2', 'export-data:2', 'export-counts:2']);
-    assert.equal(await page.locator('main button', { hasText: /^(Save|Download)/ }).evaluateAll((buttons) => buttons.filter((b) => !b.closest('details.export, .save-options')).length), 0, 'every save button is in an Export menu');
+    // (the mark form's Save keeps a review mark, not a file)
+    assert.equal(await page.locator('main button', { hasText: /^(Save|Download)/ }).evaluateAll((buttons) => buttons.filter((b) => !b.closest('details.export, .save-options, .mark-form')).length), 0, 'every save button is in an Export menu');
     const initial = await page.evaluate(() => window.calciumStep4.collectDraft());
     const originalProtocol = initial.protocol;
     assert.equal(originalProtocol.schema_version, 2);

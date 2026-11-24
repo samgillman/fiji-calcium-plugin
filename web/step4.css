@@ -282,7 +282,7 @@ body:not(.has-results) #resize-split { display: none; }
 .run-box .status { max-height: 6.2em; overflow-y: auto; }
 .run-box .validation { max-height: 74px; }
 #setup:disabled { display: none; }
-#cancel:disabled { display: none; }   /* Cancel belongs to a running analysis only */
+/* Cancel belongs to a running analysis only (hidden otherwise); while the checks after the engine run it is there, but off */
 /* What the plot shows: three buttons, the average first */
 .seg { display: inline-flex; } .seg button { border-radius: 0; margin-left: -1px; }
 .seg button:first-child { border-radius: var(--radius) 0 0 var(--radius); margin-left: 0; } .seg button:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
@@ -358,6 +358,7 @@ aside { gap: 8px; }
 .run-box .confirm { font-size: 13px; }
 .run-box .status { min-height: 0; max-height: 3em; overflow: hidden; font-size: 12px; }
 .run-box .status:empty, #open-feedback:empty { display: none; }
+.run-box .status.full { max-height: 9em; overflow-y: auto; }   /* the marks carried over, and what a mark changed, are read in full */
 .run-box .validation { max-height: 110px; }
 .run-box .actions { align-items: center; }
 #log:disabled { display: none; }
@@ -393,6 +394,18 @@ aside { gap: 8px; }
 .cell-card .verdict { flex: none; padding-top: 8px; white-space: normal; overflow: visible; }
 .cell-card .verdict:empty { display: none; }
 .cell-card .cell-quality { padding-top: 2px; }
+/* The call line, with the mark button at its end; under them the checks' flags (a flag with a frame is a link to it), then the
+   mark form in place of the button, and what Fiji answered. Every control has the page's height and corner. */
+.cell-head { display: flex; align-items: center; gap: 10px; }
+.cell-head .verdict { flex: 1 1 auto; }
+.cell-head #mark { flex: none; margin-top: 6px; }
+.cell-checks { color: var(--warn); font-size: 12px; padding-top: 2px; overflow-wrap: anywhere; }
+.cell-checks .jump { padding: 0; background: none; border: 0; color: var(--warn); text-decoration: underline; cursor: pointer; font-size: 12px; min-height: 0; text-align: left; }
+.cell-checks .jump:hover:not(:disabled) { background: none; color: var(--gray-900); }
+.mark-form { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding-top: 6px; }
+.mark-form label { display: flex; align-items: center; gap: 6px; color: var(--gray-600); }
+.mark-form #mark-note { width: 240px; }
+.mark-said { font-size: 12px; padding-top: 4px; overflow-wrap: anywhere; } .mark-said.bad { color: var(--bad); } .mark-said.warn { color: var(--warn); }
 /* Flagged cells: a button in the results row; its list opens over the page instead of pushing it down. */
 .quality-chip { position: relative; flex: none; }
 .quality-chip > summary { list-style: none; cursor: pointer; display: flex; align-items: center; min-height: var(--control-h); padding: 0 10px; border: 1px solid #e0c28c; border-radius: var(--radius); background: #fff7e8; color: var(--warn); font-size: 13px; font-weight: 400; white-space: nowrap; user-select: none; }

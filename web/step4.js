@@ -5,14 +5,16 @@
   const $ = (id) => document.getElementById(id);
   const CALL = { responded: '#177465', not: '#C8660E', other: '#8A94A0' };
   const ON_PICTURE = { responded: '#3ddbb5', not: '#ffa24a', other: '#aeb8c2' };
-  const GROUPS = ['All cells', 'Responded', 'Did not respond', 'Excluded', 'Unscorable', 'Needs quality review'];
+  const GROUPS = ['All cells', 'Responded', 'Did not respond', 'Excluded', 'Unscorable', 'Needs quality review', 'Marked'];   // Marked: offered only while review marks apply
   /** The colour overview and the background areas are still pictures; every other view is a frame of the recording. */
   const still = () => S.view === 'picture' || S.view === 'background';
   const kind = (call) => call === 'Responded' ? 'responded' : call === 'Did not respond' ? 'not' : 'other';
   const inGroup = (call, group, name) => group === 0 || (group === 1 && call === 'Responded') || (group === 2 && call === 'Did not respond') ||
-    (group === 3 && call === 'Excluded') || (group === 4 && call === 'Unscorable') || (group === 5 && qualityFor(name).length > 0 && (!S.qualityFlag || qualityFor(name).includes(S.qualityFlag)));
+    (group === 3 && call === 'Excluded') || (group === 4 && call === 'Unscorable') || (group === 5 && qualityFor(name).length > 0 && (!S.qualityFlag || qualityFor(name).includes(S.qualityFlag))) ||
+    (group === 6 && !!markOf(name));
   const S = { unlinked: new Set(), validationShown: null, imported: null, info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'raw', viewChosen: false,
-    every: false, thresholds: false, plotMode: 'mean', signal: 'dff', outlines: true, outlineWidth: 1, outlineColours: 'call', numberCells: false, saveArea: 'whole', timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false };
+    every: false, thresholds: false, plotMode: 'mean', signal: 'dff', outlines: true, outlineWidth: 1, outlineColours: 'call', numberCells: false, saveArea: 'whole', timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false,
+    marking: null, reviewing: false, carried: null, said: null };   // the open mark form ({ cell }); a mark on its way to Fiji; the carried marks of this run; what Fiji said after the last mark
   const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, y: {}, hover: null, at: null, readout: null, line: false, movedAt: -1e9, rest: null, geom: null, scrubbing: false, drawn: [], series: [] };
   const LINGER = 1500;   // ms the plot keeps showing where the picture is after the frame last moved
   const HINT_TIMES = 3, HINT_READ = 1000;   // how often the line that says how to zoom and move is shown, over all sessions; a showing counts once it has been up this long (ms)
@@ -41,7 +43,28 @@
   const finite = (v) => typeof v === 'number' && isFinite(v);
   const calls = () => S.results ? ((S.results.callsByWindow || {})[S.window] || S.results.calls || {}) : {};
   const callRow = (name) => calls()[name] || {};
-  const callOf = (name) => callRow(name).Status;
+  /** The review marks of the analysis shown (results.review.marks), by cell; null while it has none. */
+  const marked = () => { const marks = S.results && S.results.review && S.results.review.marks; return marks && Object.keys(marks).length ? marks : null; };
+  /** Whether the response window on screen is the primary stimulus, the one the review marks are for. */
+  const primaryShown = () => { const w = primaryWindow(); return !w || w.key === S.window; };
+  /** A cell's call as the page shows it in a response window (the one on screen when none is given): after review for the
+   *  primary stimulus while review marks apply (results.review.after), the engine's own for a control window. Everything that
+   *  counts, groups, colours or lists cells by call reads it. */
+  function shownCall(name, key) {
+    const r = S.results; if (!r) return undefined;
+    if (key === undefined) key = S.window;
+    const primary = primaryWindow(), after = marked() && (!primary || key === primary.key) ? (r.review.after || {})[name] : undefined;
+    return after || engineCall(name, key);
+  }
+  /** The engine's own call of a cell in a response window, as saved. */
+  const engineCall = (name, key) => ((((S.results.callsByWindow || {})[key] || S.results.calls || {})[name]) || {}).Status;
+  /** The engine's call of a cell for the primary stimulus: the automatic call a review mark is made against. */
+  const automaticCall = (name) => engineCall(name, (primaryWindow() || {}).key);
+  const callOf = (name) => shownCall(name);
+  /** The call of a cell for the primary stimulus, after review while marks apply: what the per-cell tables and the summary are split by. */
+  const primaryCall = (name) => shownCall(name, (primaryWindow() || {}).key);
+  /** The review mark of a cell while the primary stimulus is on screen, or null. */
+  const markOf = (name) => { const marks = marked(); return marks && name && marks[name] && primaryShown() ? marks[name] : null; };
   const number = (text) => { const v = parseFloat(text); return isFinite(v) ? v : NaN; };
   /** A number as somebody types it into a box: digits with at most one decimal mark (a point or a comma) and a sign before
    *  them. null: the box is empty. NaN: anything else, also "1e1" and "0x10", which a program reads as numbers and a person does not. */
@@ -485,7 +508,24 @@
     const q = S.quality[name] || {}, row = callRow(name), flags = new Set();
     for (const text of [q.QC_flags, row.QC_flags]) for (const flag of String(text || '').split(/[;|,]/)) if (flag.trim() && !RECORDING_FLAGS.has(flag.trim())) flags.add(flag.trim());
     if (belowZero(name)) flags.add('TRACE_BELOW_MINUS_ONE');
+    for (const flag of checkFlags(name)) flags.add(CHECK + flag.rule);   // a check's text has commas, so it is never split like the engine's flags
     return Array.from(flags);
+  }
+  // ---------------------------------------------------------------- the checks on the calls (results.checks), made in Fiji after the engine
+  /** A check flag is keyed by its rule; its own text ("possible passing object, frames 201 to 210") is the cell's. */
+  const CHECK = 'check:', isCheck = (flag) => flag.startsWith(CHECK);
+  const CHECK_SHORT = { 'passes through': 'Possible passing object', 'on the edge': 'Rise on the edge', 'field moved': 'Field moved', 'short separate crossings': 'Short separate crossings' };
+  /** The checks of one cell, or null (an analysis made before the checks has none). */
+  const checksOf = (name) => { const c = S.results && S.results.checks; return (c && c.cells && name && c.cells[name]) || null; };
+  /** The flags the checks gave a cell, one by one: { text, rule }. */
+  const checkFlags = (name) => { const c = checksOf(name); return c && Array.isArray(c.flags) ? c.flags.filter((f) => f && f.text) : []; };
+  /** The reason the mark form starts with on a responder, from its first check flag: none for a cell that did not respond. */
+  const REASON_OF_RULE = { 'passes through': 'Passing object', 'on the edge': 'Passing object', 'field moved': 'Movement', 'short separate crossings': 'Noise' };
+  function startingReason(name, automatic) {
+    if (automatic !== 'Responded') return '';
+    const reasons = (S.results.review || {}).reasons || [];
+    for (const flag of checkFlags(name)) { const reason = REASON_OF_RULE[flag.rule]; if (reason && reasons.includes(reason)) return reason; }
+    return '';
   }
   /** A cell whose ΔF/F₀ falls below −1: its corrected fluorescence goes below zero, the mark of an F₀ near zero. Flagged
    *  "Below zero"; such a cell is still drawn, but no automatic axis is taken from it (plotCells). */
@@ -507,10 +547,12 @@
     const seen = new Map(); for (const name of S.info.names) { const row = callRow(name); if (row.Status === 'Unscorable' && row.Reason) seen.set(row.Reason, (seen.get(row.Reason) || 0) + 1); }
     let best = ''; for (const [reason, n] of seen) if (!best || n > seen.get(best)) best = reason; return best;
   }
-  const flagText = (flag) => FLAG_TEXT[flag] || flag.replace(/_/g, ' ');
+  const flagText = (flag) => isCheck(flag) ? flagShort(flag) : FLAG_TEXT[flag] || flag.replace(/_/g, ' ');
   /** Each flag in two or three words, for the list of flagged cells and the tables; FLAG_TEXT has the full sentence. */
   const FLAG_SHORT = { BASELINE_SD_AT_LEAST_ONE_THIRD_LOCAL_F0: 'Noisy baseline', reference_below_3_baseline_sd_review: 'Low F₀', TRACE_BELOW_MINUS_ONE: 'Below zero', DURATION_BELOW_SAMPLE_INTERVAL: 'Duration under a frame' };
-  const flagShort = (flag) => FLAG_SHORT[flag] || flagText(flag);
+  const flagShort = (flag) => isCheck(flag) ? CHECK_SHORT[flag.slice(CHECK.length)] || flag.slice(CHECK.length) : FLAG_SHORT[flag] || flagText(flag);
+  /** What a cell is flagged for, in the list of flagged cells: the engine's flags in their short words, then each check's own text. */
+  const flaggedFor = (name) => qualityFor(name).filter((flag) => !isCheck(flag)).map(flagShort).concat(checkFlags(name).map((f) => f.text));
   function showQuality() {
     if (!S.results) return;
     const summary = $('quality-summary'), list = $('quality-list'), counts = new Map(); let affected = 0, responders = 0;
@@ -522,10 +564,13 @@
     if (window.Window_warning) notices.push(window.Window_warning);
     if (!window.Window_warning && S.info.names.some((name) => { const q = S.quality[name] || {}, row = callRow(name); return [q.QC_flags, row.QC_flags].some((t) => String(t || '').includes('DURATION_BELOW_SAMPLE_INTERVAL')); }))
       notices.push('Applies to the whole recording: ' + FLAG_TEXT.DURATION_BELOW_SAMPLE_INTERVAL + '.');
+    // why the cells were not checked for a passing object, once for the analysis (a cell's own reason is in its panel)
+    const unchecked = (S.results.checks && S.results.checks.note) || ''; if (unchecked) notices.push(unchecked);
     if (S.qualityFlag && !counts.has(S.qualityFlag)) S.qualityFlag = null;
     $('quality-review').hidden = !affected && !notices.length;
-    summary.textContent = affected ? plural(affected, 'cell') + ' flagged' : 'Timing note';
-    $('quality-lead').textContent = affected ? plural(affected, 'cell') + ' flagged' + (called() ? ', including ' + plural(responders, 'responder') : '') + '.' : 'Review the applied timing.';
+    const onlyUnchecked = !affected && notices.length === 1 && !!unchecked;
+    summary.textContent = affected ? plural(affected, 'cell') + ' flagged' : onlyUnchecked ? 'Passing objects not checked' : 'Timing note';
+    $('quality-lead').textContent = affected ? plural(affected, 'cell') + ' flagged' + (called() ? ', including ' + plural(responders, 'responder') : '') + '.' : onlyUnchecked ? unchecked : 'Review the applied timing.';
     // Every flagged cell, with its call and what it is flagged for. A click opens the cell; the arrows then step through
     // the flagged cells. With one flag picked below, only its cells are listed.
     const flagged = S.info.names.filter((name) => { const flags = qualityFor(name); return flags.length && (!S.qualityFlag || flags.includes(S.qualityFlag)); });
@@ -533,8 +578,9 @@
     if (flagged.length) {
       const head = cells.createTHead().insertRow(); for (const title of ['Cell', 'Call', 'Flagged for']) { const th = document.createElement('th'); th.textContent = title; head.appendChild(th); }
       const body = cells.createTBody();
-      for (const name of flagged) { const tr = body.insertRow(), call = callOf(name) || ''; tr.dataset.cell = name; tr.classList.toggle('on', name === S.cell); tr.title = 'Open ' + shortName(name);
-        tr.insertCell().textContent = shortName(name); tr.insertCell().innerHTML = '<span class="dot" style="background:' + CALL[kind(call)] + '"></span>' + escape(call); tr.insertCell().textContent = qualityFor(name).map(flagShort).join(' · '); }
+      for (const name of flagged) { const tr = body.insertRow(), call = callOf(name) || '', mark = markOf(name); tr.dataset.cell = name; tr.classList.toggle('on', name === S.cell); tr.title = 'Open ' + shortName(name);
+        tr.insertCell().textContent = shortName(name); const said = tr.insertCell(); said.innerHTML = '<span class="dot" style="background:' + CALL[kind(call)] + '"></span>' + escape(call); if (mark) said.title = 'Automatic call: ' + mark.automatic;
+        tr.insertCell().textContent = flaggedFor(name).join(' · '); }
     }
     list.replaceChildren();
     for (const [flag, count] of counts) {
@@ -635,7 +681,8 @@
     unassigned: 'Unassigned biological units', cohort: 'Cohort flow', recordingMetadata: 'Recording details', sensitivityCalls: 'Sensitivity: cell calls', sensitivityCounts: 'Sensitivity: responder counts',
     negativeControlCalls: 'Negative controls: cell calls', negativeControlCounts: 'Negative controls: responder counts' };
   /** The response call of a cell, put beside it in the per-cell metric tables (it is not a column of those files). */
-  const CALL_COLUMN = { name: 'Call', call: true, about: 'The response call for the primary stimulus, from the cell response calls' };
+  const CALL_COLUMN = { get name() { return marked() ? 'Call after review' : 'Call'; }, call: true,
+    get about() { return marked() ? 'The response call for the primary stimulus after review, from the cell response calls and the review marks' : 'The response call for the primary stimulus, from the cell response calls'; } };
   /** The columns a table shows until "Show all saved columns" is ticked, in this order. */
   const SHORT = {
     calls: ['Cell', 'Role', 'Stimulus', 'Status', 'Reason', 'Threshold_increase', 'Threshold_source', 'Peak_increase', 'Peak_s', 'Onset_s', 'Run_samples', 'Response_latency_s', 'Run_duration_s', 'Window_AUC_fraction_s', 'Baseline_SD', 'QC_flags'],
@@ -653,8 +700,6 @@
   /** A share of cells as the page writes it everywhere: one decimal and "%"; a dash when no cell was evaluable. */
   const shareText = (part, whole) => whole ? decimal(100 * part / whole, 1, true) : '–';
   const primaryWindow = () => { const windows = (S.results && S.results.windows) || []; return windows.find((w) => w.role === 'Stimulus') || windows[0]; };
-  /** The calls of the primary stimulus, by cell: what the per-cell metrics and the summary are split by. */
-  const primaryCalls = () => { const r = S.results, w = primaryWindow(); return (w && r.callsByWindow && r.callsByWindow[w.key]) || r.calls || {}; };
   /** The rows of the summary, always these and in this order, so that the summaries of different recordings line up: [table,
    *  saved column, then the Metric, Unit and Measured text of the saved summary]. Columns that are the same by definition
    *  (alias) are not rows of their own: "Saved as" names them. The response is timed in the response window; the timing of
@@ -681,7 +726,7 @@
    *  - On screen the two kinds of choosing are columns only when both have cells; n has a column of its own; a fraction is in %.
    *  - The saved file holds every value as saved (a fraction stays a fraction), at full precision. */
   function metricSummary() {
-    const r = S.results, tags = r.chosenBlind || null, primary = primaryWindow(), called = primaryCalls(), status = (n) => (called[n] || {}).Status;
+    const r = S.results, tags = r.chosenBlind || null, primary = primaryWindow(), status = primaryCall;
     const left = (n) => status(n) === 'Excluded' || (S.quality[n] || {}).Status === 'Excluded';
     const groups = [['All cells', (n) => !left(n)], ['Responded', (n) => status(n) === 'Responded'], ['Did not respond', (n) => status(n) === 'Did not respond']];
     if (tags) groups.push(['Chosen blind', (n) => tags[n] === true && !left(n)], ['Added after the response', (n) => tags[n] === false && !left(n)]);
@@ -796,7 +841,9 @@
       if (S.info && state.key !== S.info.key) { location.reload(); return; }
       const wasBusy = S.state && S.state.busy; if (!acceptState(state)) return;
       if (wasBusy && !state.busy) S.note = null;
-      if (state.version > 0 && state.version !== S.version) { await loadResults(); S.version = state.version; }
+      // only a newer analysis reloads the results: a mark's own answer brings its review and tally (applyReview), so a poll
+      // that crossed it, or one made while it is on its way, does not load the whole results again
+      if (state.version > 0 && state.version > S.version && !S.reviewing) { await loadResults(); S.version = state.version; }
       showState(); updateTransport();
     } catch (problem) { if (++S.lost >= 3) $('lost').classList.add('on'); }
     finally { S.polling = false; }
@@ -806,7 +853,8 @@
     const engine = $('engine'); engine.textContent = state.engineReady ? 'Analysis engine ready' : 'First run: set up analysis engine'; engine.className = 'pill ' + (state.engineReady ? 'good' : 'warn'); engine.hidden = !!state.engineReady;
     if (S.reapplyFrames && editedTimes() && JSON.stringify(collectDraft()) === S.draftAck) { S.reapplyFrames = false; const before = JSON.stringify(collectDraft()); applyAllFrames(); if (JSON.stringify(collectDraft()) !== before) { draftChanged(); return; } }
     const validation = validateDraft(collectDraft());
-    $('analyze').disabled = state.busy || S.saving || !state.engineReady || validation.errors.length > 0 || JSON.stringify(collectDraft()) !== S.draftAck || S.closed; $('cancel').disabled = !state.busy; $('log').disabled = !state.logAvailable;
+    $('analyze').disabled = state.busy || S.saving || !state.engineReady || validation.errors.length > 0 || JSON.stringify(collectDraft()) !== S.draftAck || S.closed; $('log').disabled = !state.logAvailable;
+    $('cancel').hidden = !state.busy; $('cancel').disabled = !state.cancellable; $('cancel').title = state.busy && !state.cancellable ? 'The checks run to the end.' : '';
     $('setup').hidden = state.engineReady; $('setup').disabled = state.busy; $('setup').classList.toggle('primary', !state.engineReady);
     $('analyze').textContent = state.busy ? 'Analysis in progress…' : S.results ? (hasPending() ? 'Apply changes & reanalyze' : 'Run analysis again') : 'Run analysis';
     for (const box of document.querySelectorAll('#side input,#side select,#side textarea,#protocol-export')) box.disabled = state.busy || S.saving;
@@ -823,9 +871,11 @@
     else if (S.imported && S.imported.revision === S.revision) { status.className = 'status good'; status.textContent = S.imported.text; }
     else if (!S.results && !state.error && state.tone !== 'bad') { status.className = 'status'; status.textContent = state.engineReady ? (state.message && !/^Check acquisition timing/.test(state.message) ? state.message : 'Check the timing, tick the box, then run.') : 'First run: choose “Set up analysis engine” (needs internet).'; }
     else if (S.results && state.tone === 'good' && !called()) { status.className = 'status warn'; status.textContent = 'Finished, but no cell got a call' + (unscorableReason() ? ': ' + unscorableReason().replace(/\.$/, '').toLowerCase() : '') + '.'; }
-    else if (S.results && state.tone === 'good' && state.folder) { status.className = 'status good'; status.textContent = 'Done.'; }
+    else if (S.results && state.tone === 'good' && state.folder) { status.className = 'status good'; status.textContent = finishLine(); }
     else { status.className = 'status ' + (state.tone === 'good' ? 'good' : state.tone === 'bad' ? 'bad' : state.tone === 'warn' ? 'warn' : ''); status.textContent = state.message; }
-    status.title = state.message || '';
+    status.title = state.message || ''; status.classList.toggle('full', !state.busy && !!(S.carried || S.said) && status.classList.contains('good'));   // carried marks and what a mark changed are read in full
+    if (state.busy && S.marking) closeMark();
+    showMark();
     // what the tick box confirms, in the user's own numbers
     { const d = collectDraft(), hz = Number(d.values.sampling_hz), first = d.protocol.windows[0], used = first ? windowFrames(expandWindow(first, d.protocol.schema_version === 1), editedTimes()) : null, st = used && used.stimulus;
       $('confirm-text').textContent = 'Timing checked' + (d.timestamps || (isFinite(hz) && hz > 0) ? ': ' + (d.timestamps ? 'recorded timestamps' : fmt(+hz.toPrecision(4)) + (fmt(+hz.toPrecision(4)) === '1' ? ' frame/s' : ' frames/s')) + (st ? ', stimulus ' + (st.before >= 1 && st.before < used.n ? 'after frame ' + st.before : 'outside the recording') : '') : '');
@@ -841,6 +891,13 @@
     $('review-stage').textContent = S.results ? (pending ? 'Changes pending' : 'Completed analysis') : 'Preview · no analysis yet';
     $('workflow-help').textContent = S.results ? 'Select a cell or response window. Use the same timeline for the movie and traces.' : 'Drag the frame slider or press Play. You can review the movie before running analysis.';
   }
+  /** The status line after a good finish: "Done." and the marks carried over from the earlier analysis; after a mark, what Fiji
+   *  said then. Both are Fiji's own words; the carried marks stay until the next run. */
+  function finishLine() {
+    const carried = S.carried ? S.carried.text : '';
+    if (S.said) return S.said + (carried && !S.said.includes(carried) ? ' ' + carried : '');
+    return 'Done.' + (carried ? ' ' + carried : '');
+  }
   async function send(path, body) {
     S.note = null;
     try { acceptState(await api(path, body || {})); showState(); }
@@ -849,6 +906,9 @@
   // ---------------------------------------------------------------- saved results; selecting a window never recalculates a call
   async function loadResults() {
     S.results = await api('results'); const r = S.results;
+    // the marks carried over when this analysis was run, kept here: Fiji stops giving them once they are all removed
+    const carried = r.review && r.review.carried; S.carried = carried && carried.text ? { folder: r.folder, text: carried.text } : null;
+    S.said = null; closeMark();
     const records = (data) => Object.fromEntries(((data && data.rows) || []).map((row) => [row[data.header.indexOf('Cell')], Object.fromEntries(data.header.map((key, i) => [key, row[i]]))]));
     S.quality = records(r.tables.quality);
     const windows = r.windows && r.windows.length ? r.windows : [{ key: 'Stimulus::' + (r.counts.Stimulus || 'Stimulus'), role: 'Stimulus', stimulus: r.counts.Stimulus || 'Stimulus' }];
@@ -873,22 +933,26 @@
     Plot.x0 = Plot.x1 = null; updateWindow(); setFrame(S.frame); showState();
   }
   /** % responding to the primary stimulus as worked out in Fiji (results.tally), by row key: all, blind, later, quiet.
-   *  With the switch on, the cells whose corrected fluorescence went below zero are left out of every row. */
+   *  With the switch on, the cells whose corrected fluorescence went below zero are left out of every row. While review marks
+   *  apply the figures are those after review; before: the responders before review, changed: the calls a mark changed. */
   function tallyRows() {
     const t = S.results && S.results.tally; if (!t || !t.rows) return null;
-    const rows = {};
-    for (const row of t.rows) { const c = S.withoutBelowZero ? row.without : row.counted; rows[row.key] = { label: row.label, responded: c[0], evaluable: c[1], share: shareText(c[0], c[1]) }; }
+    const rows = {}, reviewed = !!(t.reviewed && marked()), side = (from) => S.withoutBelowZero ? from.without : from.counted;
+    for (const row of t.rows) { const after = reviewed && row.reviewed ? row.reviewed : null, c = side(after || row);
+      rows[row.key] = { label: row.label, responded: c[0], evaluable: c[1], share: shareText(c[0], c[1]), reviewed: !!after, before: side(row)[0], changed: after ? after.changed : 0 }; }
     return rows;
   }
   /** The same tally as a table on the Responder counts tab: every row with all its cells and without those below zero. */
   function showTally() {
     const t = S.results && S.results.tally; $('tally-box').hidden = !t; if (!t) return;
     const share = (c) => ({ text: shareText(c[0], c[1]), key: c[1] ? c[0] / c[1] : '', num: true }), count = (n) => ({ text: String(n), key: n, num: true });
-    // six columns, so the table fits its tab; the saved file has every number in a column of its own
-    const header = ['Cells', '% responding', 'Responded', 'Evaluable', 'Cells below zero', 'Without them'];
+    // six columns, so the table fits its tab; the saved file has every number in a column of its own. While review marks
+    // apply, two more: the share after review and how many calls the marks changed.
+    const reviewed = !!(t.reviewed && marked()), of = (c) => c[1] ? { text: shareText(c[0], c[1]) + ' (' + c[0] + ' of ' + c[1] + ')', key: c[0] / c[1], num: true } : { text: '–', key: '', num: true };
+    const header = ['Cells', '% responding', 'Responded', 'Evaluable', 'Cells below zero', 'Without them'].concat(reviewed ? ['After review', 'Calls changed'] : []);
     table('table-tally', { header, columns: header.map((name, index) => ({ name, index, given: true })),
-      rows: t.rows.map((row) => [row.label, share(row.counted), count(row.counted[0]), count(row.counted[1]), count(row.counted[2] - row.without[2]),
-        row.without[1] ? { text: shareText(row.without[0], row.without[1]) + ' (' + row.without[0] + ' of ' + row.without[1] + ')', key: row.without[0] / row.without[1], num: true } : { text: '–', key: '', num: true }]) });
+      rows: t.rows.map((row) => [row.label, share(row.counted), count(row.counted[0]), count(row.counted[1]), count(row.counted[2] - row.without[2]), of(row.without)]
+        .concat(reviewed ? (row.reviewed ? [of(row.reviewed.counted), count(row.reviewed.changed)] : [{ text: '–', key: '', num: true }, { text: '–', key: '', num: true }]) : [])) });
   }
   /** The headline numbers for the selected response window (the primary stimulus or its control), from the saved counts. */
   function showTiles() {
@@ -899,7 +963,7 @@
     const all = label + ': ' + whole('Responded') + ' of ' + whole('Evaluable') + ' evaluable cells';
     // The primary stimulus: all cells lead; under them the cells chosen blind and those added later, then the quiet cells.
     // Every figure comes from the tally worked out in Fiji, with or without the cells that went below zero.
-    const tally = chosen.role !== 'Control' ? tallyRows() : null, below = tally ? r.tally.belowZero.length : 0, said = (row) => row.share + ' (' + row.responded + ' of ' + row.evaluable + ')';
+    const tally = chosen.role !== 'Control' ? tallyRows() : null, below = tally ? r.tally.belowZero.length : 0, said = (row) => row.share + ' (' + row.responded + ' of ' + row.evaluable + (row.changed > 0 ? '; ' + row.before + ' before review' : '') + ')';
     $('below-zero-label').hidden = !below; $('below-zero').checked = !!S.withoutBelowZero;
     $('below-zero-text').textContent = 'Leave out ' + below + (below === 1 ? ' cell' : ' cells') + ' below zero';
     const reason = unscorableReason();
@@ -908,7 +972,8 @@
       const lines = [];
       if (tally.blind && tally.later && tally.blind.evaluable && tally.later.evaluable) lines.push(['Chosen blind: ' + said(tally.blind) + ' · added after the response was shown: ' + said(tally.later), 'Cells chosen before the response was seen, and cells added once it was shown']);
       if (tally.quiet && tally.quiet.evaluable) lines.push([tally.quiet.label + ': ' + said(tally.quiet), 'Cells that need a rise of ' + Math.round(100 * r.tally.quietRise) + ' % or less to respond. Noisier cells are set aside whether they responded or not']);
-      $('tile-responding').innerHTML = '<b>' + tally.all.share + '</b><span>' + label + ': ' + tally.all.responded + ' of ' + tally.all.evaluable + ' evaluable cells' + (S.withoutBelowZero && below ? ' · ' + below + ' below zero left out' : '') + '</span>'
+      // with review marks the figure is the one after review, and the count before review is beside it (as in the Fiji window)
+      $('tile-responding').innerHTML = '<b>' + tally.all.share + '</b><span>' + label + ': ' + tally.all.responded + ' of ' + tally.all.evaluable + ' evaluable cells' + (tally.all.reviewed ? ' after review; ' + tally.all.before + ' before review' : '') + (S.withoutBelowZero && below ? ' · ' + below + ' below zero left out' : '') + '</span>'
         + lines.map(([text, title]) => '<span class="tile-line" title="' + escape(title) + '">' + escape(text) + '</span>').join('');
     }
     else $('tile-responding').innerHTML = '<b>' + decimal(percent, 1, true) + '</b><span>' + all + '</span>';
@@ -918,7 +983,10 @@
   function updateWindow() {
     showTiles();
     const group = $('group'); group.innerHTML = '';
-    GROUPS.forEach((name, i) => { const o = document.createElement('option'); o.value = i; o.textContent = name + ' (' + S.info.names.filter((n) => inGroup(callOf(n), i, n)).length + ')'; group.appendChild(o); });
+    // while review marks apply to the window on screen, the two calls are those after review, and the marked cells are a group of their own
+    const reviewing = !!marked() && primaryShown(); if (!reviewing && S.group === 6) S.group = 0;
+    GROUPS.forEach((name, i) => { if (i === 6 && !reviewing) return; const o = document.createElement('option'); o.value = i;
+      o.textContent = name + (reviewing && (i === 1 || i === 2) ? ' after review' : '') + ' (' + S.info.names.filter((n) => inGroup(callOf(n), i, n)).length + ')'; group.appendChild(o); });
     group.value = S.group; showQuality(); Plot.dirty = true; listCells(); drawHeatmap();
   }
   /** Lists the cells of the chosen group, and draws only those on the picture and behind the mean. */
@@ -939,9 +1007,13 @@
     if (!name) verdict.textContent = !S.results ? '' : S.listed.length ? 'No cell selected.' : 'No cells in this group.';
     else if (!row) verdict.innerHTML = S.results ? '<b>' + escape(shortName(name)) + '</b> · no response call was saved for this cell' : '';
     else {
-      // a responder: what the call rests on, the rise held long enough, in place of the engine's "sustained threshold crossing"
-      const basis = row.Status === 'Responded' ? heldRise(row) : '';
-      const parts = ['<span class="dot" style="background:' + CALL[kind(row.Status)] + '"></span><b>' + escape(shortName(name)) + ': ' + escape(row.Status || '') + '</b>', escape(basis || (row.Reason || '').toLowerCase())];
+      // a responder: what the call rests on, the rise held long enough, in place of the engine's "sustained threshold crossing".
+      // A marked cell leads with its call after review and the reason, then its automatic call; the rest describes the automatic call.
+      const basis = row.Status === 'Responded' ? heldRise(row) : '', mark = markOf(name), call = callOf(name);
+      const parts = ['<span class="dot" style="background:' + CALL[kind(call)] + '"></span><b>' + escape(shortName(name)) + ': ' + escape(call || '') + (mark ? ' after review' : '') + '</b>'];
+      if (mark) parts.push('<span title="' + attribute(markedAt(mark)) + '">' + escape(mark.reason.toLowerCase() + (mark.note ? ': ' + mark.note : '')) + '</span>',
+        ...(mark.carriedFrom ? ['<span title="' + attribute(mark.carriedFrom) + '">from an earlier analysis</span>'] : []), 'automatic call ' + escape(mark.automatic));
+      parts.push(escape(basis || (row.Reason || '').toLowerCase()));
       const rise = number(row.Peak_increase), at = number(row.Peak_s), need = number(row.Threshold_increase), setBy = { noise: ', set by its noise', floor: ', the minimum rise' }[requiredBy(row)] || '';
       // a responder's largest rise that lies outside the rise that held says so, so that its time does not read against the onset
       const held = row.Status === 'Responded' ? [heldStart(row), number(row.Run_end_s)] : [NaN, NaN], apart = !isFinite(at) ? '' : at < held[0] - 1e-9 ? ', not held' : at > held[1] + 1e-9 ? ', after the held rise' : '';
@@ -949,7 +1021,8 @@
       verdict.innerHTML = parts.filter(Boolean).join(' · ');
       verdict.title = 'Rise and threshold are shown as percentages of local prestimulus fluorescence. The saved call table stores the corresponding fractions.';
     }
-    const flags = qualityFor(name); $('cell-quality').hidden = !flags.length; $('cell-quality').textContent = flags.map(flagText).join(' · '); $('cell-quality').title = $('cell-quality').textContent;
+    const flags = qualityFor(name).filter((flag) => !isCheck(flag)); $('cell-quality').hidden = !flags.length; $('cell-quality').textContent = flags.map(flagText).join(' · '); $('cell-quality').title = $('cell-quality').textContent;
+    showChecks(name); if (S.marking && S.marking.cell !== name) closeMark(); showMark();
     $('zoom-cell').disabled = !name || !(S.info.hasPicture || S.info.hasMovie);
     for (const row of document.querySelectorAll('tbody tr')) row.classList.toggle('on', row.dataset.cell === name);
     if (Pic.zoom > 1 && name) centreOn(S.info.names.indexOf(name));
@@ -964,6 +1037,144 @@
     return 'rise held ' + (isFinite(frames) ? 'for ' + plural(Math.round(frames), 'frame') + ' ' : '') + 'from ' + decimal(onset, 1) + ' s' + (isFinite(after) ? ', ' + decimal(after, 1) + ' s after the stimulus' : '');
   }
   const escape = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const attribute = (text) => escape(text).replace(/"/g, '&quot;');
+  /** When a mark was made, for its tooltip: "Marked 2026-11-24 10:05". */
+  const markedAt = (mark) => mark.time ? 'Marked ' + String(mark.time).replace('T', ' ').replace(/:\d\d(\.\d+)?([+-]\d\d:?\d\d|Z)?$/, '') : '';
+
+  // ---------------------------------------------------------------- the selected cell's checks, and its review mark
+  /** The selected cell's check flags, under its call. A flag of a cell whose event has a first frame goes to that frame (from a
+   *  still picture to the recording, when there is one); without one it is text. An evaluable cell that the checks could not
+   *  look at, in an analysis whose rings were measured, says why. The frames come from the checks, never from the words. */
+  function showChecks(name) {
+    const box = $('cell-checks'); box.replaceChildren();
+    const c = checksOf(name), checks = S.results && S.results.checks, items = [];
+    if (c) {
+      const frame = Number.isInteger(c.firstFrame) && c.firstFrame >= 1 && c.firstFrame <= S.info.frames ? c.firstFrame : null;
+      for (const flag of checkFlags(name)) {
+        const item = document.createElement(frame ? 'button' : 'span'); item.textContent = flag.text;
+        if (frame) { item.type = 'button'; item.className = 'jump'; item.title = 'Go to frame ' + frame + (c.detail ? '\n' + c.detail : ''); item.addEventListener('click', () => goToFrame(frame)); }
+        else if (c.detail) item.title = c.detail;
+        items.push(item);
+      }
+      if (checks.ringMeasured && !c.checked && c.why && ['Responded', 'Did not respond'].includes(automaticCall(name))) { const item = document.createElement('span'); item.textContent = 'passing object not checked: ' + c.why; items.push(item); }
+    }
+    items.forEach((item, i) => { if (i) box.append(' · '); box.appendChild(item); });
+    box.hidden = !items.length;
+  }
+  /** A check flag's frame: the movie goes there, and from the colour overview or the background areas to the recording. */
+  function goToFrame(frame) {
+    if (still() && S.info.hasMovie && Array.from($('view').options).some((o) => o.value === 'raw')) { play(false); S.view = 'raw'; $('view').value = 'raw'; S.viewChosen = true; }
+    setFrame(frame, true);
+  }
+  /** What the mark button does for a cell: null where there is nothing to mark (no call to review, a control window, an analysis
+   *  running, a review file that is not applied); else its words and, for a new mark, the call it gives. */
+  function markAction(name) {
+    const review = S.results && S.results.review;
+    if (!review || review.problem || !name || !primaryShown() || !S.state || S.state.busy || S.closed) return null;
+    if (markOf(name)) return { remove: true, label: 'Remove mark' };
+    const automatic = automaticCall(name), choices = review.calls || [];
+    if (!choices.includes(automatic)) return null;
+    return { call: choices.find((c) => c !== automatic), automatic, label: automatic === 'Responded' ? 'Mark as not a responder' : 'Mark as a responder' };
+  }
+  /** The mark button, the open form and what Fiji answered, for the selected cell. Called on every state poll: it never rebuilds the form. */
+  function showMark() {
+    const name = S.cell, action = S.results ? markAction(name) : null, button = $('mark'), form = $('mark-form'), said = $('mark-said');
+    if (S.marking && (!action || action.remove)) closeMark();
+    button.hidden = !action || !!S.marking; if (action) button.textContent = action.label; button.disabled = S.reviewing;
+    if (S.marking) { $('mark-save').disabled = S.reviewing || !$('mark-reason').value; $('mark-note').required = $('mark-reason').value === 'Other'; }
+    const problem = S.results && S.results.review && S.results.review.problem;
+    const text = S.markSaid && S.markSaid.cell === name ? S.markSaid.text : problem && name && primaryShown() ? problem : '';
+    said.hidden = !text; said.textContent = text; said.className = 'mark-said ' + (S.markSaid && S.markSaid.cell === name ? 'bad' : 'warn');
+    form.hidden = !S.marking;
+  }
+  /** Opens the mark form in place, on the selected cell: the reason it starts with comes from the cell's check flag on a responder. */
+  function openMark() {
+    const name = S.cell, action = markAction(name); if (!action || action.remove) return;
+    const review = S.results.review, reason = $('mark-reason'), note = $('mark-note');
+    reason.replaceChildren(); const none = document.createElement('option'); none.value = ''; none.hidden = true; reason.appendChild(none);
+    for (const text of review.reasons || []) { const o = document.createElement('option'); o.value = o.textContent = text; reason.appendChild(o); }
+    reason.value = startingReason(name, action.automatic); note.value = ''; note.maxLength = review.noteMax || 120;
+    S.marking = { cell: name, call: action.call }; S.markSaid = null; showMark(); Plot.dirty = true; drawPlot();
+    reason.focus();
+  }
+  function closeMark() {
+    if (!S.marking && $('mark-form').hidden) return;
+    const had = document.activeElement && $('mark-form').contains(document.activeElement);
+    S.marking = null; S.markSaid = null; $('mark-form').hidden = true; showMark(); Plot.dirty = true; drawPlot();
+    if (had && !$('mark').hidden) $('mark').focus();
+  }
+  /** The note as Fiji keeps it: without the spaces at either end. */
+  const tidy = (text) => String(text).replace(/^[\s\u001C-\u001F]+|[\s\u001C-\u001F]+$/g, '');
+  /** What is wrong with a reason and note before they are sent, in Fiji's own words; '' when nothing is (Fiji has the last word). */
+  function markProblem(reason, typed, review) {
+    const note = tidy(typed), most = review.noteMax || 120;
+    if (/[\x00-\x1F\x7F\x85\u2028\u2029]/.test(note)) return 'The note must be one line.';
+    if (/\p{Cf}/u.test(note)) return 'The note must be plain text, without hidden characters.';
+    if (note.length > most) return 'Keep the note to ' + most + ' characters or fewer.';
+    if (note && '=+-@'.includes(note[0])) return 'The note cannot start with =, +, - or @.';
+    if (reason === 'Other' && !note) return 'Other needs a short note.';
+    return '';
+  }
+  async function saveMark() {
+    const marking = S.marking; if (!marking || S.reviewing) return;
+    const review = S.results.review, reason = $('mark-reason').value, note = $('mark-note').value; if (!reason) return;
+    const problem = markProblem(reason, note, review); if (problem) { S.markSaid = { cell: marking.cell, text: problem }; showMark(); $('mark-note').focus(); return; }
+    if (await sendReview({ folder: review.folder, cell: marking.cell, call: marking.call, reason, note })) $('mark').focus();
+  }
+  async function removeMark() {
+    const name = S.cell, review = S.results && S.results.review; if (!name || !review || S.reviewing) return;
+    if (await sendReview({ folder: review.folder, cell: name, remove: true })) $('mark').focus();
+  }
+  /** Sends a mark or its removal to Fiji. A refusal is shown as Fiji gives it, beside the form. */
+  async function sendReview(body) {
+    S.reviewing = true; showMark();
+    try { applyReview(await api('review', body)); return true; }
+    catch (problem) { S.markSaid = { cell: body.cell, text: /fetch/i.test(problem.message) ? 'Fiji is not connected.' : problem.message }; return false; }
+    finally { S.reviewing = false; showMark(); }
+  }
+  /** Fiji's answer to a mark: its review and tally replace those of the results, and everything is drawn again in place, without
+   *  loading the results anew (which would reset the plot's zoom, the below-zero switch, the table chosen and the notes). The
+   *  version it answers with is the page's from now on, so that a poll from before the mark does not load the results again. */
+  function applyReview(answer) {
+    const r = S.results; if (!r || answer.folder !== r.folder) return;
+    r.review = answer.review; r.tally = answer.tally;
+    S.version = answer.version; if (S.state) S.state.version = answer.version;
+    S.said = answer.message || null; S.marking = null; S.markSaid = null; $('mark-form').hidden = true;
+    refreshReview(); showState();
+  }
+  /** Draws again, from the review and tally on hand, everything that counts, groups, colours or lists cells by call. The selected
+   *  cell stays selected, also when it leaves the group the Show list is on. */
+  function refreshReview() {
+    const keep = S.cell;
+    showCalls(); showTally(); showMethods(); showMetricTable();
+    updateWindow();
+    if (keep && S.cell !== keep) pick(keep);
+  }
+  /** The Methods sentence of the review, to copy, with how many cells were marked; nothing without marks that changed a call. */
+  function showMethods() {
+    const review = S.results && S.results.review, sentence = (review && review.methods) || '';
+    $('review-count').hidden = $('copy-methods').hidden = !sentence;
+    if (sentence) { $('review-count').textContent = plural(review.changed || 0, 'cell') + ' marked'; $('copy-methods').title = sentence; }
+  }
+  async function copyMethods() {
+    const sentence = (S.results && S.results.review && S.results.review.methods) || '', note = $('calls-saved'); if (!sentence) return;
+    let copied = false;
+    try { await navigator.clipboard.writeText(sentence); copied = true; }
+    catch (blocked) {   // a browser that keeps the clipboard from the page: the old way, through a selected box
+      const box = document.createElement('textarea'); box.value = sentence; box.setAttribute('readonly', ''); box.style.position = 'fixed'; box.style.opacity = '0'; document.body.appendChild(box); box.select();
+      try { copied = document.execCommand('copy'); } catch (failed) { copied = false; } box.remove();
+    }
+    note.className = 'save-note' + (copied ? '' : ' bad'); note.textContent = copied ? 'Copied' : 'Not copied';
+  }
+  /** While review marks apply: for each row of the calls table, the mark of its cell when the row is the primary stimulus's. */
+  function reviewOfRows(data) {
+    const marks = marked(); if (!marks || !data || !data.header) return null;
+    const cell = data.header.indexOf('Cell'), role = data.header.indexOf('Role'), stimulus = data.header.indexOf('Stimulus'), w = primaryWindow();
+    const primary = (row) => !w || ((role < 0 ? '' : row[role]) || 'Stimulus') + '::' + ((stimulus < 0 ? '' : row[stimulus]) || 'Stimulus') === w.key;
+    return data.rows.map((row) => cell >= 0 && primary(row) ? marks[row[cell]] || null : null);
+  }
+  /** A saved row with every column of its header, for columns put after it. */
+  const fullRow = (row, n) => { const own = row.slice(0, n); while (own.length < n) own.push(''); return own; };
   /** The plot opens on the average alone and stays on what was chosen: picking a cell never changes what the plot shows.
    *  A cell's own trace appears only under "One cell + average". */
   function setPlotMode(mode) {
@@ -2195,7 +2406,7 @@
   function callReader(kind, data) {
     const status = data.header.indexOf('Status'), cell = data.header.indexOf('Cell');
     if (FAMILY[kind] === 'window' && status >= 0) return (row) => row[status];
-    if (FAMILY[kind] === 'cell' && cell >= 0 && S.results) { const calls = primaryCalls(); return (row) => (calls[row[cell]] || {}).Status; }
+    if (FAMILY[kind] === 'cell' && cell >= 0 && S.results) return (row) => primaryCall(row[cell]);
     return () => undefined;
   }
   /** A saved value as a table shows it: { text, title, key (for sorting; '' sorts last), num (right-aligned) }. Numbers have the
@@ -2233,7 +2444,7 @@
     const element = $(id); element.innerHTML = ''; if (!data || !data.header) return;
     const box = { 'table-calls': 'all-call-columns', 'table-metrics': 'all-metric-columns', 'table-counts': 'all-count-columns' }[id], everything = !!(box && $(box).checked);
     const callOfRow = kind ? callReader(kind, data) : () => undefined, flip = kind === 'counts' && data.rows.length >= 1 && data.rows.length <= 4;
-    let columns = data.columns || tableColumns(kind, data, everything), rows = data.rows;
+    let columns = (data.columns || tableColumns(kind, data, everything)).concat(data.more || []), rows = data.rows;   // more: columns put after the saved ones
     if (flip) ({ columns, rows } = turned(columns, rows, callOfRow));
     const given = (v) => v && typeof v === 'object' ? v : { text: v == null || v === '' ? '–' : String(v), key: v == null ? '' : v };
     const shown = rows.map((row) => ({ row, cells: columns.map((c) => c.given ? given(row[c.index]) : shownCell(c, row, callOfRow)) }));
@@ -2257,7 +2468,22 @@
     body.addEventListener('click', (event) => { const tr = event.target.closest('tr'); if (tr && tr.dataset.cell) chooseCell(tr.dataset.cell); });
     fill(shown);
   }
-  const showCalls = () => table('table-calls', S.results.tables.calls, 'calls');
+  /** The calls table as saved. While review marks apply, two columns on its right: the reviewed call and the review reason with
+   *  its note, on the primary stimulus's row of each marked cell; empty on every other row. The saved Status and Reason stay. */
+  function showCalls() {
+    const data = S.results.tables.calls, review = reviewOfRows(data);
+    if (!review) { table('table-calls', data, 'calls'); return; }
+    const n = data.header.length, blank = { text: '', key: '' };
+    table('table-calls', Object.assign({}, data, {
+      rows: data.rows.map((row, i) => { const m = review[i]; return fullRow(row, n).concat(m ? [{ text: m.reviewed, key: m.reviewed }, { text: m.reason + (m.note ? ': ' + m.note : ''), key: m.reason + (m.note ? ': ' + m.note : '') }] : [blank, blank]); }),
+      more: [{ name: 'Reviewed call', given: true, index: n, title: 'The call after review. The automatic call is in Call.' }, { name: 'Review reason', given: true, index: n + 1, title: 'Why the call was changed, and the note' }] }), 'calls');
+  }
+  /** The calls table as a CSV: as saved, and while review marks apply with Reviewed_call, Review_reason and Review_note on the right. */
+  function callsRows() {
+    const rows = savedRows('calls'), data = S.results.tables.calls, review = reviewOfRows(data); if (!review) return rows;
+    const n = data.header.length;
+    return [fullRow(rows[0], n).concat(['Reviewed_call', 'Review_reason', 'Review_note'])].concat(data.rows.map((row, i) => { const m = review[i]; return fullRow(row, n).concat(m ? [m.reviewed, m.reason, m.note || ''] : ['', '', '']); }));
+  }
   const showCounts = () => table('table-counts', S.results.tables.counts, 'counts');
 
   // ---------------------------------------------------------------- the processed data, cell by cell
@@ -2308,7 +2534,9 @@
       manifest: S.results.manifest, settingsPending: hasPending(), displayed_window: S.window, cell: S.cell, group: GROUPS[S.group],
       frame: S.frame, time_s: frameTimes()[S.frame - 1], view: S.view, results_folder: S.results.folder || (S.state && S.state.folder) || null,
       time_range: Plot.geom ? [Plot.geom.x0, Plot.geom.x1] : [Plot.x0, Plot.x1], time_zoomed: Plot.x0 !== null, palette: S.palette, range: S.range, order: S.order,
-      plot: S.plotMode, signal: S.results && isDff() ? 'dF/F0' : S.signal, y_axis: Plot.geom ? [Plot.geom.lo, Plot.geom.hi] : null, y_axis_typed: Plot.y[S.signal] || null, plotted: Plot.geom ? Plot.geom.plotted : [], all_traces_drawn: S.every, thresholds_drawn: S.thresholds, cells_left_out: Array.from(leftOut()) };
+      plot: S.plotMode, signal: S.results && isDff() ? 'dF/F0' : S.signal, y_axis: Plot.geom ? [Plot.geom.lo, Plot.geom.hi] : null, y_axis_typed: Plot.y[S.signal] || null, plotted: Plot.geom ? Plot.geom.plotted : [], all_traces_drawn: S.every, thresholds_drawn: S.thresholds, cells_left_out: Array.from(leftOut()),
+      // while review marks apply, the calls of the primary stimulus are those after review, as the Fiji window's record says too
+      ...(marked() ? { calls: 'after review', review_file: S.results.review.file, review_sha256: S.results.review.sha256 } : {}) };
   }
   /** What a saved figure itself shows, in place of what the page shows: its time and Y range and the means it drew, as the
    *  figure's own drawing (Fig.drawn, made by picture()) has them; the limits typed in the editor are under picture.figure. */
@@ -2910,7 +3138,7 @@
     // Every table tab has one Export menu: a CSV into the plots folder, with the record of how the page was set beside it
     // (exportMetadata), or a CSV through the browser. [tab, file name, CSV text]
     const tableExports = [['metrics', () => $('metrics-table').value === 'summary' ? 'metrics_summary' : 'table_' + $('metrics-table').value, () => csvText(metricRows())],
-      ['calls', () => 'responder_calls', () => csvText(savedRows('calls'))], ['counts', () => 'responder_counts', () => csvText(savedRows('counts'))], ['data', dataKind, dataCsv]];
+      ['calls', () => 'responder_calls', () => csvText(callsRows())], ['counts', () => 'responder_counts', () => csvText(savedRows('counts'))], ['data', dataKind, dataCsv]];
     for (const [tab, kind, csv] of tableExports) {
       $(tab + '-download').addEventListener('click', () => download(new Blob([csv()], { type: 'text/csv' }), exportName(kind(), 'csv')));
       $(tab + '-save').addEventListener('click', async () => {
@@ -3007,6 +3235,18 @@
     $('table-flagged').addEventListener('click', (event) => { const tr = event.target.closest('tr'); if (!tr || !tr.dataset.cell) return;
       const name = tr.dataset.cell; if (S.group !== 5) showGroup(5); chooseCell(name); showTab('review'); $('quality-review').open = false; });
     $('group').addEventListener('change', () => { if (Number($('group').value) !== 5 && S.qualityFlag) { S.qualityFlag = null; showQuality(); } });
+    // The review mark of the selected cell: one button, and in its place a form. Enter saves; Esc cancels and keeps the cell.
+    $('mark').addEventListener('click', () => { const action = markAction(S.cell); if (action && action.remove) removeMark(); else openMark(); });
+    $('mark-form').addEventListener('submit', (event) => { event.preventDefault(); saveMark(); });
+    $('mark-form').addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeMark(); }
+      else if (event.key === 'Enter' && event.target.tagName === 'SELECT') { event.preventDefault(); saveMark(); }
+      else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') event.stopPropagation();   // they move in the box, not to another cell
+    });
+    $('mark-reason').addEventListener('change', () => { S.markSaid = null; showMark(); });
+    $('mark-note').addEventListener('input', () => { if (S.markSaid) { S.markSaid = null; showMark(); } });
+    $('mark-cancel').addEventListener('click', closeMark);
+    $('copy-methods').addEventListener('click', copyMethods);
     $('all-call-columns').addEventListener('change', showCalls); $('all-count-columns').addEventListener('change', showCounts); $('all-metric-columns').addEventListener('change', showMetricTable);
     $('response-window').addEventListener('change', () => { S.window = $('response-window').value; updateWindow(); });
     $('metrics-table').addEventListener('change', showMetricTable);
@@ -3119,5 +3359,5 @@
 
   wire();
   start().catch((problem) => { $('lost').classList.add('on'); $('status').textContent = problem.message; });
-  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, STYLE, place, tableColumns, shownCell, setView, viewArea, savedArea, viewCanvas, pairCanvas, scaleBarLength, pictureKey, cellNumber, plotCells, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, legendLayout, exportMetadata, heatmapAt, heatmapData, pictureRecord, decimal, columnWords, metricSummary, showCalls, showCounts, showMetricTable, plotNumbers, plotKind, COLUMN_WORDS, SUMMARY_ROWS };   // for the browser test
+  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, STYLE, shownCall, startingReason, markProblem, refreshReview, loadResults, callsRows, place, tableColumns, shownCell, setView, viewArea, savedArea, viewCanvas, pairCanvas, scaleBarLength, pictureKey, cellNumber, plotCells, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, legendLayout, exportMetadata, heatmapAt, heatmapData, pictureRecord, decimal, columnWords, metricSummary, showCalls, showCounts, showMetricTable, plotNumbers, plotKind, COLUMN_WORDS, SUMMARY_ROWS };   // for the browser test
 })();

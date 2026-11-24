@@ -9,6 +9,10 @@ def loader=new GroovyClassLoader(getClass().classLoader)
 loader.parseClass(new File('scripts/Plugins/Calcium Imaging/Calcium_Cells_Step_By_Step.groovy'))
 def Csv=loader.loadClass('CalciumCsv'),Protocol=loader.loadClass('CalciumResponseProtocol')
 def root=new File('build/web-step4').absoluteFile;root.mkdirs();new File(root,'stop').delete();new File(root,'url.txt').delete()
+// What an earlier run of the test left: review marks, checks and percent tables beside the analysis, the second analysis and the
+// test's switches. Marks left here would apply from the start (same analysis, same calls) and carry into the next one.
+(root.listFiles()?:new File[0]).each{File f->if(f.isFile()&&(f.name==~/Fixture recording_(reviewed_calls|call_checks|percent_responding)_.*\.csv/||f.name in ['checks.csv','rerun','slow']))f.delete()}
+new File(root,'browser-results-2').deleteDir()
 def source=new File('tests/fixtures/simpleca').absoluteFile,fixture=new File(root,'browser-results');fixture.mkdirs()
 source.listFiles().findAll{it.isFile()}.each{new File(fixture,it.name).bytes=it.bytes}
 List clock=(0..<30).collect{it/2d+(it>=15?5d:0d)}
@@ -47,12 +51,28 @@ def colour=new ColorProcessor(250,150);colour.setColor(0x103a10);colour.fill()
 def recording=new ImagePlus('Recording',frames);recording.getCalibration().pixelWidth=0.8d;recording.getCalibration().pixelHeight=0.8d;recording.getCalibration().setUnit('micron')
 def data=[csv:new File(source,'metrics.csv'),folder:root,recording:'Fixture recording',frames:30,hz:2d,baselineStart:1,baselineEnd:5,key:'fixture',measurementId:'synthetic-browser-fixture',
     picture:new ImagePlus('Colour picture',colour),movie:recording,names:(1..6).collect{String.format('Cell%03d',it)},rois:(1..6).collect{new Roi(it*30,50,20,20)} as Roi[]]
+// The checks on the calls run for real after every analysis. The fixture has no ring and core values beside it, so they find
+// nothing to flag; when the test has written checks.csv (rows of the real table, with its header), that is what this analysis's
+// checks file holds, and the page reads it as Fiji reads a saved one. "slow" makes the engine and the checks take a while.
+def Checks=loader.loadClass('CalciumCallChecks');def realRun=Checks.getMethod('run',File,Map,File)
+Checks.metaClass.static.run={File dir,Map m,File log->
+    Map found=realRun.invoke(null,dir,m,log) as Map
+    if(new File(root,'slow').isFile())Thread.sleep(2500)
+    File given=new File(root,'checks.csv');if(!given.isFile())return found
+    Checks.file(m,dir).text=given.getText('UTF-8');Checks.saved(dir,m)}
 def session=loader.loadClass('CalciumAnalysisSession').newInstance(data);session.runtime.home=new File(root,'runtime')
 session.runtime.metaClass.environment={->root} // Display test only; never downloads or invokes R.
 session.draft.protocol=protocol;session.draft.timestamps=[name:'fixture-clock.csv',content:'Frame,Time_s\n'+clock.withIndex().collect{t,i->(i+1)+','+t}.join('\n')+'\n']
 session.open={File target->new File(root,'opened.txt').text=target.name}
 session.performAnalysis={rt,input,settings,out,job->new File(root,'sent.json').text=JsonOutput.prettyPrint(JsonOutput.toJson(settings));new File(root,'settings.txt').text=settings.collect{k,v->k+'='+v}.join('\n')
-    job.logFile.parentFile.mkdirs();job.logFile.text='Synthetic analysis log';(1..4).each{job.check();job.progress.call(it*20,'Making the calls');Thread.sleep(150)};fixture}
+    job.logFile.parentFile.mkdirs();job.logFile.text='Synthetic analysis log';(1..4).each{job.check();job.progress.call(it*20,'Making the calls');Thread.sleep(new File(root,'slow').isFile()?500:150)}
+    if(!new File(root,'rerun').isFile())return fixture
+    // A later analysis of the same recording, in a folder of its own, in which Cell002 responded: the review marks of the first
+    // are carried over where the automatic call is as it was, and dropped where it changed.
+    File again=new File(root,'browser-results-2');again.deleteDir();again.mkdirs();fixture.listFiles().findAll{it.isFile()}.each{new File(again,it.name).bytes=it.bytes}
+    def rows=Csv.read(new File(again,'responder_calls.csv'));List h=rows[0]
+    rows.drop(1).findAll{it[h.indexOf('Cell')]=='Cell002'&&it[h.indexOf('Role')]=='Stimulus'}.each{it[h.indexOf('Status')]='Responded';it[h.indexOf('Reason')]='Sustained threshold crossing'}
+    Csv.write(new File(again,'responder_calls.csv'),rows);again}
 def server=loader.loadClass('CalciumWebServer').newInstance(session:session);server.start()
 new File(root,'url.txt').text=server.url();println 'Step 4 page: '+server.url()
 long end=System.currentTimeMillis()+600000L
