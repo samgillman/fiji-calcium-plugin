@@ -2807,8 +2807,7 @@ class CalciumAnalysisPlot extends javax.swing.JPanel {
         boolean many=showAll&&all.length>0
         // the key above the plot: it takes as many lines as it needs, and the plot starts below it
         def entries=[[CalciumTheme.BLUE,2.4f,'mean ± SEM']]
-        if(cell&&selected.length>0)entries<<[CalciumTheme.INK,1.7f,cell]
-        if(cell&&selected.length==0)entries<<[null,0f,cell+': no trace (see Metrics + quality)']
+        if(cell&&selected.length>0)entries<<[CalciumTheme.INK,1.7f,cell]   // a cell without a trace has no entry: why is said under the plot
         if(many) {
             int yes=allCalls.count{it=='Responded'} as int,no=allCalls.count{it=='Did not respond'} as int
             if(yes>0)entries<<[CalciumCalls.RESPONDED,1.4f,'responded ('+yes+')']
@@ -2816,7 +2815,7 @@ class CalciumAnalysisPlot extends javax.swing.JPanel {
             if(all.length-yes-no>0)entries<<[CalciumCalls.OTHER,1.4f,(yes+no>0?'no call':allLabel)+' ('+(all.length-yes-no)+')']
         }
         int line=0,run=0;def places=[]
-        entries.each{entry->int need=(entry[0]!=null?21:0)+fm.stringWidth(entry[2] as String)+14;if(run>0&&run+need>w){line++;run=0};places<<[run,line];run+=need}
+        entries.each{entry->int need=21+fm.stringWidth(entry[2] as String)+14;if(run>0&&run+need>w){line++;run=0};places<<[run,line];run+=need}
         t=30+16*(line+1);h=Math.max(1,getHeight()-t-46)
         def values=[]; mean.eachWithIndex {v,i->if(Double.isFinite(v)) {values<<v;if(i<sem.length&&Double.isFinite(sem[i])) {values<<v-sem[i];values<<v+sem[i]}}}
         selected.each {if(Double.isFinite(it)) values<<it}; values<<0d
@@ -2873,8 +2872,7 @@ class CalciumAnalysisPlot extends javax.swing.JPanel {
         g.setClip(clip);g.setStroke(new java.awt.BasicStroke(1f))
         // the key, then the axis names
         entries.eachWithIndex{entry,int i->int kx=l+(places[i][0] as int),ky=20+16*(places[i][1] as int);String text=entry[2] as String
-            if(entry[0]!=null){g.setColor(entry[0] as Color);g.setStroke(new java.awt.BasicStroke(entry[1] as float));g.drawLine(kx,ky,kx+16,ky);g.setStroke(new java.awt.BasicStroke(1f));g.setColor(CalciumTheme.INK);g.drawString(text,kx+21,ky+4)}
-            else {g.setColor(CalciumTheme.WARN);g.drawString(CalciumTheme.fit(text,fm,l+w-kx),kx,ky+4)}}
+            g.setColor(entry[0] as Color);g.setStroke(new java.awt.BasicStroke(entry[1] as float));g.drawLine(kx,ky,kx+16,ky);g.setStroke(new java.awt.BasicStroke(1f));g.setColor(CalciumTheme.INK);g.drawString(text,kx+21,ky+4)}
         g.setColor(CalciumTheme.MUTED);String xl='Time (s)';g.drawString(xl,l+(int)((w-fm.stringWidth(xl))/2),getHeight()-8)
         def turned=(java.awt.Graphics2D)g.create();try{turned.rotate(-Math.PI/2);String yl='Global ΔF/F₀';turned.drawString(yl,-(t+(int)((h+fm.stringWidth(yl))/2)),14)}finally{turned.dispose()}
     }
@@ -3355,8 +3353,9 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
     def reasonBox=new javax.swing.JComboBox<String>(CalciumReview.REASONS as String[])
     def noteField=new CalciumHintField('Optional',CalciumReview.NOTE_MAX,16)
     /** A mark refused, in the words of CalciumReview, shown under the form until the cell changes; or why the review file is not
-     *  applied. Its line is kept while results are shown, so a refusal does not move the picture and the plot. */
-    def markProblem=new CalciumText('&nbsp;',CalciumTheme.WARN).with{lines=1;it}
+     *  applied. Two lines are kept for it while results are shown, so a refusal that names a file of a recording does not
+     *  move the picture and the plot. */
+    def markProblem=new CalciumText('&nbsp;',CalciumTheme.WARN).with{lines=2;it}
     /** The cell whose mark form is open, or null; the cell the refusal under the form is about, and the words said. */
     String formCell, problemCell, problemSaid
     /** The reason already chosen when the form opens on a flagged responder, by the rule of its flag. */
@@ -3797,7 +3796,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         Map run=checkedRun;checks=CalciumCallChecks.answer(run?.folder==dir.name?run.found as Map:CalciumCallChecks.saved(dir,measurement))
         results=dir;table(metrics,new File(dir,'metrics.csv'));table(qc,new File(dir,'cell_quality.csv'));table(registry,new File(dir,'roi_registry.csv'));responseRows=table(calls,new File(dir,'responder_calls.csv'));table(counts,new File(dir,'responder_counts.csv'));table(windowMetrics,new File(dir,'window_metrics.csv'));table(replicates,new File(dir,'replicate_counts.csv'));table(sensitivity,new File(dir,'sensitivity_counts.csv'));table(diagnostics,new File(dir,'negative_control_counts.csv'))
         callsSaved=calls.model;countsSaved=counts.model   // as saved: the columns of the review marks are added to copies (reviewTables)
-        cellStatus.lines=2
+        cellStatus.lines=3   // the call line with a mark and the longest note takes three lines at the window's usual width
         def normalized=CalciumCsv.read(new File(dir,'normalized_traces.csv')),avg=CalciumCsv.read(new File(dir,'mean_trace.csv'))
         plot.time=normalized.drop(1).collect{CalciumCsv.number(it[0])} as double[]
         traces=[:];normalized[0].drop(1).eachWithIndex{name,i->traces[name]=normalized.drop(1).collect{CalciumCsv.number(it[i+1])} as double[]}

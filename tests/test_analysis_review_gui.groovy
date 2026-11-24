@@ -3,8 +3,9 @@
 // call, the form in its place with the reason already chosen from a flag, Enter, Esc and the refusals in the form, and the
 // focus back on the button after it; a mark saved and removed, with the tile, the Show list, the picture, the heatmap, the
 // plot, the call line, the calls and counts tabs, the finish message and the record of saved plots following it, and the
-// time cursor staying where it is; the head over the picture and the plot one height for every cell; nothing written on the
-// saved trace plot but its axes and key; no mark controls on excluded or unscorable cells, on a control window, while an
+// time cursor staying where it is; the head over the picture and the plot one height for every cell, on a control window, with
+// a refusal of two lines and with the longest note; nothing written on the saved trace plot but its axes and key, for a cell
+// without a trace too; no mark controls on excluded or unscorable cells, on a control window, while an
 // analysis runs or while the review file is for another analysis; a mark carried over to the next analysis run here.
 // The window is built and never shown (with -Dapple.awt.UIElement=true no Dock icon appears on a Mac); a window that opens all
 // the same fails the test. -Dcalcium.test.pictures=<folder> saves pictures of the window there, and a saved trace plot.
@@ -130,6 +131,8 @@ try {
     File dirB=copy(B)
     def table=Csv.read(new File(dirB,'responder_calls.csv')),header=table[0]
     Csv.write(new File(dirB,'responder_calls.csv'),table+table.drop(1).collect{List line->def row=new ArrayList(line);['Role':'Control','Stimulus':'Ionomycin','Threshold_increase':'0.4','Floor_threshold':'0.4','Baseline_mean':'0.5'].each{k,v->row[header.indexOf(k)]=v};row})
+    def countsTable=Csv.read(new File(dirB,'responder_counts.csv'))   // and a row of counts for the control window
+    Csv.write(new File(dirB,'responder_counts.csv'),countsTable+countsTable.drop(1).collect{List line->def row=new ArrayList(line);['Role':'Control','Stimulus':'Ionomycin'].each{k,v->row[countsTable[0].indexOf(k)]=v};row})
     File checksB=new File(work,'Review_call_checks_'+B+'.csv'),reviewB=new File(work,'Review_reviewed_calls_'+B+'.csv'),percentB=new File(work,'Review_percent_responding_'+B+'.csv')
     def row={String cell,String call,String flag,String rule,Object first,Object last,String detail,String check,String why->[cell,call,flag,rule,first,last,detail,8,400,'yes','yes',check,why,'','']}
     def none={String cell,String call->row(cell,call,'','','','','','not checked','no call')}
@@ -196,11 +199,20 @@ try {
         // no call to review: no button, no flags
         ['Cell003','Cell004','Cell006'].each{ui.cells.selectedItem=it;assert !ui.markButton.visible && !ui.removeMark.visible && flags().isEmpty() && said()=='' : it+' has no call to review'}
         // the head over the picture and the plot has one height for every cell: flagged or not, with a button or none, a
-        // call line of one line or two; so the picture and the plot keep their size, and so does a saved trace.png
+        // call line of one line or more; so the picture and the plot keep their size, and so does a saved trace.png
         Map sizes=['Cell001','Cell002','Cell003','Cell005','Cell006'].collectEntries{ui.cells.selectedItem=it;[it,heights()]}
         assert sizes.values().toList().unique().size()==1 : 'one height for every cell: '+sizes
         ui.cells.selectedItem='Cell003';paint('fiji_cells_in_a_row_1')
         ui.cells.selectedItem='Cell005';paint('fiji_cells_in_a_row_2')
+        // a cell without a trace: nothing is written on the plot for it; why is said under the plot
+        ui.cells.selectedItem='Cell003';layOut()
+        assert drawnOnPlot().every{allowedOnPlot(it)} : 'drawn on the plot for an excluded cell: '+drawnOnPlot().findAll{!allowedOnPlot(it)}
+        assert ui.plot.noteLines[0].text=='Cell003 · unavailable: inspect Cell quality for the exclusion reason' : ui.plot.noteLines[0].text
+        // a refusal of two lines, as one naming the percent table of a recording with a usual name, takes the room kept for it
+        ui.cells.selectedItem='Cell001'
+        ui.say('Close Review_percent_responding_2026-11-18_50B11_ATP_100uM_dish2_SimpleCa-20261118-142233-1a2b3c4d.csv if it is open in another program, then try again.','Cell001')
+        assert heights()==sizes.Cell001 : 'a refusal of two lines: '+heights()+' '+sizes.Cell001
+        ui.say(null,null);ui.cells.selectedItem='Cell005'
         // the new controls have the shape and size of the ones beside them
         layOut()
         [ui.markButton,ui.removeMark,ui.saveMark,ui.cancelMark].each{assert it.preferredSize.height==ui.previousCell.preferredSize.height && it.UI.class.name=='CalciumButtonUI' : 'a mark button is a button of this window: '+it.text}
@@ -262,6 +274,7 @@ try {
         assert ui.responding.toolTipText==other && ui.responding.value.text=='66.7 %' : ui.responding.toolTipText
         paint('fiji_review_other_analysis')
         ui.stimuli.selectedItem='Ionomycin';ui.cells.selectedItem='Cell001';assert said()=='' && !ui.markButton.visible : 'the control window is never reviewed'
+        assert heights()==kept[0] : 'the head keeps its height on the control window, without the sentence: '+heights()+' '+kept[0]
         assert reviewB.delete();ui.loadResults(dirB);ui.showGroup(0);ui.cells.selectedItem='Cell001'
         assert ui.markButton.visible && said()=='' : 'with the file moved away the cell can be marked again'
 
@@ -304,6 +317,7 @@ try {
         assert rowOf(ui.calls,[Cell:'Cell001',Role:'Control'])[-2..-1]==['',''] && rowOf(ui.calls,[Cell:'Cell005',Role:'Stimulus'])[-2..-1]==['',''] : 'only the marked cell\'s row of the stimulus'
         assert rowOf(ui.calls,[Cell:'Cell001',Role:'Stimulus'])[columns(ui.calls).indexOf('Status')]=='Responded' : 'the automatic call stays in its column'
         assert columns(ui.counts)==Csv.read(new File(dirB,'responder_counts.csv'))[0]+['After review','Calls changed'] && rowOf(ui.counts,[Role:'Stimulus'])[-2..-1]==['33.3% (1 of 3)','1'] : rowOf(ui.counts,[Role:'Stimulus'])
+        assert rowOf(ui.counts,[Role:'Control'])[-2..-1]==['',''] : 'After review is on the stimulus row only: '+rowOf(ui.counts,[Role:'Control'])
         assert tablesBefore.every{name,bytes->new File(dirB,name).bytes==bytes} : 'the saved tables are not written'
         paint('fiji_traces_marked')
         [['Cell response calls','fiji_calls_tab',ui.calls],['Responder counts','fiji_counts_tab',ui.counts]].each{String tab,String name,JTable shown->
@@ -355,6 +369,14 @@ try {
         ui.exportPlots();record=new groovy.json.JsonSlurper().parse(new File(dirB,'plot_provenance.json'))
         assert !record.containsKey('calls') && !record.containsKey('review_file') : 'without marks the record is as it always was'
 
+        // ---- a note as long as the box takes: the call line of the mark takes the room kept for it
+        String longNote='bright debris drifts in from the left edge at frame 12, crosses the cell body and leaves the field on the right at 15.5s'
+        assert longNote.length()==Review.NOTE_MAX : longNote.length()
+        ui.markButton.doClick();ui.reasonBox.selectedItem='Other';ui.noteField.text=longNote;ui.saveMark.doClick()
+        assert said()=='' && Review.read(dirB,ui.measurement).marks.Cell001?.note==longNote : said()
+        assert heights().head==sizes.Cell001.head : 'a call line with the longest note: '+heights()+' '+sizes.Cell001+' '+strip(ui.cellStatus.text)
+        ui.removeMark.doClick();assert !reviewB.exists() : 'the long mark is removed'
+
         // ---- Enter saves, from the Note box and from the Reason list; a mark without a note
         ui.markButton.doClick();ui.noteField.text='drifts in from the left'
         assert press(ui.noteField,KeyEvent.VK_ENTER) && ui.formCell==null && Review.read(dirB,ui.measurement).marks.Cell001?.reviewed=='Did not respond' : 'Enter in the Note box saves'
@@ -394,6 +416,7 @@ try {
         try{
             ui.cells.selectedItem='Cell002';ui.markButton.doClick();ui.reasonBox.selectedItem='Bad outline';ui.saveMark.doClick()
             assert Review.read(dirA,ui.measurement).marks.Cell002?.reviewed=='Responded' : said()
+            assert rowOf(ui.calls,[Cell:'Cell002',Role:'Stimulus'])[-2..-1]==['Responded','Bad outline'] : 'a mark without a note: '+rowOf(ui.calls,[Cell:'Cell002',Role:'Stimulus'])
             assert ui.status.text=='Complete. Protocol, inputs and tables saved in '+A+'. All cells: 2 of 3 responded (66.7 %), after review 2 of 3 (66.7 %). '+carried+' '+unchecked : ui.status.text
             ui.removeMark.doClick()
         }finally{tracesA.setReadable(true)}
