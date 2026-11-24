@@ -129,6 +129,8 @@ def main():
             subprocess.run([java, "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", test], cwd=ROOT, env=env, check=True, timeout=60)
         # One recording, its own outlines: several starts of the plugin, each window built and never shown (no Dock icon on a Mac).
         subprocess.run([java, "-Dapple.awt.UIElement=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", "tests/test_recording_guard.groovy"], cwd=ROOT, env=env, check=True, timeout=300)
+        # The Step 4 window's flags and review marks: built, laid out and painted, never shown.
+        subprocess.run([java, "-Dapple.awt.UIElement=true", "-Dfile.encoding=UTF-8", "-cp", os.pathsep.join(str(jar) for jar in jars), "groovy.ui.GroovyMain", "tests/test_analysis_review_gui.groovy"], cwd=ROOT, env=env, check=True, timeout=120)
 
 
 if __name__ == "__main__":
