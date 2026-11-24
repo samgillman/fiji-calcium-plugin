@@ -93,6 +93,9 @@ select { border: 1px solid #C5CED8; border-radius: var(--radius); height: var(--
 .panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
 .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: none; }
 .toolbar label { display: flex; align-items: center; gap: 6px; color: var(--gray-600); } .toolbar label.check { color: inherit; align-items: center; } .toolbar label.check input { margin: 0; }
+/* A toolbar whose choices wrap among themselves, so that its Export stays at the right end of the first row */
+.toolbar.with-choices { align-items: flex-start; flex-wrap: nowrap; } .toolbar.with-choices > .save-note { line-height: var(--control-h); }
+.toolbar > .choices { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 1 1 0; min-width: 0; }
 .toolbar.dark { background: #10161C; color: #C5CED8; padding: 8px 10px; }
 .toolbar.dark button, .toolbar.dark select { background: #1c252e; color: #E6EBF0; border-color: #33404d; }
 .toolbar.dark button:hover:not(:disabled) { background: #26323d; border-color: #5BC0FF; } .toolbar.dark button:disabled { color: #5d6b78; }
@@ -104,21 +107,21 @@ select { border: 1px solid #C5CED8; border-radius: var(--radius); height: var(--
 .stage { position: relative; flex: 1 1 auto; min-height: 0; background: #10161C; } .stage.light { background: #fff; }
 .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 #picture { cursor: crosshair; } #plot { cursor: crosshair; }
+/* a hand where a drag moves the picture (zoomed in), closed while it does; a cross again where a drag draws a rectangle */
+.stage.zoomed #picture { cursor: grab; } .stage.zoomed.moving #picture { cursor: grabbing; } .stage.region #picture { cursor: crosshair; }
 .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--gray-600); pointer-events: none; }
 .caption { display: flex; align-items: center; gap: 12px; padding: 6px 10px; font-size: 12px; color: var(--gray-600); border-top: 1px solid var(--gray-100); flex: none; white-space: nowrap; overflow: hidden; }
 .caption > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; } .caption > .chip, .caption > button { flex: none; }
 .caption.dark { background: #10161C; color: #AEB8C2; border-top-color: #1c252e; }
 .chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; } .chip i { width: 14px; height: 3px; border-radius: var(--radius-bar); display: inline-block; }
 .chip i.dash { height: 0; border-top: 2px dashed #AEB8C2; background: none; }
-.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 8px 12px 0; font-size: 12.5px; min-height: 30px; flex: none; }
-.legend .chip i { height: 3px; width: 18px; }
 
 .timebar { display: flex; align-items: center; gap: 12px; flex: none; background: #fff; border: 1px solid var(--gray-100); border-radius: var(--radius); padding: 6px 12px; box-shadow: var(--shadow-1); }
 .timebar input[type=range] { flex: 1 1 auto; accent-color: var(--blue); } #time-label { min-width: 170px; text-align: right; color: var(--gray-600); font-variant-numeric: tabular-nums; }
 
 .scroller { position: relative; flex: 1 1 auto; min-height: 0; overflow: auto; background: #fff; border: 1px solid var(--gray-100); border-radius: var(--radius); box-shadow: var(--shadow-1); }
 #heatmap { display: block; cursor: pointer; }
-#heatmap-box.fit { overflow: hidden; }
+#heatmap-box { overflow: hidden; }
 
 table { border-collapse: collapse; font-size: 12.5px; white-space: nowrap; }
 th, td { padding: 5px 10px; border-bottom: 1px solid var(--gray-100); text-align: left; }
@@ -128,8 +131,13 @@ tbody tr { cursor: pointer; } tbody tr:nth-child(even) { background: #FBFCFD; } 
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
 th.cell-column, td.cell-column { position: sticky; left: 0; background: #fff; box-shadow: 1px 0 var(--gray-100); z-index: 2; }
 th.cell-column { background: var(--gray-50); z-index: 3; }
-tr.on td.cell-column { background: #d5ebf5; }
+/* the column that stays put takes the stripe, the pointer's row and the chosen row like the rest of its row */
+tbody tr:nth-child(even) td.cell-column { background: #FBFCFD; } tbody tr:hover td.cell-column { background: var(--blue-light); } tbody tr.on td.cell-column { background: #d5ebf5; }
+/* the Metrics + quality table list names its tables in full */
+#metrics-table { max-width: none; }
 td.empty-table { padding: 24px; color: var(--gray-600); }
+/* a turned table (the responder counts: a row for each column) does not sort */
+th.fixed { cursor: default; } th.fixed:hover { color: inherit; }
 
 .tip { position: fixed; z-index: 10; pointer-events: none; background: var(--gray-900); color: #fff; font-size: 12px; padding: 4px 8px; border-radius: var(--radius); box-shadow: var(--shadow-2); white-space: nowrap; }
 body.no-side aside { display: none; }
@@ -160,7 +168,6 @@ body.has-results .split { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr)
 .speed-label { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--gray-600); }
 .speed-label select { max-width: 68px; }
 #playback-note { min-height: 1.3em; }
-.toolbar.dark label.view-label { color: #c5ced8; }
 .run-box { flex: none; position: relative; z-index: 2; padding: 12px; border: 1px solid #bfd7e3; border-radius: var(--radius); background: #f1f8fc; box-shadow: 0 -3px 10px rgba(31,41,51,.06); display: flex; flex-direction: column; gap: 8px; }
 .run-box h2 { margin: 0; }
 .status { font-size: 13px; min-height: 1.45em; overflow-wrap: anywhere; }
@@ -257,6 +264,7 @@ body:not(.has-results) #resize-split { display: none; }
 #resize-split { flex: none; }
 .plot-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 8px 12px 0; flex: none; }
 .plot-head label { display: flex; align-items: center; gap: 6px; color: var(--gray-600); } .plot-head label.check { color: inherit; }
+.plot-head label.check:has(input:disabled) { color: #9AA5B1; cursor: default; }   /* a box for what the plot on screen does not show */
 .plot-head select { max-width: 260px; }
 .save-note { color: var(--good); font-size: 12px; overflow-wrap: anywhere; } .save-note.bad { color: var(--bad); }
 .save-note button { background: none; border: 0; padding: 0 0 0 6px; color: var(--blue-dark, #1F5F7A); text-decoration: underline; cursor: pointer; font: inherit; }
@@ -269,7 +277,6 @@ body:not(.has-results) #resize-split { display: none; }
 /* More room for the movie and the plot, less for the page's own furniture. */
 .split { min-height: max(420px, 62vh); }   /* the playback bar is inside the picture's card now, so the cards are that much taller */
 .workspace-heading h1 { font-size: 17px; margin: 0; }
-.legend .chip i.band { height: 10px; width: 14px; border: 1px solid #C5CED8; border-radius: var(--radius-bar); }
 /* The settings column: the Run box stays short so the settings above it are not seen through a keyhole. */
 .run-box { gap: 6px; padding: 10px 12px; }
 .run-box .status { max-height: 6.2em; overflow-y: auto; }
@@ -292,8 +299,6 @@ body.has-results .workspace-heading { display: none; }
 .save-options[hidden] { display: none; }
 .save-options label { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--gray-600); }
 .save-options select { min-width: 150px; }
-.legend .chip i.scale { width: 96px; height: 10px; border: 1px solid #C5CED8; border-radius: var(--radius-bar); }
-#heatmap-legend { padding: 4px 2px 6px; }
 .caption.dark .save-note { color: #7fe0b5; } .caption.dark .save-note button { color: #9fd3ff; }
 
 /* stimulus timing: linked fields, messages beside the field, the frames each window uses, and the windows under the slider */
@@ -362,6 +367,9 @@ aside { gap: 8px; }
 .caption.dark button:hover:not(:disabled) { background: #26323d; border-color: #5BC0FF; }
 .caption.dark button:disabled { color: #5d6b78; }
 .save-options .inline { display: inline-flex; align-items: center; gap: 6px; color: var(--gray-900); } .save-options input[type=number] { width: 72px; }
+/* Save frames: its two ways as one pair of buttons; beside a box that holds no frame of the recording, the frames there are */
+#frames-options { width: 344px; } #frames-options .seg button { flex: 1; } #frames-options .seg { display: flex; } #frames-options .inline input { width: 72px; }
+.range-note { font-style: normal; font-size: 12px; color: var(--bad); white-space: nowrap; }
 /* what the colours of the view mean: filled swatches beside the outline swatches */
 .view-key { display: inline-flex; flex-wrap: wrap; gap: 4px 12px; } .view-key:empty { display: none; }
 .caption .chip i.fill { width: 11px; height: 11px; border-radius: var(--radius-bar); border: 1px solid rgba(255,255,255,.35); }
@@ -413,6 +421,10 @@ details.export.down .export-menu { bottom: auto; top: calc(100% + 6px); }
 details.export .export-menu button { background: transparent; border: 0; border-radius: calc(var(--radius) - 2px); padding: 6px 10px; text-align: left; font-size: 13px; color: var(--gray-900); white-space: nowrap; width: 100%; min-height: 0; box-shadow: none; }
 details.export .export-menu button:hover:not(:disabled) { background: #EEF4F8; border: 0; }
 details.export .export-menu button:disabled { color: #9AA5B1; background: transparent; }
+/* a choice that belongs to the entries under it ("Area", for the picture). While the picture is zoomed in the choice decides what is saved, and its row stands out, here and in Save frames */
+details.export .export-menu .menu-choice { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 6px 5px 10px; margin-bottom: 4px; border-radius: calc(var(--radius) - 2px); font-size: 13px; color: var(--gray-600); white-space: nowrap; }
+details.export .export-menu .menu-choice.matters, .save-options label.matters { background: var(--blue-light); color: var(--blue-dark); font-weight: 600; }
+.save-options label.matters { margin: -3px -6px; padding: 3px 6px; border-radius: calc(var(--radius) - 2px); } .matters select { font-weight: 400; }
 details.export .export-menu .save-options-toggle { border-top: 1px solid var(--gray-100); border-radius: 0 0 calc(var(--radius) - 2px) calc(var(--radius) - 2px); margin-top: 3px; padding-top: 8px; }
 /* A warning sits under the field it is about; the Run box only says how many there are. */
 .field-warning { color: var(--warn); font-size: 12px; margin: -2px 0 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; text-align: right; }
@@ -458,15 +470,39 @@ p + .field-warning, p + .field-error { justify-content: flex-start; text-align: 
 .figure-stage { min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; background: var(--gray-50); }
 .figure-stage canvas { flex: none; box-shadow: 0 1px 5px rgba(31,41,51,.28); background: repeating-conic-gradient(#E4E9EE 0% 25%, #fff 0% 50%) 0 0 / 16px 16px; }   /* squares show through a transparent background */
 .figure-controls { min-height: 0; overflow-y: auto; padding: 2px 14px 14px; border-left: 1px solid var(--gray-100); }
-.figure-controls h3 { margin: 12px 0 2px; font-size: 12px; font-weight: 600; color: var(--gray-600); }
-.figure-controls .row { display: grid; grid-template-columns: minmax(0, 1fr) 150px; align-items: center; gap: 8px; margin: 4px 0; min-height: var(--control-h); font-size: 13px; flex-wrap: nowrap; }
+.figure-controls h3 { margin: 12px 0 2px; font-size: 12px; font-weight: 600; color: var(--gray-600); } .figure-controls h3 span { margin-left: 6px; font-weight: 400; }   /* a few words on what the section is for */
+.figure-controls > .fine { margin: 10px 0 0; }   /* the line that says settings from an earlier session are in use */
+.figure-controls .row { display: grid; grid-template-columns: minmax(0, 1fr) 150px 16px; align-items: center; gap: 8px; margin: 4px 0; min-height: var(--control-h); font-size: 13px; flex-wrap: nowrap; }   /* name, box, unit: every box one width, every unit outside their shared right edge */
 .figure-controls .row[hidden] { display: none; }
+.figure-controls .row .range-note { grid-column: 1 / -1; justify-self: end; margin-top: -3px; }   /* under a number box: why the number is not used, or what is wrong with it */
 .figure-controls .row > span:first-child { white-space: nowrap; color: var(--gray-900); }
 .figure-controls .row > select, .figure-controls .row > input[type=text], .figure-controls .unit input { width: 100%; max-width: none; min-width: 0; }
-.figure-controls .unit { display: grid; grid-template-columns: minmax(0, 1fr) 16px; align-items: center; gap: 6px; } .figure-controls .unit i { font-style: normal; color: var(--gray-600); }
+.figure-controls .unit { display: contents; } .figure-controls .unit i { font-style: normal; color: var(--gray-600); }
 .figure-controls input[type=text] { font: inherit; font-size: 13px; height: var(--control-h); padding: 0 7px; border: 1px solid #C5CED8; border-radius: var(--radius); background: #fff; color: inherit; }
+.figure-controls input[type=text][aria-invalid=true] { border-color: var(--bad); background: #fff1ef; }   /* a number the figure does not use (the page's rule for a marked box, after the editor's own for its boxes) */
 .figure-controls input[type=color] { width: 100%; height: var(--control-h); padding: 3px; font-size: 13px; border: 1px solid #C5CED8; border-radius: var(--radius); background: #fff; cursor: pointer; }
 .figure-controls input[type=color]::-webkit-color-swatch-wrapper { padding: 0; } .figure-controls input[type=color]::-webkit-color-swatch { border: 0; border-radius: var(--radius-bar); } .figure-controls input[type=color]::-moz-color-swatch { border: 0; border-radius: var(--radius-bar); }
 .figure-controls input[type=checkbox] { justify-self: start; width: auto; margin: 0; accent-color: var(--blue); }
 .fine.bad { color: var(--bad); }
 @media (max-width: 860px) { .figure-editor { padding: 8px; } .figure-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(180px, 45%) minmax(0, 1fr); } .figure-controls { border-left: 0; border-top: 1px solid var(--gray-100); } }
+
+/* ---- the picture's view: small zoom and move controls on its top left corner, a hint beside them the first times, and a
+   small map on its bottom right corner while it is zoomed in. The whole picture is fitted beside the controls, not under
+   them: they lie along the top, or down the left side (.down) where that leaves the picture larger (viewRoom). The buttons
+   are the page's own small ones (height, corner), dark like the bar above the picture; the zoom level between − and + is
+   a figure, not a button. */
+/* The picture's controls: one row in the strip along the top of the panel (TOOLS in step4.js), in every view and at every zoom;
+   the picture is drawn under the strip, never beneath the controls. − and + are square; the others say what they do. */
+.view-corner { position: absolute; z-index: 2; top: 4px; left: 4px; right: 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; pointer-events: none; }
+.view-tools, .zoom-steps { display: flex; align-items: center; gap: 4px; } .view-tools { pointer-events: auto; }
+.view-tools button { display: inline-flex; align-items: center; justify-content: center; width: var(--control-h); padding: 0; font-size: 16px; background: #1c252e; color: #E6EBF0; border-color: #4A5866; }
+.view-tools button.word { width: auto; padding: 0 10px; font-size: 13px; white-space: nowrap; }
+.view-tools button:hover:not(:disabled) { background: #26323d; border-color: #5BC0FF; }
+.view-tools button:disabled { color: #5d6b78; border-color: #33404d; }
+.view-tools button.on, .view-tools button.on:hover { background: var(--blue); border-color: #5BC0FF; color: #fff; }
+.zoom-level { width: var(--control-h); height: var(--control-h); display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius); background: #10161C; color: #E6EBF0; font-size: 11px; font-variant-numeric: tabular-nums; }
+.view-hint { margin: 0; padding: 5px 8px; border-radius: var(--radius); background: rgba(16,22,28,.9); color: #E6EBF0; font-size: 12px; line-height: 18px; }
+.stage .view-map { z-index: 2; inset: auto 8px 8px auto; width: auto; height: auto; border-radius: var(--radius-bar); box-shadow: 0 0 0 1px rgba(255,255,255,.65), 0 2px 10px rgba(0,0,0,.6); cursor: pointer; touch-action: none; opacity: .6; transition: opacity 120ms ease; }
+.stage .view-map:hover, .stage .view-map:active { opacity: 1; } .stage .view-map.left { inset: auto auto 8px 8px; }   /* faint until used; on the left while the selected cell lies under its corner */
+.stage.zoomed .movie-message { right: 152px; }   /* clear of the map */
+.toolbar.dark label { color: #c5ced8; }   /* a label on the dark bar is light, as "View" is */

@@ -93,7 +93,8 @@ try {
         }
         ui.tabs.selectedIndex=1
         // Headline tiles and outline styles repeat the saved Responder counts and calls; they add no new calculation.
-        assert ui.responding.value.text=='67 %' && ui.responding.caption.text.contains('2 of 3 evaluable')
+        // one decimal, as on the page and in the finishing sentence (2 of 3 is 66.7 %, not 67 %)
+        assert ui.responding.value.text=='66.7 %' && ui.responding.caption.text.contains('2 of 3 evaluable')
         assert ui.responding.caption.text.contains('Capsaicin')
         assert ui.registered.value.text=='6' && ui.excluded.value.text=='2' && ui.unscorable.value.text=='1'
         assert ui.cellPicture.calls.Cell001=='Responded' && ui.cellPicture.calls.Cell002=='Did not respond'
@@ -149,6 +150,11 @@ try {
         assert original.getRoi()==null
         assert ui.heatmap.names==['Cell001','Cell005','Cell002','Cell003','Cell004','Cell006'] && ui.heatmap.calls[0]=='Responded' && ui.heatmap.calls[2]=='Did not respond'
         assert ui.heatmap.limit()==1d && ui.heatmap.preferredSize.height>=6*ui.heatmap.ROW
+        // A cell below zero (ΔF/F₀ under −1) goes last within its group and sets no colour limit, as on the Step 4 page.
+        double[] steadyTrace=ui.traces.Cell001;ui.traces.Cell001=steadyTrace.collect{-4d} as double[];ui.orderHeatmap()
+        assert ui.heatmap.names[0..2]==['Cell005','Cell001','Cell002'] && ui.heatmap.limit()==1d : 'A cell below zero must not lead its group or set the colour limit'
+        ui.traces.Cell001=steadyTrace;ui.orderHeatmap()
+        assert ui.heatmap.names[0..1]==['Cell001','Cell005']
         ui.heatmapOrder.selectedIndex=1
         assert ui.heatmap.names==(1..6).collect{String.format('Cell%03d',it)}
         ui.tabs.selectedIndex=2;ui.heatmap.choose(4)

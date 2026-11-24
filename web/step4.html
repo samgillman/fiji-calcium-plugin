@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SimpleCa²⁺ · Analyze responses</title>
+<title>Ca²⁺ Imaging (Wang Lab) · Step 4</title>
 <link rel="stylesheet" href="app.css">
 <link rel="icon" href="data:,">
 </head>
 <body>
 <header class="top">
-  <div class="brand">SimpleCa²⁺ <span>in Fiji · Step 4</span></div>
+  <div class="brand">Ca²⁺ Imaging (Wang Lab) <span>Step 4</span></div>
   <div class="recording" id="recording" title=""></div>
   <div class="grow"></div>
   <button class="ghost" id="close-page" type="button">Close analysis</button>
@@ -47,7 +47,7 @@
       <label class="stack">Validation status<select id="protocol-validation"><option value="provisional">Provisional</option><option value="user_defined">User defined</option><option value="validated_by_user">Validated by user</option></select></label>
       <div class="actions"><label class="file-button">Import protocol JSON<input type="file" id="protocol-import" accept=".json,application/json"></label><button id="protocol-export" type="button">Export protocol</button></div>
       <label class="stack">Field timing overrides (JSON)<textarea id="field-overrides" rows="3" spellcheck="false" aria-describedby="overrides-help"></textarea></label>
-      <p class="fine help" id="overrides-help">Optional: an array of field timing overrides from a SimpleCa protocol.</p>
+      <p class="fine help" id="overrides-help">Optional: an array of field timing overrides from a protocol file.</p>
       <h3>Diagnostic files</h3>
       <label class="file-label">Sensitivity grid CSV<input id="sensitivity-file" type="file" accept=".csv,text/csv"></label>
       <div class="file-note"><span id="sensitivity-name">No file selected</span><button id="sensitivity-clear" class="ghost" type="button" hidden>Remove</button></div>
@@ -111,10 +111,21 @@
             <label class="view-label">View <select id="view" aria-label="Recording display"><option value="raw">Recording</option><option value="flat">Background removed</option><option value="green" title="The recording with the background removed, in green: the green of “Response in magenta” without the magenta">GFP</option><option value="magenta">Response in magenta</option><option value="change">Change from baseline</option><option value="picture">Colour overview</option><option value="background" title="The pixels taken as each cell's background: the darkest quarter of a ring 6 to 40 pixels outside its outline, without other cells or very bright objects">Background areas</option></select></label>
             <label class="check"><input type="checkbox" id="outlines" checked> All outlines</label>
             <select id="outline-width" aria-label="Outline thickness" title="Outline thickness, on screen and in saved pictures"><option value="0.6">thin</option><option value="1" selected>normal</option><option value="1.8">thick</option><option value="2.8">very thick</option></select>
+            <label title="By call: each outline in the colour of its response call. Plain: every outline white. On screen and in saved pictures.">Outlines <select id="outline-colours"><option value="call" selected>By call</option><option value="plain">Plain</option></select></label>
+            <label class="check" title="Writes each cell's number in its outline, on screen and in saved pictures"><input type="checkbox" id="number-cells"> Number cells</label>
             <button id="zoom-cell" type="button" disabled>Zoom to cell</button>
-            <button id="zoom-all" type="button">Whole picture</button>
           </div>
-          <div class="stage"><canvas id="picture"></canvas><div class="movie-message" id="movie-message" role="status">Loading the recording…</div></div>
+          <div class="stage" id="picture-stage"><canvas id="picture"></canvas>
+            <div class="view-corner" id="view-corner">
+              <div class="view-tools" id="view-tools" role="group" aria-label="Zoom and move the picture">
+                <span class="zoom-steps"><button id="zoom-out" type="button" aria-label="Zoom out" title="Zoom out (− key)" disabled>−</button><span class="zoom-level" id="zoom-level" title="How far the picture is zoomed in">1×</span><button id="zoom-in" type="button" aria-label="Zoom in" title="Zoom in (+ key)">+</button></span>
+                <button class="word" id="zoom-all" type="button" title="Show the whole picture (0 key, or a double-click on the picture)" disabled>Whole picture</button>
+                <button class="word" id="zoom-region" type="button" aria-pressed="false" title="Then drag a rectangle on the picture. Shift + drag does the same without this button.">Zoom to region</button>
+              </div>
+              <p class="view-hint" id="view-hint" role="note" hidden></p>
+            </div>
+            <canvas class="view-map" id="view-map" role="img" aria-label="The whole picture, with a frame around the part on screen" title="The whole picture. Click or drag to move the view." hidden></canvas>
+            <div class="movie-message" id="movie-message" role="status">Loading the recording…</div></div>
           <div class="timebar dark" id="transport" aria-label="Recording playback">
             <button class="primary" id="play" type="button" disabled>▶ Play</button>
             <button id="frame-back" type="button" aria-label="Previous frame" title="Previous frame" disabled>‹</button>
@@ -124,19 +135,19 @@
             <span id="time-label" aria-live="off">Frame 1</span>
           </div>
           <p class="fine help" id="playback-note">Loading the recording…</p>
-          <div class="caption dark"><span id="call-legend" hidden><span class="chip"><i style="background:#3ddbb5"></i>responded</span><span class="chip"><i style="background:#ffa24a"></i>did not respond</span><span class="chip"><i class="dash"></i>excluded or unscorable</span></span><span id="view-key" class="view-key"></span><span class="grow"></span><span id="picture-note"></span><span class="save-note" id="picture-saved" role="status"></span><details class="export" id="export-picture"><summary title="Save or download this picture, or its frames">Export</summary><div class="export-menu" role="menu"><button id="save-picture-folder" type="button" disabled role="menuitem" title="Saves the whole picture in this view, with the outlines shown and a key to the colours, into the plots folder">Save to plots folder</button><button id="save-picture" type="button" disabled role="menuitem" title="Downloads the same picture through the browser">Download a copy</button><button id="save-frames" type="button" disabled role="menuitem" title="Saves every Nth frame of the view on screen as its own picture, each labelled with its frame and time and with the outlines shown, into a folder inside plots">Save frames…</button><button class="save-options-toggle" type="button" role="menuitem" title="File format, size and resolution of saved pictures and frames">Options…</button></div></details></div>
+          <div class="caption dark"><span id="call-legend" hidden></span><span id="view-key" class="view-key"></span><span class="grow"></span><span id="picture-note"></span><span class="save-note" id="picture-saved" role="status"></span><details class="export" id="export-picture"><summary title="Save or download this picture, or its frames">Export</summary><div class="export-menu" role="menu"><label class="menu-choice" title="Whole picture: all of the field, however the picture is zoomed. Area on screen: the part of the recording that is in the picture panel.">Area <select id="save-area"><option value="whole" selected>Whole picture</option><option value="screen">Area on screen</option></select></label><button id="save-picture-folder" type="button" disabled role="menuitem" title="Saves the picture in this view (the whole picture or the area on screen, as Area says), with the outlines shown and a key to the colours, into the plots folder">Save to plots folder</button><button id="save-picture" type="button" disabled role="menuitem" title="Downloads the same picture through the browser">Download a copy</button><button id="save-frames" type="button" disabled role="menuitem" title="Saves frames of the view on screen, with the outlines shown: every Nth frame as its own picture, labelled with its frame and time, in a folder inside plots; or the baseline frame and the peak frame side by side in one picture">Save frames…</button><button class="save-options-toggle" type="button" role="menuitem" title="File format, size and resolution of saved pictures and frames">Options…</button></div></details></div>
         </div>
         <div class="resizer" id="resize-split" role="separator" aria-orientation="vertical" title="Drag to give the movie or the plot more room. Double-click to reset."></div>
         <div class="card flush" id="plot-card" hidden>
-          <div class="cell-card" id="cell-card"><div class="verdict" id="verdict"></div><div id="cell-quality" class="cell-quality" role="status" hidden></div></div>
+          <div class="cell-card" id="cell-card"><div class="verdict" id="verdict"></div><div id="cell-quality" class="cell-quality" role="status" hidden></div><div id="cell-note" class="cell-quality" role="status" hidden></div></div>
           <div class="plot-head">
             <div class="seg" role="group" aria-label="What the plot shows"><button type="button" class="on" data-plot="mean" aria-pressed="true" title="The average trace (± SEM) of the cells chosen under Show, and nothing else">Average</button><button type="button" data-plot="cell" aria-pressed="false" title="The selected cell's trace with its thresholds, over the average">One cell + average</button><button type="button" data-plot="calls" aria-pressed="false" title="The average of the cells that responded against the average of those that did not">Responders vs non-responders</button></div>
             <label class="check" id="every-label" hidden title="Draws every cell's own trace behind the average"><input type="checkbox" id="every"> All traces</label>
+            <label class="check" id="thresholds-label" hidden title="With one cell: also draws its other threshold (the minimum rise or the noise threshold) and its baseline mean. The required rise is always drawn."><input type="checkbox" id="thresholds"> Thresholds</label>
             <label>Signal <select id="signal" aria-label="Which signal the plot shows" title="ΔF/F₀ is what the response calls use. The gray values show the measurement itself, with or without the background taken off."><option value="dff">ΔF/F₀</option><option value="corrected">Gray levels, background removed</option><option value="raw">Raw gray levels</option><option value="rawdff">ΔF/F₀ of raw</option></select></label>
             <span class="y-axis" title="Limits of the vertical axis. Leave a box empty for the automatic limit."><span>Y axis</span><input id="y-min" inputmode="decimal" placeholder="auto" aria-label="Lower limit of the Y axis"><i>to</i><input id="y-max" inputmode="decimal" placeholder="auto" aria-label="Upper limit of the Y axis"><button class="ghost" id="y-auto" type="button" title="Back to the automatic limits">auto</button></span>
           </div>
-          <div class="legend" id="legend"></div>
-          <div class="stage light"><canvas id="plot"></canvas><div class="empty" id="plot-empty">Run the analysis to see every cell's trace.</div></div>
+          <div class="stage light"><canvas id="plot" role="img"></canvas><div class="empty" id="plot-empty">Run the analysis to see every cell's trace.</div></div>
           <div class="caption"><span class="help" title="Click a trace to select that cell. Drag to move through time. Hold Ctrl or ⌘ and scroll to zoom the time axis; double-click to reset it.">Drag to scrub · click a trace to select a cell · Ctrl or ⌘ + scroll to zoom</span><span class="grow"></span><span class="save-note" id="plot-saved" role="status"></span><details class="export" id="export-plot"><summary title="Save or download this plot">Export</summary><div class="export-menu" role="menu"><button id="save-plot-folder" type="button" disabled role="menuitem" title="Saves the picture, the numbers behind it (CSV) and how it was made into the plots folder beside your tables">Save to plots folder</button><button id="save-plot" type="button" disabled role="menuitem" title="Downloads the picture and how it was made through the browser">Download a copy</button><button id="edit-plot" type="button" disabled role="menuitem" title="Size, titles, axes, text, lines and colours of the saved plot, with a preview">Edit figure…</button></div></details></div>
         </div>
       </div>
@@ -145,40 +156,42 @@
     </section>
 
     <section class="panel" id="panel-heatmap" hidden>
-      <div class="toolbar">
-        <label>Sort <select id="order">
-          <option value="call">Response call, strongest on top</option>
+      <div class="toolbar with-choices">
+        <div class="choices">
+        <label>Sort <select id="order" title="By response call, strongest on top: the largest rise in the response window is on top of each group. Onset time puts the responders in the order they began to respond. Cells below zero come last: in their group when the rows are grouped by call.">
+          <option value="call">Response call</option>
+          <option value="onset">Onset time</option>
           <option value="tpeak">Time to peak</option>
           <option value="amp">Peak amplitude</option>
           <option value="orig">Original order</option></select></label>
-        <label>Colours <select id="palette" title="Blue–white–red keeps values below zero. The other palettes start at zero, so anything below zero takes the darkest colour.">
-          <option value="signed">Blue–white–red</option>
-          <option value="plasma" selected>plasma</option><option value="viridis">viridis</option><option value="magma">magma</option>
+        <label>Colours <select id="palette" title="Blue–white–red is white at zero, and each side has its own scale. The other palettes start at zero, so anything below zero takes the darkest colour.">
+          <option value="signed" selected>Blue–white–red</option>
+          <option value="plasma">plasma</option><option value="viridis">viridis</option><option value="magma">magma</option>
           <option value="inferno">inferno</option><option value="cividis">cividis</option></select></label>
-        <label>Range <select id="range" title="“99 % of values” stops one extreme cell from washing out all the others; values beyond the range take the end colour.">
-          <option value="robust">99 % of values</option><option value="full">Largest value</option></select></label>
-        <label class="check" title="One readable row per cell, with its name; the list scrolls"><input type="checkbox" id="tall"> Cell names</label>
-        <div class="grow"></div>
+        <label>Range <select id="range" title="Taken from the cells that are neither excluded nor below zero. Values beyond the range take the end colour, and the colour bar marks that end with ≤ or ≥.">
+          <option value="robust">1st to 99th percentile</option><option value="full">Smallest to largest</option></select></label>
+        <label class="check" title="The name of each row’s cell beside it; every few rows when the rows are thin"><input type="checkbox" id="row-names"> Cell names</label>
+        <label class="check" title="Leaves out the rows of excluded cells, which have no ΔF/F₀ trace"><input type="checkbox" id="hide-excluded"> Hide excluded cells</label>
+        </div>
         <span class="save-note" id="heatmap-saved" role="status"></span><details class="export down" id="export-heatmap"><summary title="Save or download the heatmap">Export</summary><div class="export-menu" role="menu"><button id="save-heatmap-folder" type="button" disabled role="menuitem" title="Saves the picture and how it was made into the plots folder beside your tables">Save to plots folder</button><button id="save-heatmap" type="button" disabled role="menuitem" title="Downloads the picture and how it was made through the browser">Download a copy</button><button id="edit-heatmap" type="button" disabled role="menuitem" title="Size, titles, axes, text and colours of the saved heatmap, with a preview">Edit figure…</button></div></details>
       </div>
-      <div class="legend" id="heatmap-legend"></div>
       <div class="scroller" id="heatmap-box"><canvas id="heatmap"></canvas><div class="empty" id="heatmap-empty">Run the analysis to see the heatmap.</div></div>
     </section>
 
-    <section class="panel" id="panel-metrics" hidden><div class="toolbar"><label>Table <select id="metrics-table"></select></label><div class="grow"></div><span class="save-note" id="metrics-saved" role="status"></span><details class="export down" id="export-metrics"><summary title="Save or download the table shown">Export</summary><div class="export-menu" role="menu"><button id="metrics-save" type="button" disabled role="menuitem" title="Saves the table shown as a CSV into the plots folder beside your tables">Save to plots folder</button><button id="metrics-download" type="button" disabled role="menuitem" title="Downloads the table shown as a CSV through the browser">Download CSV</button></div></details></div><p class="fine" id="metric-help"></p><div class="scroller"><table id="table-metrics"></table></div></section>
-    <section class="panel" id="panel-calls" hidden><div class="toolbar"><label class="check"><input id="all-call-columns" type="checkbox"> Show all saved columns</label><span class="fine help">Saved CSVs keep every column.</span></div><div class="scroller"><table id="table-calls"></table></div></section>
+    <section class="panel" id="panel-metrics" hidden><div class="toolbar"><label>Table <select id="metrics-table"></select></label><label class="check" id="all-metric-columns-label" hidden><input id="all-metric-columns" type="checkbox"> Show all saved columns</label><div class="grow"></div><span class="save-note" id="metrics-saved" role="status"></span><details class="export down" id="export-metrics"><summary title="Save or download the table shown as a CSV">Export</summary><div class="export-menu" role="menu"><button id="metrics-save" type="button" disabled role="menuitem" title="Saves the table shown as a CSV into the plots folder beside your tables">Save CSV to plots folder</button><button id="metrics-download" type="button" disabled role="menuitem" title="Downloads the table shown as a CSV through the browser">Download CSV</button></div></details></div><p class="fine" id="metric-help"></p><div class="scroller"><table id="table-metrics"></table></div></section>
+    <section class="panel" id="panel-calls" hidden><div class="toolbar"><label class="check"><input id="all-call-columns" type="checkbox"> Show all saved columns</label><span class="fine help">Saved CSVs keep every column.</span><div class="grow"></div><span class="save-note" id="calls-saved" role="status"></span><details class="export down" id="export-calls"><summary title="Save or download the cell response calls as a CSV">Export</summary><div class="export-menu" role="menu"><button id="calls-save" type="button" disabled role="menuitem" title="Saves the cell response calls, every saved column, as a CSV into the plots folder beside your tables">Save CSV to plots folder</button><button id="calls-download" type="button" disabled role="menuitem" title="Downloads the cell response calls, every saved column, as a CSV through the browser">Download CSV</button></div></details></div><div class="scroller"><table id="table-calls"></table></div></section>
     <section class="panel" id="panel-data" hidden>
       <div class="toolbar">
         <label>Signal <select id="data-signal" aria-label="Which values the table holds"><option value="dff">ΔF/F₀</option><option value="corrected">Gray levels, background removed</option><option value="raw">Raw gray levels</option><option value="rawdff">ΔF/F₀ of raw</option></select></label>
         <button id="data-back" type="button" title="Earlier frames" aria-label="Earlier frames">‹</button><span id="data-range" class="fine"></span><button id="data-forward" type="button" title="Later frames" aria-label="Later frames">›</button>
         <div class="grow"></div>
         <span class="save-note" id="data-saved" role="status"></span>
-        <details class="export down" id="export-data"><summary title="Save or download the whole table">Export</summary><div class="export-menu" role="menu"><button id="data-save" type="button" disabled role="menuitem" title="Saves the whole table (every frame, every cell) as a CSV into the plots folder beside your tables">Save to plots folder</button><button id="data-download" type="button" disabled role="menuitem" title="Downloads the whole table as a CSV through the browser">Download CSV</button></div></details>
+        <details class="export down" id="export-data"><summary title="Save or download the whole table as a CSV">Export</summary><div class="export-menu" role="menu"><button id="data-save" type="button" disabled role="menuitem" title="Saves the whole table (every frame, every cell) as a CSV into the plots folder beside your tables">Save CSV to plots folder</button><button id="data-download" type="button" disabled role="menuitem" title="Downloads the whole table as a CSV through the browser">Download CSV</button></div></details>
       </div>
       <p class="fine help">One row per frame, one column per cell. The saved file has every frame and the full cell IDs.</p>
       <div class="scroller"><table id="table-data"></table></div>
     </section>
-    <section class="panel" id="panel-counts" hidden><div class="tally-box" id="tally-box" hidden><table id="table-tally"></table></div><div class="scroller"><table id="table-counts"></table></div><p class="fine pad">Counts describe the cells you chose; cell N is not animal N.</p></section>
+    <section class="panel" id="panel-counts" hidden><div class="toolbar"><label class="check"><input id="all-count-columns" type="checkbox"> Show all saved columns</label><div class="grow"></div><span class="save-note" id="counts-saved" role="status"></span><details class="export down" id="export-counts"><summary title="Save or download the responder counts as a CSV">Export</summary><div class="export-menu" role="menu"><button id="counts-save" type="button" disabled role="menuitem" title="Saves the responder counts, every saved column, as a CSV into the plots folder beside your tables">Save CSV to plots folder</button><button id="counts-download" type="button" disabled role="menuitem" title="Downloads the responder counts, every saved column, as a CSV through the browser">Download CSV</button></div></details></div><div class="tally-box" id="tally-box" hidden><table id="table-tally"></table></div><div class="scroller"><table id="table-counts"></table></div><p class="fine pad">Counts describe the cells you chose; cell N is not animal N.</p></section>
   </main>
 </div>
 <div class="save-options" id="save-options" hidden role="dialog" aria-label="How pictures are saved">
@@ -190,15 +203,19 @@
   <p class="fine">Format and resolution are for every saved picture. Size is for pictures and frames, which keep their shape at that width; a plot or heatmap takes its size from Edit figure in its Export menu.</p>
 </div>
 <div class="save-options" id="frames-options" hidden role="dialog" aria-label="Save frames">
-  <label>Every <span class="inline"><input id="frames-every" type="number" min="1" step="1" inputmode="numeric" aria-label="Save every how many frames"> frames</span></label>
+  <div class="seg" role="group" aria-label="Which frames to save"><button type="button" class="on" data-frames="every" aria-pressed="true" title="Each frame its own picture, in a folder of their own, and one picture with all of them">Every Nth frame</button><button type="button" data-frames="pair" aria-pressed="false" title="One picture: the baseline frame and the peak frame side by side, shown between the same gray levels">Baseline and peak</button></div>
+  <label id="frames-every-row">Every <span class="inline"><i class="range-note" id="frames-every-range" hidden></i><input id="frames-every" inputmode="numeric" aria-label="Save every how many frames"> frames</span></label>
+  <label id="frames-baseline-row" title="Opens on the last of the F₀ frames" hidden>Baseline frame <span class="inline"><i class="range-note" id="frames-baseline-range" hidden></i><input id="frames-baseline" inputmode="numeric"></span></label>
+  <label id="frames-peak-row" title="Opens on the selected cell's peak in the response window; with no cell selected, on the frame where the cells that responded are brightest on average" hidden>Peak frame <span class="inline"><i class="range-note" id="frames-peak-range" hidden></i><input id="frames-peak" inputmode="numeric"></span></label>
+  <label title="Whole picture: all of the field, however the picture is zoomed. Area on screen: the part of the recording that is in the picture panel.">Area <select id="frames-area"><option value="whole" selected>Whole picture</option><option value="screen">Area on screen</option></select></label>
   <p class="fine" id="frames-count"></p>
-  <div class="actions"><button class="primary" id="frames-go" type="button">Save frames</button><button id="frames-cancel" type="button">Cancel</button></div>
+  <div class="actions"><button class="primary" id="frames-go" type="button">Save frames</button><button id="frames-download" type="button" title="Downloads the picture and how it was made through the browser" hidden>Download a copy</button><button id="frames-cancel" type="button">Cancel</button></div>
 </div>
 <div class="figure-editor" id="figure-editor" hidden role="dialog" aria-modal="true" aria-labelledby="figure-name">
   <div class="figure-box">
     <div class="figure-head"><b id="figure-name"></b><span class="fine" id="figure-pixels"></span><span class="grow"></span><button id="figure-close" type="button">Close</button></div>
     <div class="figure-body"><div class="figure-stage" id="figure-stage"><canvas id="figure-preview" aria-label="The figure as it will be saved"></canvas></div><div class="figure-controls" id="figure-controls"></div></div>
-    <div class="figure-foot"><button id="figure-reset" type="button" title="Back to a figure nobody has edited">Reset</button><span class="grow"></span><span class="save-note" id="figure-saved" role="status"></span><button id="figure-download" type="button" title="Downloads the figure and how it was made through the browser">Download a copy</button><button class="primary" id="figure-save" type="button" title="Saves the figure, its numbers (CSV) and how it was made into the plots folder beside your tables">Save to plots folder</button></div>
+    <div class="figure-foot"><button id="figure-reset" type="button" title="Every setting shown here back to its built-in value">Reset to defaults</button><span class="grow"></span><span class="save-note" id="figure-saved" role="status"></span><button id="figure-download" type="button" title="Downloads the figure and how it was made through the browser">Download a copy</button><button class="primary" id="figure-save" type="button" title="Saves the figure, its numbers (CSV) and how it was made into the plots folder beside your tables">Save to plots folder</button></div>
   </div>
 </div>
 <div class="tip" id="tip" hidden></div>

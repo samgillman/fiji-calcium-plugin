@@ -22,6 +22,8 @@ Map protocol=Protocol.payload([primary,control],2,'Synthetic browser display pro
 ['protocol.json','applied_protocol.json'].each{new File(fixture,it).text=Protocol.json(protocol)}
 def callRows=Csv.read(new File(fixture,'responder_calls.csv'));List header=callRows[0]
 header.add('QC_flags');callRows.drop(1).each{it.add('DURATION_BELOW_SAMPLE_INTERVAL')}
+// The stimulus is added when the response window starts, as in a real run, so the plot has a stimulus line to place.
+header.add('Stimulus_onset_s');callRows.drop(1).each{it.add(it[header.indexOf('Start_s')])}
 def set={List row,String name,Object value->int index=header.indexOf(name);if(index>=0)row[index]=''+value}
 callRows.drop(1).each{row->set(row,'End_s',19.5);set(row,'Effective_end_s',19.5)}
 def extra=callRows.drop(1).collect{original->def row=new ArrayList(original);set(row,'Role','Control');set(row,'Stimulus','Ionomycin');set(row,'Floor_local_fraction',0.4);set(row,'Floor_threshold',0.4);set(row,'Threshold_increase',0.4);set(row,'SD_multiplier',5);set(row,'Baseline_mean',0.5)
@@ -41,8 +43,10 @@ def frames=new ImageStack(250,150)
 (1..30).each{int f->def ip=new ShortProcessor(250,150);ip.set(100);if(f>=8&&f<=17){ip.setRoi(30,50,20,20);ip.set(140);ip.resetRoi()};frames.addSlice(''+f,ip)}
 def colour=new ColorProcessor(250,150);colour.setColor(0x103a10);colour.fill()
 (1..6).each{colour.setColor(0x30c030);colour.fillOval(it*30+2,52,16,16)}
+// The recording says how large its pixels are, as a microscope's file does: 0.8 µm, so the field is 200 µm across.
+def recording=new ImagePlus('Recording',frames);recording.getCalibration().pixelWidth=0.8d;recording.getCalibration().pixelHeight=0.8d;recording.getCalibration().setUnit('micron')
 def data=[csv:new File(source,'metrics.csv'),folder:root,recording:'Fixture recording',frames:30,hz:2d,baselineStart:1,baselineEnd:5,key:'fixture',measurementId:'synthetic-browser-fixture',
-    picture:new ImagePlus('Colour picture',colour),movie:new ImagePlus('Recording',frames),names:(1..6).collect{String.format('Cell%03d',it)},rois:(1..6).collect{new Roi(it*30,50,20,20)} as Roi[]]
+    picture:new ImagePlus('Colour picture',colour),movie:recording,names:(1..6).collect{String.format('Cell%03d',it)},rois:(1..6).collect{new Roi(it*30,50,20,20)} as Roi[]]
 def session=loader.loadClass('CalciumAnalysisSession').newInstance(data);session.runtime.home=new File(root,'runtime')
 session.runtime.metaClass.environment={->root} // Display test only; never downloads or invokes R.
 session.draft.protocol=protocol;session.draft.timestamps=[name:'fixture-clock.csv',content:'Frame,Time_s\n'+clock.withIndex().collect{t,i->(i+1)+','+t}.join('\n')+'\n']

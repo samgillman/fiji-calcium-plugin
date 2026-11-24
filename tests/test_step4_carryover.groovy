@@ -96,6 +96,10 @@ assert Settings.pagePrefs() == ['step4.side': '420px', 'step4.split': '34.1%', '
 Settings.setPagePref('step4.side', null); assert !Settings.pagePrefs().containsKey('step4.side')
 ['step4.side': 'javascript:1', 'step4.split': '150%', 'other': '1'].each { k, v -> try { Settings.setPagePref(k, v); assert false : k } catch (IllegalArgumentException expected) { } }
 Settings.setPagePref('step4.split', null); Settings.setPagePref('step4.help', null)
+// How the cells are drawn on the picture (plain outlines, numbers) and how often the zoom hint was shown are kept the same way.
+['step4.plain': '1', 'step4.numbers': '1', 'step4.viewhint': '3'].each { k, v -> assert Settings.setPagePref(k, v).kept == k && Settings.pagePrefs()[k] == v }
+['step4.plain': 'yes', 'step4.numbers': '2', 'step4.viewhint': '12'].each { k, v -> try { Settings.setPagePref(k, v); assert false : k } catch (IllegalArgumentException expected) { } }
+['step4.plain', 'step4.numbers', 'step4.viewhint'].each { Settings.setPagePref(it, null) }; assert Settings.pagePrefs().isEmpty()
 // The figure editor's settings are kept as one line of JSON for the plot and one for the heatmap; anything else is refused.
 String figure = '{"width":6,"height":4,"font":"arial","grid":false,"xTitle":"Time (s)","ink":"#000000"}'
 assert Settings.setPagePref('step4.figure.plot', figure).kept == 'step4.figure.plot' && Settings.pagePrefs()['step4.figure.plot'] == figure
