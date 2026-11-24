@@ -1,5 +1,5 @@
 Ca²⁺ IMAGING (WANG LAB)
-A plugin for Fiji / ImageJ: calcium imaging, cells step by step.  Version 2026.11.22.2.
+A plugin for Fiji / ImageJ: calcium imaging, cells step by step.  Version 2026.11.23.1.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served
@@ -123,7 +123,8 @@ have the control yet; the marks are kept and counted by the plugin.
               only while there is at least one mark. The engine's responder_calls.csv and the
               analysis folder are never changed.
   Counted     % responding is given as scored and after review, for all cells, the cells chosen
-              blind, those added later and the quiet cells, with and without the cells below zero.
+              blind, those added later, those carried over and the quiet cells, with and without
+              the cells below zero.
               ..._percent_responding_<analysis>.csv keeps its rows and columns and gains five on
               the right while there are marks: responded_after_review,
               percent_responding_after_review, responded_without_them_after_review,
@@ -211,7 +212,8 @@ in the editor window that opens.
 
 
 HOW TO USE IT
-  1. Empty the ROI Manager if it holds outlines from other work (the plugin uses whatever is in it).
+  1. If the ROI Manager holds outlines from other work, the plugin asks about them when it starts.
+     See "Outlines already in the ROI Manager" below.
   2. Choose  Plugins > Ca²⁺ Imaging (Wang Lab).
   3. In the first window pick the recording: one that is open in Fiji, or "Choose a file from disk...".
      For a file from disk, the file chooser opens as soon as you pick that entry (or press
@@ -383,35 +385,69 @@ All of it uses Fiji's ordinary commands; the same steps can be done by hand from
                        the picture. No cell again: the box's ✕, a click on empty space in the picture,
                        or Esc outside a box. Esc while typing in the box puts back the open cell.
                        A double-click on the picture shows all of it and keeps the cell.
-                       With a cell selected the plot shows that cell over the average.
+                       With a cell selected the plot shows that cell over the average, with its required
+                       rise as a dashed line. Thresholds adds the threshold that did not set the required
+                       rise (the minimum rise or the noise threshold) and the baseline mean. Every line and
+                       band is named once, in the legend; the plot itself carries one word, "stimulus".
                        View: Recording, Background removed, GFP (the same in green), Response in
                        magenta (GFP plus the rise above what the background did, averaged over
                        9 x 9 pixels and 5 frames), Change from baseline (that rise alone), Colour
                        overview and Background areas. Outline thickness is beside "All outlines".
-                       Scroll over the picture or the plot scrolls the page; Ctrl or Cmd + scroll zooms it.
+                       Outlines: By call (each outline in the colour of its response call) or Plain
+                       (every outline white; excluded and unscorable cells stay dashed). Number cells
+                       writes each cell's number in its outline. Saved pictures and frames follow both.
+                       Zooming the picture: + and - on its top left corner, with the zoom level between
+                       them; Whole picture; and Zoom to region (then drag a rectangle; Esc cancels;
+                       Shift + drag does the same). With the pointer on the picture the keys +, - and 0
+                       do the same, and a pinch or Ctrl or Cmd + scroll zooms about the pointer. Zoomed
+                       in, drag the picture to move it, or click or drag in the small map on its
+                       bottom right corner. Scrolling without Ctrl or Cmd scrolls the page.
+                       The plot's time axis: Ctrl or Cmd + scroll zooms it, a double-click resets it.
                        Over the plot, the time and the plotted values under the pointer are shown beside a
                        dashed line; they go when the pointer leaves. While the frame moves (a drag in the
                        plot, the slider, the step buttons, the arrow keys, Play) a solid line shows where
                        the picture is, with that frame's numbers; it goes a moment after the frame stops.
-                       Save frames... (Export) writes every Nth frame and one picture with all of them.
+                       Save frames... (Export) writes every Nth frame and one picture with all of them,
+                       or, with Baseline and peak, one picture of those two frames side by side.
                        The arrow on the edge of the settings panel folds the panel away.
                        Each panel has one Export menu in its corner (the picture, the plot, the heatmap
                        and the tables). In it, Save plot puts the picture, its numbers (CSV) and how it
                        was made into a "plots" folder beside the tables, Download hands the same file to
                        the browser. For the plot and the heatmap, Edit figure opens the figure with a
                        preview that is the saved picture itself, and beside it: width and height in
-                       inches, resolution and format; title, axis titles, font, text sizes and colour;
-                       for the plot the axis minimum, maximum and tick spacing, frame, grid lines, and
-                       the thickness and colour of each line; for the heatmap its colours and a colour
-                       scale you can type so several recordings share one. Size, font, colours and
-                       thicknesses are kept for the next recording; the title and the axis numbers are
-                       not. Reset returns the figure to how it was. For pictures and frames, Options
+                       inches, resolution and format; title, axis titles, font (Arial unless you choose
+                       another), text sizes and colour; for the plot the axis minimum, maximum and tick
+                       spacing, frame, grid lines, and the thickness and colour of each line; for the
+                       heatmap its colours and a colour scale you can type so several recordings share
+                       one. A number is taken when you press Enter or leave its box. One the figure
+                       cannot use stays in the box, marked, and the line under it says what the box
+                       takes ("1 to 20 in", "Minimum must be below maximum", "Too large for this
+                       figure size"); the figure keeps the number it had. Text that leaves the plot
+                       less than 40 % of the figure is said under Text size. A title too long for the
+                       figure is shortened with an ellipsis; a legend entry goes on two lines. With All
+                       traces on, Lines also sets the traces' opacity in percent (empty: auto, fainter
+                       the more cells there are) and the responders' line. Size, font, colours and
+                       thicknesses are kept for the next recording, and the editor says in one line
+                       when kept settings are in use; the title and the axis numbers are not kept.
+                       Reset to defaults puts every box of the editor back to its built-in value,
+                       resolution and format too. For pictures and frames, Options
                        sets the format (PNG or TIFF), the width in inches, the resolution (150, 300 or
                        600 dpi, recorded in the file) and the TIFF compression (LZW, ZIP or none; LZW
                        and ZIP lose nothing). Format and resolution are the figures' too.
                        Save picture saves the view on screen with the outlines shown and a colour key;
                        Save frames… saves every Nth frame of a movie view, each labelled with its
-                       frame and time. Signal also offers dF/F0 of the raw values. View: the recording as recorded, with the background
+                       frame and time. Area, in the picture's Export menu and in Save frames…, chooses
+                       what they show: Whole picture, however the picture is zoomed, or Area on screen,
+                       the part of the recording in the picture panel. A picture of an area is as wide
+                       as one of the whole field; its outlines, numbers and labels keep their size,
+                       and it has a scale bar (when the recording gives its pixel size in micrometres).
+                       Its file name says "area", and the file kept beside it gives the area in pixels
+                       and in µm. Save frames… › Baseline and peak saves one picture: the baseline
+                       frame on the left, the peak frame on the right, both at the same brightness,
+                       with the key and one scale bar under the pair. Its two frame boxes are filled
+                       in (the last F₀ frame; the selected cell's peak, or the frame where the cells
+                       that responded are brightest on average) and can be changed. Signal also offers
+                       dF/F0 of the raw values. View: the recording as recorded, with the background
                        removed, or with the response in magenta (green cells turn pink as they rise;
                        display only). Drag the edges between the settings, the movie and the plot to
                        resize them. "Show explanations" in the header turns the help texts on.
@@ -499,6 +535,82 @@ border zone. The summary table always has a column saying whether a cell is with
 the edge, and the record of steps says whether edge cells were left out. Change the distance with
 EDGE_MARGIN in the settings block.
 
+OUTLINES ALREADY IN THE ROI MANAGER
+Fiji has one ROI Manager. Outlines left in it from another recording would be measured on the next
+one. The plugin notes on which recording it added each outline. The notes are kept beside the ROI
+Manager, not in the outlines, and last until the ROI Manager or Fiji is closed. Saved RoiSet files
+are as before.
+When the plugin starts and the ROI Manager already holds outlines, it asks once, before any cell
+is shown:
+    Clear them                    the default. These outlines are removed; Undo brings them back.
+    Keep them for this recording  only when this recording shows the same cells in the same place.
+    Cancel                        nothing starts, and the outlines stay as they were.
+Clear them takes effect only when the start goes on: Cancel at the question about the frames
+leaves the outlines as they were.
+It does not ask when the ROI Manager is empty, when the outlines were made on this same
+recording, for example after its plugin window was closed and the plugin started on it again, or
+when they were drawn on this recording's own window before the plugin started. The same recording
+means the same size, number of frames, and first, middle and last frame, whatever its name, time
+base or pixel size.
+Outlines opened from a RoiSet file before the plugin starts are outlines from before: unless the
+plugin added them while this ROI Manager was open, it cannot tell which recording they are from, so
+it asks.
+To measure outlines saved from this recording, open them in the ROI Manager once the plugin window
+is open on it. They are then this recording's own, as before.
+
+Kept outlines were not chosen on this recording, so they are recorded as carried over and never
+as chosen blind:
+  - in _what_was_done.txt: an "Outlines carried over" line and a "Carried over" line, and the
+    line "Chosen blind or later" counts them separately;
+  - in _cells_chosen_blind_or_after_response.csv: "carried over from" and the recording's name;
+  - in the ROI registry and in the cell selection basis;
+  - in Step 4: a row of their own in the percent table, "Carried over". They are not counted
+    under Chosen blind.
+Outlines drawn on this recording's own window before the plugin started are kept without a
+question. They were not chosen in the plugin either: the record says "drawn before the plugin
+started", and Step 4 counts them under Carried over.
+With an empty ROI Manager at the start and the recording left open, every saved file is as before.
+
+"‹ Change recording" asks its own question: Clear outlines and go back, Keep outlines and go back,
+or Cancel. On another recording, kept outlines are recorded as carried over, never as chosen
+blind; on the same recording they stay its own. The next start does not ask about them a second
+time.
+
+Measure and save checks again. If the ROI Manager holds outlines the plugin added on another
+recording that were not kept for this one, it asks the same question before measuring. Cancel
+measures nothing and says why. Clear removes those outlines and measures nothing yet, so that the
+cells can be checked first; Undo brings them back. Keep measures them as carried over.
+
+ONE PLUGIN WINDOW
+The plugin has one window. Starting it from the menu while that window is open brings the window
+forward and offers Change recording, instead of opening a second window. With the ROI Manager
+empty it asks "Go back to choose another recording?". Starting it while another start is still
+under way, for example while the first start makes its pictures, opens nothing and says "The
+plugin is already starting. Finish or cancel that start first." To work on another recording, use
+Change recording.
+
+THE RECORDING IS CLOSED
+"The recording is closed in Fiji. Open it again to go on." means that the recording's own window
+was closed in Fiji while the plugin window stayed open. Its frames are no longer in memory, so
+nothing that reads them can run: Measure and save, the picture of other frames before the response,
+looking for the response, a cell's trace and the movie in Step 4. Each one shows this sentence
+instead, also when the recording is closed while it runs, and nothing is saved or changed. Suggest
+cells automatically shows it too when pressed while the recording is closed. Pictures already made,
+such as All frames or a response already found, can still be shown. The Recording card says it too,
+in red. The cells chosen so far stay as they are.
+To go on, press "Open the recording again" on the Recording card, or open the same file in Fiji.
+The button is shown only while Fiji knows the recording's file and the file is there. The plugin
+goes on only with the same recording: the same size, number of frames, time base, pixel size, and
+first, middle and last frame. Another recording with the same name is not taken. When it cannot go
+on, the card says why:
+    The file is no longer there: with the file's path
+    The file could not be opened.
+    The file did not open as the same recording.
+    It did not come from a file, so it cannot be opened again.
+When the cells are measured again, _what_was_done.txt says that the recording was closed and opened
+again.
+Step 4 goes on with it too, also a Step 4 page or window opened while it was closed.
+
 DIM CELLS AND PERCENT RESPONDING
 Some corrected resting fluorescence is zero or negative, so a fractional change cannot be
 interpreted. Step 4 keeps these cells as technical exclusions with reasons; missing or insufficient
@@ -539,7 +651,10 @@ IF SOMETHING GOES WRONG
     inside Fiji's folder, and restart Fiji.
   - The plugin shows twice in the menu: keep only  scripts > Plugins > Ca²⁺_Imaging_(Wang_Lab).groovy
     and restart Fiji.
-  - Cells you did not draw are counted: old outlines were in the ROI Manager. Empty it and start again.
+  - Cells you did not draw are counted: outlines from other work were kept when the plugin started.
+    They are recorded as carried over. To start without them, press "‹ Change recording" and choose
+    Clear outlines and go back.
+  - "The recording is closed in Fiji. Open it again to go on.": see "The recording is closed" above.
   - Clicking does not accept a suggested outline: switch to the oval or rectangle tool. With the
     polygon tool a click starts a polygon instead.
   - Fiji's menu bar shows only "Fiji": quit Fiji and start it again (this is a Fiji quirk when many
@@ -667,7 +782,9 @@ Show. Warnings do not automatically exclude cells or change saved calls.
 Where things are since 2026.11.20.19: a warning or error about a setting sits under that setting, and
 the Run box only says how many there are ("1 warning above"; click it to go there). The result figures
 at the top are figures only; Show, beside Cell, is the one cell filter.
-Legacy whole-recording AUC, peak timestamp and rise time are labelled separately from the
-stimulus-window metrics. See docs/SIMPLECA.md for the definitions.
+Whole-recording AUC, peak timestamp and rise time are labelled separately from the
+response-window metrics. See docs/SIMPLECA.md for the definitions.
+The tables name each column in words with its unit; pointing at a header gives its saved name,
+pointing at a number the saved value. Saved CSVs keep every column under its saved name.
 Each measurement has a separate review page and preserved inputs. Keep Fiji open; you may
 close the cell-selection window. Close analysis releases that page's temporary inputs.

@@ -61,6 +61,24 @@ try {
     assert call('api/frame?f=3').status==400 && call('api/frame?mode=raw').status==400 : 'a frame request names both the frame and the view'
     ['0','-5','31','abc','1.5',''].each{f->assert call('api/frame?f='+f+'&mode=raw').status==400}
     assert call('api/frame?f=3&mode=unknown').status==400
+    // The gray levels a view's frames are shown between, for the record of saved frames: one range for every frame of a view,
+    // so a frame before the response and one in it can be compared. The cell's square is 140 on a field of 100.
+    def shown={String mode->def r=json('api/range?mode='+mode);assert r[0]==200 && r[1].mode==mode;r[1].ranges}
+    def recorded=shown('raw');assert recorded.size()==1 && recorded[0].shown=='gray levels' && recorded[0].from==100 && recorded[0].to>recorded[0].from
+    int dark=gray(call('api/frame?f=3&mode=raw').bytes,100,60),lit=gray(raw.bytes,40,60)
+    assert dark<8 && lit>(recorded[0].to>=140?247:254) : 'a frame is painted between those two levels: '+recorded+' '+dark+' '+lit
+    assert shown('flat')==shown('green') && shown('flat')[0].shown=='gray levels above the background' && shown('flat')[0].from==0
+    assert shown('change').size()==1 && shown('change')[0].shown=='rise above the baseline, gray levels' && shown('change')[0].to>shown('change')[0].from
+    assert shown('magenta')==shown('flat')+shown('change') : 'Response in magenta shows the cells and the rise, each between its own levels'
+    assert call('api/range?mode=unknown').status==400 && call('api/range').status==400
+    // The size of a pixel, for the scale bar of a saved picture: told when the recording says it in micrometres, and not otherwise.
+    assert about.containsKey('micronsPerPixel') && about.micronsPerPixel==null : 'this recording does not say how large its pixels are'
+    def View=loader.loadClass('CalciumFrameView'),sized=new ImagePlus('Sized',new ByteProcessor(4,4))
+    assert Double.isNaN(View.micronsPerPixel(sized)) && Double.isNaN(View.micronsPerPixel(null))
+    ['micron','um','µm','micrometer'].each{unit->sized.getCalibration().pixelWidth=0.645d;sized.getCalibration().setUnit(unit);assert View.micronsPerPixel(sized)==0.645d : unit}
+    sized.getCalibration().setUnit('mm');assert Double.isNaN(View.micronsPerPixel(sized)) : 'a scale in another unit is not taken for micrometres'
+    recording.getCalibration().pixelWidth=0.8d;recording.getCalibration().setUnit('micron');assert json('api/session')[1].micronsPerPixel==0.8d
+    recording.setCalibration(null);assert json('api/session')[1].micronsPerPixel==null
     assert about.draft.protocol.windows[0].Start_s>about.frameTimes[(about.draft.values.baseline_end as int)-1] : 'Suggested onset must follow the inclusive F0 baseline'
     ['0','-1','abc',''].each{hz->
         def invalid=Settings.copy(about.draft);invalid.values.sampling_hz=hz
@@ -170,6 +188,20 @@ try {
     assert Settings.identity(data+[measurementId:'new measurement'])!=session.measurementIdentity
     server.session=Session.newInstance(data+[key:'second']);assert json('api/state')[1].key!=about.key && json('api/state')[1].version==0
     server.session=null;assert json('api/state')[0]==409 && call('').status==200
+    // The recording closed in Fiji: a frame is refused in plain words, without Java text; the same recording opened again is taken.
+    def closing=new ImagePlus('Recording',frames.duplicate());server.session=Session.newInstance(data+[movie:closing,key:'closing'])
+    assert call('api/frame?f=15&mode=raw').status==200
+    closing.close();closing.flush()
+    def gone=call('api/frame?f=15&mode=raw');assert gone.status==410 && slurp.parseText(gone.text)==[error:'The recording is closed in Fiji. Open it again to go on.'] : gone.text
+    ij.macro.Interpreter.batchMode=true;def reopened=new ImagePlus('Recording again',frames.duplicate());reopened.show()
+    try{def back=call('api/frame?f=15&mode=raw');assert back.status==200 && gray(back.bytes,40,60)>gray(back.bytes,100,60) : 'the recording opened again is taken'}
+    finally{reopened.close();ij.macro.Interpreter.batchMode=false}
+    def blank=new ImageStack(250,150);(1..30).each{blank.addSlice(''+it,new ShortProcessor(250,150))};ImagePlus otherPixels=new ImagePlus('Recording',blank)
+    server.session=Session.newInstance(data+[movie:otherPixels,key:'other']);otherPixels.close();otherPixels.flush()
+    ij.macro.Interpreter.batchMode=true;def lookalike=new ImagePlus('Recording',frames.duplicate());lookalike.show()
+    try{assert call('api/frame?f=15&mode=raw').status==410 : 'a recording with other pixels is not taken for it'}finally{lookalike.close();ij.macro.Interpreter.batchMode=false}
+    server.session=null
+    println 'PASS: a frame of a recording closed in Fiji is refused with "The recording is closed in Fiji. Open it again to go on."; the same recording opened again is taken, another one is not'
     // Remeasuring gets a distinct URL and read-only input snapshot; the first page remains reachable.
     def Pages=loader.loadClass('CalciumWebPages'),pages=Pages.newInstance(snapshotRoot:new File(root,'snapshots'))
     def original=new File(root,'measurement.csv');original.text='original measured values'
@@ -188,7 +220,7 @@ try {
         firstPage.stop();assert !snapshot.exists()
     }finally{pages.closeAll()}
     server.stop();try{call('api/state');assert false}catch(IOException expected){}
-    println 'PASS: local browser HTTP/token, versioned draft protocol, exact values/uploads, pre-analysis recording transport, applied snapshots, all result tables, failure/cancel and measurement identity'
+    println 'PASS: local browser HTTP/token, versioned draft protocol, exact values/uploads, pre-analysis recording transport, display ranges and pixel size, applied snapshots, all result tables, failure/cancel and measurement identity'
 } catch(Throwable t){t.printStackTrace();System.exit(1)}
 finally {server.stop();recording.close();picture.close()}
 System.exit(0)
