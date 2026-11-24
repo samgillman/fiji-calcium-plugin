@@ -3640,7 +3640,8 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
     String finished() {
         Map parts=finish;if(parts==null||results?.name!=parts.folder)return null
         String carry=CalciumReview.note(CalciumReview.current(carried,results,reviewMarks)),checked=checks?.note?' '+checks.note:''
-        (parts.empty?parts.empty as String:(parts.saved as String)+CalciumAnalysisSettings.percentSentence(CalciumAnalysisSettings.tally(results,measurement)))+carry+checked
+        String sentence='';if(!parts.empty)try{sentence=CalciumAnalysisSettings.percentSentence(CalciumAnalysisSettings.tally(results,measurement))}catch(Throwable ignored){}   // as percentResponding: '' when the tally cannot be made
+        (parts.empty?parts.empty as String:(parts.saved as String)+sentence)+carry+checked
     }
     List<Map> table(javax.swing.JTable target,File file){
         if(!file.isFile()){target.model=new javax.swing.table.DefaultTableModel();return []}
