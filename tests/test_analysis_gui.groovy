@@ -31,7 +31,7 @@ try {
         assert !ui.measurement.picture.is(original) : 'Analysis must not edit Step 2 cells'
         assert ui.measurement.picture.getWindow()==null && ui.cellPicture.image!=null : 'The cell picture belongs inside the analysis window'
         assert ui.responding.value.text=='–' && !ui.previousCell.enabled
-        assert ui.kcl.text=='Also score a separate positive control'
+        assert ui.kcl.text=='Include a positive control'
         // The original recording is visible and scrubbable even before analysis.
         assert (0..<ui.view.itemCount).collect{ui.view.getItemAt(it)}==['Static colour overview','Movie: change from rest','Movie: as recorded']
         assert ui.view.selectedIndex==2 && ui.cellPicture.image.is(ui.frameImage) && ui.slider.maximum==30

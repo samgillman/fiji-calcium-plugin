@@ -139,7 +139,7 @@ try {
         assert new File(settings.timestamps_file).name=='timestamps.csv' && new File(settings.timestamps_file).text==pending.timestamps.content
         assert settings.timestamps_sha256==Installer.digest(new File(settings.timestamps_file).bytes)
         assert new File(settings.sensitivity_file).name=='sensitivity.csv'
-        job.progress.call(40,'Scoring responses');gate.await(5,TimeUnit.SECONDS);job.check();fixture}
+        job.progress.call(40,'Making the calls');gate.await(5,TimeUnit.SECONDS);job.check();fixture}
     def started=json('api/analyze',[draft:pending,confirmed:true]);assert started[0]==200 && started[1].busy
     long wait=System.nanoTime()+3000000000L;while(sent==null&&System.nanoTime()<wait)Thread.sleep(10)
     assert json('api/analyze',[draft:pending,confirmed:true])[0]==400

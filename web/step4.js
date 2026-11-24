@@ -261,7 +261,7 @@
       add(details, 'Floor_local_fraction', 'Minimum rise (%)', { scale: 100 }); add(details, 'SD_multiplier', 'Baseline SD multiplier');
       add(details, 'Duration_mode', 'Duration measured in', { choices: [['seconds', 'Seconds'], ['samples', 'Consecutive samples']] });
       add(details, 'Min_duration_s', 'Minimum duration (s)'); add(details, 'Consecutive_samples', 'Consecutive samples');
-      add(details, 'Min_baseline_samples', 'Baseline samples').previousSibling.title = 'The fewest baseline samples a cell needs to be scored'; add(details, 'Max_gap_s', 'Maximum gap (s)').placeholder = 'auto';
+      add(details, 'Min_baseline_samples', 'Baseline samples').previousSibling.title = 'The fewest baseline samples a cell needs for a call'; add(details, 'Max_gap_s', 'Maximum gap (s)').placeholder = 'auto';
       add(details, 'Expected_interval_s', 'Expected interval (s)').placeholder = 'auto'; add(details, 'Noise_floor_local_fraction', 'Noise floor (%)', { scale: 100 });
       add(details, 'Stimulus', 'Name in the output');
       section.appendChild(details); container.appendChild(section); showFrames(index, w);
@@ -307,7 +307,7 @@
     }
     $('rule-help').textContent = legacy ? 'Legacy rule: the baseline ends at the response start; the control is KCl. Sample counts depend on the frame rate.' : 'Starting values. Check against your controls.';
   }
-  /** Under the frame slider: grey for the noise baseline, a mark for the stimulus, orange for the scored frames of the primary stimulus. */
+  /** Under the frame slider: grey for the noise baseline, a mark for the stimulus, orange for the response window of the primary stimulus. */
   function shadeTimeline(used) {
     const strip = $('time-windows'); if (!strip) return; strip.replaceChildren(); if (!used || used.n < 2) return;
     const at = (frame) => (frame - 1) / (used.n - 1) * 100, piece = (className, from, to, title) => { const e = document.createElement('i'); e.className = className; e.style.left = at(from) + '%'; e.style.width = Math.max(0.4, at(to) - at(from)) + '%'; e.title = title; strip.appendChild(e); };

@@ -52,7 +52,7 @@ session.runtime.metaClass.environment={->root} // Display test only; never downl
 session.draft.protocol=protocol;session.draft.timestamps=[name:'fixture-clock.csv',content:'Frame,Time_s\n'+clock.withIndex().collect{t,i->(i+1)+','+t}.join('\n')+'\n']
 session.open={File target->new File(root,'opened.txt').text=target.name}
 session.performAnalysis={rt,input,settings,out,job->new File(root,'sent.json').text=JsonOutput.prettyPrint(JsonOutput.toJson(settings));new File(root,'settings.txt').text=settings.collect{k,v->k+'='+v}.join('\n')
-    job.logFile.parentFile.mkdirs();job.logFile.text='Synthetic analysis log';(1..4).each{job.check();job.progress.call(it*20,'Scoring synthetic display fixture');Thread.sleep(150)};fixture}
+    job.logFile.parentFile.mkdirs();job.logFile.text='Synthetic analysis log';(1..4).each{job.check();job.progress.call(it*20,'Making the calls');Thread.sleep(150)};fixture}
 def server=loader.loadClass('CalciumWebServer').newInstance(session:session);server.start()
 new File(root,'url.txt').text=server.url();println 'Step 4 page: '+server.url()
 long end=System.currentTimeMillis()+600000L

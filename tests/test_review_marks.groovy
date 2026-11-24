@@ -1,5 +1,5 @@
 // Manual review marks on the calls of an analysis, without the page: set, remove and refuse over HTTP as the Step 4 page
-// would; the tally of every group as scored and after review; the percent table with and without marks; the sentence for a
+// would; the tally of every group before and after review; the percent table with and without marks; the sentence for a
 // Methods section; marks carried over to a new analysis of the same recording and the ones dropped; a review file that does
 // not match its analysis. Synthetic analysis folders only; no R, no display, no browser.
 import groovy.json.JsonOutput
@@ -63,7 +63,7 @@ Map folderA=snapshot(dirA)
 def page=open(measurement(names))
 def first=page.run(dirA)
 assert first.results.review.findAll{it.key!='after'}==[folder:A,file:null,sha256:null,problem:'',marks:[:],changed:0,methods:'',carried:null,reasons:['Noise','Movement','Passing object','Bad outline','Other'],calls:['Responded','Did not respond'],noteMax:120] : first.results.review
-assert first.results.review.after==cells.collectEntries{k,v->[id(k),v[0]]} : 'the call after review of every cell, here the call as scored'
+assert first.results.review.after==cells.collectEntries{k,v->[id(k),v[0]]} : 'the call after review of every cell, here the automatic call'
 assert first.state.cancellable==false && first.state.busy==false
 assert !new File(folder,reviewName(A)).exists() && !first.results.tally.containsKey('reviewed') && first.results.tally.rows.every{!it.containsKey('reviewed')} : 'no marks: the tally is as it always was'
 assert first.state.message.endsWith('. All cells: 3 of 6 responded (50.0 %). Chosen blind: 2 of 3 responded (66.7 %). Added after the response was shown: 1 of 3 responded (33.3 %).') : first.state.message
@@ -90,7 +90,7 @@ assert third[1].review.after==cells.collectEntries{k,v->[id(k),k in [2,5] ? 'Did
 assert third[1].review.sha256==Installer.digest(new File(folder,reviewName(A)).bytes) && third[1].review.file==reviewName(A)
 def rowOf={Map tally,String key->tally.rows.find{it.key==key}}
 Map tally=third[1].tally
-// all: as scored 1, 2, 5 responded of 1, 2, 3, 4, 5, 8; after review 1 and 4. Cell 5 went below zero, so "without" leaves it out.
+// all: before review 1, 2, 5 responded of 1, 2, 3, 4, 5, 8; after review 1 and 4. Cell 5 went below zero, so "without" leaves it out.
 assert tally.reviewed==true && tally.changed==[id(2),id(4),id(5)]
 assert rowOf(tally,'all').counted==[3,6,8] && rowOf(tally,'all').without==[2,5,7] && rowOf(tally,'all').reviewed==[counted:[2,6,8],without:[2,5,7],changed:3]
 assert rowOf(tally,'blind').counted==[2,3,4] && rowOf(tally,'blind').reviewed==[counted:[1,3,4],without:[1,3,4],changed:1]
@@ -117,16 +117,17 @@ assert Settings.percentResponding(dirA,page.session.measurement)==' All cells: 3
 assert slurp.parseText(JsonOutput.toJson(Settings.tally(dirA,page.session.measurement)))==tally
 assert Settings.percentResponding(dirA,page.session.measurement+[chosenBlind:null])==' All cells: 3 of 6 responded (50.0 %), after review 2 of 6 (33.3 %).' : 'with marks all cells are given even when it was not recorded how cells were chosen'
 // the Fiji window's tile, from the same tally
-assert Review.headline(tally,'ATP')==['33.3 %','ATP: 2 of 6 evaluable cells after review; 3 as scored'] && Review.headline(first.results.tally,'ATP')==null
-println 'PASS: marks both ways change the tally of every group after review and leave it as scored; the percent table gains columns on the right; the Methods sentence counts the marks'
+assert Review.headline(tally,'ATP')==['33.3 %','ATP: 2 of 6 evaluable cells after review; 3 before review'] && Review.headline(first.results.tally,'ATP')==null
+println 'PASS: marks both ways change the tally of every group after review and leave it as before; the percent table gains columns on the right; the Methods sentence counts the marks'
 
 // ---- refused, with a plain message, and nothing changes
 byte[] reviewBefore=new File(folder,reviewName(A)).bytes
 def refused={Map body,String message->def answer=page.call('api/review',body);assert answer[0]==400 && answer[1].error==message : answer;assert new File(folder,reviewName(A)).bytes==reviewBefore}
 refused([cell:id(6),call:'Responded',reason:'Noise'],'Cell 6 has no call to review: it is excluded.')
 refused([cell:id(7),call:'Responded',reason:'Noise'],'Cell 7 has no call to review: it is unscorable.')
-refused([cell:id(1),call:'Responded',reason:'Noise'],'Cell 1 was scored as responded. The reviewed call must be the other one.')
+refused([cell:id(1),call:'Responded',reason:'Noise'],'Cell 1\'s automatic call is already Responded. The reviewed call must be Did not respond.')
 refused([cell:id(1),call:'Maybe',reason:'Noise'],'Give the reviewed call: Responded or Did not respond.')
+assert Review.refused('99','Responded','Noise','',[:],'Cell 99')=='Cell 99 has no call to review.' : 'a cell without a call in the table'
 refused([cell:id(1),call:'Did not respond',reason:'Tired'],'Choose a reason: Noise, Movement, Passing object, Bad outline or Other.')
 refused([cell:id(1),call:'Did not respond'],'Choose a reason: Noise, Movement, Passing object, Bad outline or Other.')
 refused([cell:id(1),call:'Did not respond',reason:'Other'],'Other needs a short note.')
@@ -183,7 +184,7 @@ println 'PASS: marks are removed one by one; with none left the review file is g
 [[2,'Did not respond','Noise',null],[3,'Responded','Movement',null],[4,'Responded','Other','slow ramp'],[8,'Responded','Bad outline',null]].each{assert mark(id(it[0]),it[1],it[2],it[3])[0]==200}
 String timeOf2=Csv.read(new File(folder,reviewName(A))).find{it[0]==id(2)}[5]
 page.server.stop()
-// measured again without cell 3; cell 8 has a new outline; cell 4 is now scored as responding
+// measured again without cell 3; cell 8 has a new outline; the automatic call of cell 4 changed to responded
 String B='SimpleCa-20261101-110000-bbbbbbbb'
 Map cellsB=cells.findAll{it.key!=3}.collectEntries{k,v->[k,k==4 ? ['Responded',0.40,false] : v]}
 File dirB=analysis(B,cellsB,[(id(8)):'roi-new'])
@@ -191,8 +192,8 @@ List namesB=names-[id(3)]
 page=open(measurement(namesB))
 def second=page.run(dirB)
 Map carried=second.results.review.carried
-String carriedText='Review marks from '+A+': 1 carried over, 3 dropped. Cell 3 of the earlier analysis: no longer measured. Cell 3: now scored as responded. Cell 7: outline changed.'
-assert carried==[from:A,kept:1,dropped:[[cell:id(3),name:'Cell 3 of the earlier analysis',why:'no longer measured',text:'Cell 3 of the earlier analysis: no longer measured'],[cell:id(4),name:'Cell 3',why:'now scored as responded',text:'Cell 3: now scored as responded'],[cell:id(8),name:'Cell 7',why:'outline changed',text:'Cell 7: outline changed']],
+String carriedText='Review marks from '+A+': 1 carried over, 3 dropped. Cell 3 of the earlier analysis: no longer measured. Cell 3: call changed. Cell 7: outline changed.'
+assert carried==[from:A,kept:1,dropped:[[cell:id(3),name:'Cell 3 of the earlier analysis',why:'no longer measured',text:'Cell 3 of the earlier analysis: no longer measured'],[cell:id(4),name:'Cell 3',why:'call changed',text:'Cell 3: call changed'],[cell:id(8),name:'Cell 7',why:'outline changed',text:'Cell 7: outline changed']],
     text:carriedText] : carried
 assert second.state.message.endsWith(' '+carriedText) && second.state.message.contains('All cells: 4 of 5 responded (80.0 %), after review 3 of 5 (60.0 %). Chosen blind: 2 of 2 responded (100.0 %), after review 1 of 2 (50.0 %).') : second.state.message
 def savedB=Csv.read(new File(folder,reviewName(B)))
@@ -221,7 +222,7 @@ assert !new File(folder,reviewName(E)).exists()
 assert page.call('api/review',[cell:id(2),call:'Did not respond',reason:'Noise'])[0]==200
 String F='SimpleCa-20261101-122000-ffffffff',G='SimpleCa-20261101-123000-gggggggg'
 def sixthRun=page.run(analysis(F,cellsB.collectEntries{k,v->[k,k==2 ? ['Did not respond',0.50,true] : v]}))
-assert sixthRun.results.review.carried.kept==0 && sixthRun.results.review.carried.dropped*.why==['now scored as did not respond'] && !new File(folder,reviewName(F)).exists()
+assert sixthRun.results.review.carried.kept==0 && sixthRun.results.review.carried.dropped*.why==['call changed'] && !new File(folder,reviewName(F)).exists()
 def seventhRun=page.run(analysis(G,cellsB))
 assert seventhRun.results.review.carried==null && !new File(folder,reviewName(G)).exists() : 'the marks of E are not carried past F'
 // a run with no earlier marks says nothing about them

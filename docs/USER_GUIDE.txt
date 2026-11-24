@@ -38,7 +38,7 @@ baseline SD alone). The Fiji window shows the noise in use under the protocol na
 not show it yet; when remembered settings on the baseline SD are filled in, its status line ends
 "Noise: baseline SD, as saved." Each analysis records which noise was used: sd_estimator in
 settings.tsv and analysis_manifest.csv, noise_rule in the manifest and, with the whole-trace
-estimate, Noise_source for every scored cell in responder_calls.csv.
+estimate, Noise_source for every evaluable cell in responder_calls.csv.
 A length given in seconds is the last qualifying timestamp minus the first: at 2 Hz, one second
 needs three samples. The actual historical consecutive-sample rule remains available as a legacy
 protocol; it retains its original endpoint handling.
@@ -63,9 +63,9 @@ and negative-control diagnostics stay separate from the applied result. See docs
 setup, formulas, full output definitions and reproducibility details.
 
 CHECKS ON THE CALLS
-After every analysis each scored cell is checked, and the result is saved beside the percent table
-as ..._call_checks_<analysis>.csv, one row per cell. A check is a flag for you to look at in the
-movie. It never changes a call, a count or a percentage.
+After every analysis each evaluable cell is checked, and the result is saved beside the percent
+table as ..._call_checks_<analysis>.csv, one row per cell. A check is a flag for you to look at in
+the movie. It never changes a call, a count or a percentage.
 
   possible passing object, frames 201 to 210
         A bright object was outside the outline on one side just before the cell rose and outside
@@ -111,7 +111,7 @@ A cell without a flag is not shown to be free of objects. The page does not show
 they are in the table.
 
 REVIEWING THE CALLS
-A cell the engine scored can be marked the other way after you have looked at it: a responder as
+An evaluable cell can be marked the other way after you have looked at it: a responder as
 not a responder, a non-responder as a responder. Each mark needs a reason: Noise, Movement, Passing
 object, Bad outline or Other. Other needs a short note. A note is one line of plain text, up to 120
 characters, and cannot start with =, +, - or @, which a spreadsheet would read as a formula. A mark
@@ -123,7 +123,7 @@ have the control yet; the marks are kept and counted by the plugin.
               second and, for a mark carried over, the analysis it was made in. The file is there
               only while there is at least one mark. The engine's responder_calls.csv and the
               analysis folder are never changed.
-  Counted     % responding is given as scored and after review, for all cells, the cells chosen
+  Counted     % responding is given before and after review, for all cells, the cells chosen
               blind, those added later, those carried over and the quiet cells, with and without
               the cells below zero.
               ..._percent_responding_<analysis>.csv keeps its rows and columns and gains five on
@@ -141,7 +141,7 @@ have the control yet; the marks are kept and counted by the plugin.
   Re-run      When a new analysis of the same recording finishes, the marks of the most recent
               earlier analysis are carried over for every cell whose automatic call and outline
               are unchanged. The others are dropped, and the finish message lists them, for
-              example "Cell 69: now scored as did not respond", "Cell 12 of the earlier analysis:
+              example "Cell 69: call changed", "Cell 12 of the earlier analysis:
               no longer measured", "Cell 4: outline changed". The earlier analysis keeps its own
               review file. If you removed the marks of the most recent analysis, none are carried,
               and older marks do not come back.
