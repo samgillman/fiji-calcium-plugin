@@ -784,7 +784,8 @@ try {
         Roi[] cells = null; onUI { cells = ws.hooks.cellRois() }
         def checked = ws.hooks.runSensitivity(cells, new File(work, 'ws_').path, { })
         // it reads only the pictures made at the start, so it runs on, and what it says is its own result (Cellpose fails here)
-        assert checked.text.startsWith('Sensitivity check not completed: Cellpose made no outlines') : 'the recording closed during the sensitivity check: "' + checked.text + '"'
+        // (Cellpose is /usr/bin/false where that exists, so it makes no outlines; elsewhere, as on Windows, it is not found)
+        assert checked.text.startsWith('Sensitivity check not completed: Cellpose ') && !checked.text.contains(CLOSED) : 'the recording closed during the sensitivity check: "' + checked.text + '"'
         closeWindow(ws.hooks); onUI { manager.reset() }
         // the picture of other frames before the response
         ImagePlus WB = recording('WB.tif', 30, cellsA, 152); onUI { WB.show() }
@@ -801,7 +802,7 @@ try {
             Progress.metaClass.begin = { -> def task = realBegin.invoke(delegate); closeInFiji(WC); task } }])   // closed as the suggestions begin
         onUI { wc.hooks.suggestBtn.doClick() }
         assert waitFor(60) { wc.hooks.suggestBtn.enabled }
-        onUI { assert clean(wc.hooks.info.text).startsWith('Suggestions: Cellpose made no outlines') : 'the recording closed while the suggestions were made: "' + clean(wc.hooks.info.text) + '"' }
+        onUI { assert clean(wc.hooks.info.text).startsWith('Suggestions: Cellpose ') && !clean(wc.hooks.info.text).contains(CLOSED) : 'the recording closed while the suggestions were made: "' + clean(wc.hooks.info.text) + '"' }
         closeWindow(wc.hooks)
         println 'PASS: workclose: the recording closed while the picture of frames before the response is made: it says "' + CLOSED + '"; closed while Suggest cells or the sensitivity check runs, which read only the pictures made at the start: each reports its own result'
     }
