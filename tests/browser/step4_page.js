@@ -2141,6 +2141,7 @@ const assert = require('assert/strict');
     assert.equal((await page.locator('#quality-list .flag-filter').allTextContents())[0], 'Possible passing object: 1 cell, 0 responders');
     const saidAfter = await page.evaluate(() => window.calciumStep4.S.said);
     assert.match(saidAfter, /after review/); assert.equal(await text('#status'), saidAfter, 'what Fiji said after the mark is the status line');
+    assert.ok(await page.locator('#status').evaluate((e) => e.scrollHeight <= e.clientHeight + 1), 'and it is read in full');
     assert.deepEqual(await oddShapes(), [], 'Remove mark has the page\'s height and corner');
     await page.screenshot({ path: path.join(out, 'page-review-marked.png') });
     // The tables: the summary and the per-cell tables split by the call after review; the tally with the share after review.
@@ -2180,6 +2181,11 @@ const assert = require('assert/strict');
       ['66.7%', 'Capsaicin: 2 of 3 evaluable cells after review; 2 before review', '2 cells marked', '2 of 3 cells were reclassified after manual review: 1 from responder to non-responder (passing object) and 1 from non-responder to responder (other).']);
     // Remove mark: once the last is gone, everything is as it was before any mark; the Show list leaves Marked and keeps the cell.
     await page.click('#mark'); await page.waitForFunction(() => !window.calciumStep4.S.results.review.marks.Cell002);
+    // A cell marked out of the group the Show list is on stays selected: the list goes to all cells.
+    await page.selectOption('#group', '1'); await openCell('Cell005'); await page.click('#mark'); await page.selectOption('#mark-reason', 'Noise'); await page.click('#mark-save');
+    await page.waitForFunction(() => !!window.calciumStep4.S.results.review.marks.Cell005);
+    assert.deepEqual([await page.evaluate(() => window.calciumStep4.S.cell), await page.inputValue('#group'), await page.inputValue('#cell')], ['Cell005', '0', 'Cell005'], 'the cell stays selected after Save');
+    await page.click('#mark'); await page.waitForFunction(() => !window.calciumStep4.S.results.review.marks.Cell005);
     await page.selectOption('#group', '6'); await openCell('Cell001'); await page.click('#mark');
     await page.waitForFunction(() => Object.keys(window.calciumStep4.S.results.review.marks).length === 0);
     assert.deepEqual(await page.locator('#group option').allTextContents(), ['All cells (6)', 'Responded (2)', 'Did not respond (1)', 'Excluded (2)', 'Unscorable (1)', 'Needs quality review (3)']);
