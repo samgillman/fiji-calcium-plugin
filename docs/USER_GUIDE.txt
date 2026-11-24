@@ -1,5 +1,5 @@
 Ca²⁺ IMAGING (WANG LAB)
-A plugin for Fiji / ImageJ: calcium imaging, cells step by step.  Version 2026.11.22.2.
+A plugin for Fiji / ImageJ: calcium imaging, cells step by step.  Version 2026.11.23.1.
 
 STEP 4 — LOCAL SIMPLECA ANALYSIS
 After Measure and save, press Open analysis page. Step 4 opens as a page in your browser, served

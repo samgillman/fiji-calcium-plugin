@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2026.11.23.1
 
 One recording, its own outlines. With an empty ROI Manager at the start and the recording left open in Fiji, every file Measure and save writes is as in 2026.11.22.2, byte for byte, apart from the version number.
 
