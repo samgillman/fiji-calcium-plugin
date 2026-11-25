@@ -2842,8 +2842,8 @@ class CalciumAnalysisPlot extends javax.swing.JPanel {
         CalciumTheme.smooth(g); g.setFont(CalciumTheme.font(java.awt.Font.PLAIN,-1f)); def fm=g.getFontMetrics()
         l=62;w=Math.max(1,getWidth()-l-18)
         boolean many=showAll&&all.length>0
-        // the key above the plot: the mean, the cell, the traces behind them by call, the dashed lines and the bands, each
-        // named once (as in the Step 4 page's legend); it takes as many lines as it needs, and the plot starts below it
+        // the key above the plot: the cell, the mean, the traces behind them by call, the dashed lines and the bands, each
+        // named once and in the order of the Step 4 page's legend; it takes as many lines as it needs, and the plot starts below it
         def counts=[]
         if(many) {
             int yes=allCalls.count{it=='Responded'} as int,no=allCalls.count{it=='Did not respond'} as int
@@ -2854,7 +2854,7 @@ class CalciumAnalysisPlot extends javax.swing.JPanel {
         // a band is named whenever the window has it, for a cell without a run too
         List calls=windowCalls+[responseCall],bands=bandsOf(responseCall,stimulusStart,stimulusEnd)
         List named=bands.withIndex().findAll{band,int i->i==0?shown(band):calls.any{Map call->double[] span=windowOf(call);shown(bandsOf(call,span[0],span[1])[i] as List)}}.collect{band,int i->[band[2],0f,band[3],'box']}
-        def keyOf={boolean traced,List levels->List key=[[CalciumTheme.BLUE,2.4f,'mean ± SEM']];if(traced)key<<[CalciumTheme.INK,1.7f,cell];key+counts+levels+named}
+        def keyOf={boolean traced,List levels->List key=[];if(traced)key<<[CalciumTheme.INK,1.7f,cell];key<<[CalciumTheme.BLUE,2.4f,'mean ± SEM'];key+counts+levels+named}
         def entries=keyOf(cell&&selected.length>0,levelsOf(responseCall,stimulusStart,stimulusEnd))   // a cell without a trace has no entry: why is said under the plot
         def laid={List list->int line=0,run=0;def places=[];list.each{entry->int need=21+fm.stringWidth(entry[2] as String)+14;if(run>0&&run+need>w){line++;run=0};places<<[run,line];run+=need};[places,line]}
         def (places,lines)=laid(entries)

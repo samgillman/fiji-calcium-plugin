@@ -208,6 +208,9 @@ try {
         // the key names the bands and the dashed lines in the words of the Step 4 page's legend: here the required rise, and the
         // noise threshold at the baseline mean (the minimum rise is the required rise, under it)
         assert ['required rise','noise threshold','F₀ frames','baseline','response window','response'].every{drawn.contains(it)} && !drawn.contains('minimum rise') && !drawn.contains('baseline mean') : 'the key: '+drawn
+        // in the order of the page's legend: the cell, the mean, the traces behind it, the dashed lines, then the bands
+        List keyed=drawn.findAll{it in ['Cell001','mean ± SEM']+keyWords || it==~/(responded|did not respond|no call) \(\d+\)/}
+        assert keyed==['Cell001','mean ± SEM','responded (2)','did not respond (1)','no call (1)','required rise','noise threshold','F₀ frames','baseline','response window','response'] : 'the order of the key: '+keyed
         // a band has a filled box of its colour; a dashed line a dashed line (its colour, then a gap); the mean an unbroken line
         def box=swatch('response window'),dash=swatch('required rise'),solid=swatch('mean ± SEM')
         assert box.row[2..14].every{it==0xFFF0DC} && box.above==0xFFF0DC : 'the response window: a filled box '+box
