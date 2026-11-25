@@ -52,6 +52,19 @@ String A='SimpleCa-20261101-100000-aaaaaaaa',B='SimpleCa-20261101-110000-bbbbbbb
 def copy={String name->def dir=new File(work,name);dir.mkdirs();new File('tests/fixtures/simpleca').listFiles().findAll{it.isFile()}.each{new File(dir,it.name).bytes=it.bytes};dir}
 File dirA=copy(A)
 def snapshot={->work.listFiles().findAll{it.isFile()}.sort{it.name}.collectEntries{[it.name,Installer.digest(it.bytes)]}}
+// A file that stays where it is and cannot be read, so a test can show that nothing reads it: on macOS and Linux it is made
+// unreadable; Windows has no unreadable files, so there it is locked, and Windows refuses reads of a locked file, also from
+// this process. Returns what gives the file back. Fails at once when the file can still be read.
+def lockAway={File f->
+    Closure back
+    if(f.setReadable(false)&&!f.canRead())back={->f.setReadable(true)}
+    else{def channel=java.nio.channels.FileChannel.open(f.toPath(),java.nio.file.StandardOpenOption.READ,java.nio.file.StandardOpenOption.WRITE);def lock=channel.lock();back={->lock.release();channel.close()}}
+    boolean read=false
+    try{f.bytes;read=true}catch(IOException ignored){}
+    if(read){back();assert false : 'the file cannot be read while it is locked: '+f}
+    assert f.isFile() : 'the locked file is still there: '+f
+    back
+}
 List names=(1..6).collect{String.format('Cell%03d',it)}
 String unchecked='Not checked for a passing object: the raw gray values and backgrounds are not beside the analysis.'
 
@@ -422,9 +435,9 @@ try {
         ui.showFrame(17);double moment=ui.plot.moment
         Map tablesBefore=['responder_calls.csv','responder_counts.csv'].collectEntries{[it,new File(dirB,it).bytes]}
         // the window's traces are used for every mark: the traces table is not read again (here it cannot be read)
-        File tracesB=new File(dirB,'normalized_traces.csv');assert tracesB.setReadable(false)
+        Closure unlockB=lockAway(new File(dirB,'normalized_traces.csv'))
         focusOn=ui.noteField;asked.clear()
-        try{ui.saveMark.doClick()}finally{tracesB.setReadable(true)}
+        try{ui.saveMark.doClick()}finally{unlockB()}
         assert said()=='' && ui.formCell==null : said()
         assert asked.size()==1 && asked[0].is(ui.removeMark) && ui.removeMark.visible : 'after Save the focus goes to Remove mark: '+asked
         focusOn=null
@@ -644,14 +657,14 @@ try {
         assert ui.cellStatus.toolTipText.startsWith('<html>Marked '+minute(mark.time as String)+' in '+B+'<br>') : 'when and where the mark was made, to the minute as on the page: '+ui.cellStatus.toolTipText
         paint('fiji_traces_carried')
         // the finish message counts the marks from the traces the window holds: normalized_traces.csv is not read again
-        File tracesA=new File(dirA,'normalized_traces.csv');assert tracesA.setReadable(false) : 'the traces are locked'
+        Closure unlockA=lockAway(new File(dirA,'normalized_traces.csv'))
         try{
             ui.cells.selectedItem='Cell002';ui.markButton.doClick();ui.reasonBox.selectedItem='Bad outline';ui.saveMark.doClick()
             assert Review.read(dirA,ui.measurement).marks.Cell002?.reviewed=='Responded' : said()
             assert rowOf(ui.calls,[Cell:'Cell002',Role:'Stimulus'])[-2..-1]==['Responded','Bad outline'] : 'a mark without a note: '+rowOf(ui.calls,[Cell:'Cell002',Role:'Stimulus'])
             assert ui.status.text=='Complete. Protocol, inputs and tables saved in '+A+'. All cells: 2 of 3 responded (66.7 %), after review 2 of 3 (66.7 %). '+carried+' '+unchecked : ui.status.text
             ui.removeMark.doClick()
-        }finally{tracesA.setReadable(true)}
+        }finally{unlockA()}
         // the carried text stays until the next run, after the last mark is removed too
         ui.cells.selectedItem='Cell001';ui.removeMark.doClick()
         assert ui.status.text=='Complete. Protocol, inputs and tables saved in '+A+'. '+carried+' '+unchecked : 'the finish message follows the marks: '+ui.status.text
