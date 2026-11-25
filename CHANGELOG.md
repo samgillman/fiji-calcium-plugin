@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2026.11.24.1
 
 **New analyses change results.** A cell's noise is now the larger of its baseline SD and its whole-trace noise. That includes a recording analysed before and opened again. Saved analyses and protocol files keep the rule they were saved with.
 
