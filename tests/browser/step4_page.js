@@ -2016,13 +2016,13 @@ const assert = require('assert/strict');
     // and the page reads them as Fiji reads a saved table. Cell001 responded and an object passed through it; Cell002 did not
     // respond, with a rise on its edge; Cell005 responded while the field moved, in short separate crossings.
     const checksHeader = fs.readFileSync(path.join(out, 'Fixture recording_call_checks_browser-results.csv'), 'utf8').split(/\r?\n/)[0];
-    assert.equal(checksHeader, 'Cell,Call,Flag,Rule,Event_first_frame,Event_last_frame,Detail,Near_ring_sectors_usable,Area_pixels,Ring_measured,Field_movement_measured,Passing_object_check,Not_checked_because,Crossings,Longest_crossing_samples');
+    assert.equal(checksHeader, 'Cell,Call,Flag,Rule,Event_first_frame,Event_last_frame,Detail,Near_ring_sectors_usable,Area_pixels,Ring_measured,Field_movement_measured,Passing_object_check,Not_checked_because,Crossings,Longest_crossing_samples,QC_flags');
     const passDetail = 'seen outside at the left at frame 8, 1.4 x the cell\'s rise, and at the right at frame 13, 1.2 x', edgeDetail = 'core rises 0.20 x the whole outline, ring 1.6 x the rim';
     const movedDetail = 'the field moved 2.1 px between frames 3 and 5; otherwise possible passing object, frames 4 to 7: seen outside at the top at frame 3, 1.1 x the cell\'s rise, and at the bottom at frame 8, 1.0 x; 3 crossings, the longest 2 samples';
-    const checksTable = (cell002) => [checksHeader, 'Cell001,Responded,"possible passing object, frames 9 to 12",passes through,9,12,"' + passDetail + '",8,400,yes,yes,checked,,2,6', cell002,
-      'Cell003,Excluded,,,,,,8,400,yes,yes,not checked,no call,,', 'Cell004,Excluded,,,,,,8,400,yes,yes,not checked,no call,,',
-      'Cell005,Responded,"field moved, frames 3 to 5; short separate crossings",field moved; short separate crossings,4,7,"' + movedDetail + '",8,400,yes,yes,checked,,3,2', 'Cell006,Unscorable,,,,,,8,400,yes,yes,not checked,no call,,'].join('\n') + '\n';
-    fs.writeFileSync(path.join(out, 'checks.csv'), checksTable('Cell002,Did not respond,"rise on the left edge, not in the cell, frames 20 to 24",on the edge,20,24,"' + edgeDetail + '",7,400,yes,yes,checked,,0,0'));
+    const checksTable = (cell002) => [checksHeader, 'Cell001,Responded,"possible passing object, frames 9 to 12",passes through,9,12,"' + passDetail + '",8,400,yes,yes,checked,,2,6,POSSIBLE_PASSING_OBJECT', cell002,
+      'Cell003,Excluded,,,,,,8,400,yes,yes,not checked,no call,,,', 'Cell004,Excluded,,,,,,8,400,yes,yes,not checked,no call,,,',
+      'Cell005,Responded,"field moved, frames 3 to 5; short separate crossings",field moved; short separate crossings,4,7,"' + movedDetail + '",8,400,yes,yes,checked,,3,2,FIELD_MOVED; SHORT_SEPARATE_CROSSINGS', 'Cell006,Unscorable,,,,,,8,400,yes,yes,not checked,no call,,,'].join('\n') + '\n';
+    fs.writeFileSync(path.join(out, 'checks.csv'), checksTable('Cell002,Did not respond,"rise on the left edge, not in the cell, frames 20 to 24",on the edge,20,24,"' + edgeDetail + '",7,400,yes,yes,checked,,0,0,RISE_ON_EDGE'));
     fs.writeFileSync(path.join(out, 'slow'), '');   // the engine and the checks take a while, to be seen running
     assert.equal(await text('#mark'), 'Mark as not a responder'); const runFrom = await page.evaluate(() => window.calciumStep4.S.version);
     await page.check('#confirmed'); await page.click('#analyze');
@@ -2337,7 +2337,7 @@ const assert = require('assert/strict');
     await page.click('#mark'); await page.waitForFunction((said) => document.getElementById('mark-said').textContent === said, refusedHere);
     await page.evaluate(() => { window.calciumStep4.S.results.review.folder = 'browser-results'; });
     fs.writeFileSync(path.join(out, 'rerun'), '');
-    fs.writeFileSync(path.join(out, 'checks.csv'), checksTable('Cell002,Responded,,,,,,7,400,yes,no,not checked,no rise at the peak,0,0').replace(/,yes,yes,/g, ',yes,no,'));
+    fs.writeFileSync(path.join(out, 'checks.csv'), checksTable('Cell002,Responded,,,,,,7,400,yes,no,not checked,no rise at the peak,0,0,').replace(/,yes,yes,/g, ',yes,no,'));
     // A poll that comes while Fiji is still finishing the run (its version moved on, not yet its finish message or tone) reads the
     // results; once the run is over the status line is the finish message all the same.
     let finishing = 0; const versionBefore = await page.evaluate(() => window.calciumStep4.S.version);

@@ -212,7 +212,7 @@ try {
     def countsTable=Csv.read(new File(dirB,'responder_counts.csv'))   // and a row of counts for the control window
     Csv.write(new File(dirB,'responder_counts.csv'),countsTable+countsTable.drop(1).collect{List line->def row=new ArrayList(line);['Role':'Control','Stimulus':'Ionomycin'].each{k,v->row[countsTable[0].indexOf(k)]=v};row})
     File checksB=new File(work,'Review_call_checks_'+B+'.csv'),reviewB=new File(work,'Review_reviewed_calls_'+B+'.csv'),percentB=new File(work,'Review_percent_responding_'+B+'.csv')
-    def row={String cell,String call,String flag,String rule,Object first,Object last,String detail,String check,String why->[cell,call,flag,rule,first,last,detail,8,400,'yes','yes',check,why,'','']}
+    def row={String cell,String call,String flag,String rule,Object first,Object last,String detail,String check,String why->[cell,call,flag,rule,first,last,detail,8,400,'yes','yes',check,why,'','',Checks.codesOf(rule)]}
     def none={String cell,String call->row(cell,call,'','','','','','not checked','no call')}
     // first: a field that moved and short separate crossings on one cell, with the first frame of its event
     Csv.write(checksB,[Checks.HEADER,row('Cell001','Responded','','','','','','checked',''),row('Cell002','Did not respond','','','','','','checked',''),none('Cell003','Excluded'),none('Cell004','Excluded'),
@@ -384,7 +384,7 @@ try {
         refused('Noise','one\ttwo','The note must be one line.')
         ui.noteField.text='x'*130;assert ui.noteField.text.length()==120 : 'the note box takes at most 120 characters'
         // the review's own refusals: a review file that is not this analysis's, a percent table open in another program, a run going on
-        reviewB.text=Review.HEADER.join(',')+'\nCell002,Did not respond,Responded,Noise,,2026-11-01T10:00:00Z,another,x,,\n'
+        reviewB.text=Review.HEADER.join(',')+'\nCell002,Did not respond,Responded,Noise,,2026-11-01T10:00:00Z,another,x,,,manual\n'
         refused('Passing object','','The review file Review_reviewed_calls_'+B+'.csv is for another analysis, so its marks are not used. Move it out of the folder to review this analysis again.')
         assert reviewB.delete() : 'the other analysis\'s review file is taken away'
         assert percentB.setWritable(false) : 'the percent table is locked'
@@ -410,7 +410,7 @@ try {
 
         // ---- a review file for another analysis is not applied: no mark controls, and every cell of the stimulus says why and
         // what to do, in the words a refused mark is given; the control window does not
-        reviewB.text=Review.HEADER.join(',')+'\nCell002,Did not respond,Responded,Noise,,2026-11-01T10:00:00Z,another,x,,\n'
+        reviewB.text=Review.HEADER.join(',')+'\nCell002,Did not respond,Responded,Noise,,2026-11-01T10:00:00Z,another,x,,,manual\n'
         String other='The review file Review_reviewed_calls_'+B+'.csv is for another analysis, so its marks are not used.'
         ui.loadResults(dirB);ui.showGroup(0)
         List kept=['Cell001','Cell002','Cell003'].collect{ui.cells.selectedItem=it

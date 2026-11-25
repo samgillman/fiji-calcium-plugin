@@ -204,9 +204,10 @@ println 'PASS: when the files around the cells cannot be written, Measure saves 
 // ---- the checks, read as the page reads them
 def Session=loader.loadClass('CalciumAnalysisSession'),Server=loader.loadClass('CalciumWebServer')
 def slurp=new JsonSlurper()
-def checked={Map data,String name,Closure before=null->   // before(session): what happens in Fiji before the analysis runs
+def checked={Map data,String name,Closure before=null,Closure after=null->   // before(session): what happens in Fiji before the analysis runs; after(call, session): asked of the page once it has run
     def session=Session.newInstance(data.findAll{!(it.key in ['steps','prefix'])});session.runtime.home=new File(root,'runtime')
     File made=analysis(data.folder,data.recording,name);session.performAnalysis={rt,input,settings,out,job->made}
+    def engine={->made.listFiles().sort{it.name}.collectEntries{[it.name,Installer.digest(it.bytes)]}};Map written=engine()
     def server=Server.newInstance(session:session);server.start()
     def call={String path,Object body=null->def c=(HttpURLConnection)new URL(server.url()+path).openConnection(java.net.Proxy.NO_PROXY);c.connectTimeout=5000;c.readTimeout=30000
         if(body!=null){c.requestMethod='POST';c.doOutput=true;c.setRequestProperty('Content-Type','application/json');c.outputStream.withCloseable{it.write(JsonOutput.toJson(body).getBytes('UTF-8'))}}
@@ -218,6 +219,8 @@ def checked={Map data,String name,Closure before=null->   // before(session): wh
         long end=System.nanoTime()+60000000000L;while(session.busy&&System.nanoTime()<end)Thread.sleep(20)
         def state=call('api/state')[1];assert !state.busy && state.tone=='good' : state.message
         def results=call('api/results')[1]
+        assert engine()==written : 'no file of the engine is written: the checks go beside the percent table'
+        if(after!=null)after(call,session)
         // read again from the saved file, as when an analysis is opened without running it
         session.load(made);def reread=slurp.parseText(session.resultsJson).checks
         assert reread.cells==results.checks.cells && reread.file==results.checks.file && reread.ringMeasured==results.checks.ringMeasured && reread.note==results.checks.note : 'the saved checks read back the same, the note with them'
@@ -246,11 +249,68 @@ assert answer('left').nearSectors==ringsOf.nearUsable(2) && ringsOf.pixels(2,8)<
 // rises of one frame are counted and not flagged; a responder with three rises of two frames is
 assert answer('single').text=='' && answer('single').crossings==3 && answer('single').longestCrossing==1
 assert answer('blips').text=='short separate crossings' && answer('blips').rule=='short separate crossings' && answer('blips').crossings==3 && answer('blips').longestCrossing==2 && answer('blips').detail=='3 crossings, the longest 2 samples'
-assert answer('crossed').flags==[[text:'possible passing object, frames 55 to 62',rule:'passes through']] && answer('left').flags==[] && answer('blips').flags==[[text:'short separate crossings',rule:'short separate crossings']]
+assert answer('crossed').flags==[[text:'possible passing object, frames 55 to 62',rule:'passes through',code:'POSSIBLE_PASSING_OBJECT']] && answer('left').flags==[] && answer('blips').flags==[[text:'short separate crossings',rule:'short separate crossings',code:'SHORT_SEPARATE_CROSSINGS']]
 assert Checks.answer([rows:[[Cell:'a',Flag:'rise on the top edge, not in the cell, frames 3 to 9; short separate crossings',Rule:'on the edge; short separate crossings']]]).cells.a.flags*.rule==['on the edge','short separate crossings'] : 'two flags are given one by one too'
 assert row('blips').Crossings=='3' && row('blips').Longest_crossing_samples=='2' && row('left').Crossings=='1' && (row('left').Longest_crossing_samples as int)>50
 assert results.tally==slurp.parseText(JsonOutput.toJson(Settings.tally(new File(still.folder,'SimpleCa-first'),still))) && results.tally.rows[0].counted==[5,6,6] : 'a flag changes no call and no count'
 println 'PASS: a crossing object, an object on an edge, neighbours responding in place and short separate crossings get the stated flags; calls and counts are unchanged'
+
+// ---- the flags as codes: QC_flags is the table's last column and holds the codes of the row's flags, joined as the engine
+// joins its own codes in its QC_flags column (responder_qc_flags in analysis/upstream/responders.R)
+assert rows[0]==Checks.HEADER_BEFORE+['QC_flags'] && Checks.JOIN=='; '
+assert row('crossed').QC_flags=='POSSIBLE_PASSING_OBJECT' && row('edge').QC_flags=='RISE_ON_EDGE' && row('blips').QC_flags=='SHORT_SEPARATE_CROSSINGS' && row('left').QC_flags=='' && row('single').QC_flags=='' : rows
+assert answer('crossed').codes==['POSSIBLE_PASSING_OBJECT'] && answer('crossed').qcFlags=='POSSIBLE_PASSING_OBJECT' && answer('edge').codes==['RISE_ON_EDGE'] && answer('left').codes==[] && answer('left').qcFlags==''
+assert results.checks.labels==[POSSIBLE_PASSING_OBJECT:'Possible passing object',RISE_ON_EDGE:'Rise on the edge',FIELD_MOVED:'Field moved',SHORT_SEPARATE_CROSSINGS:'Short separate crossings'] && results.checks.join=='; '
+Map both=Checks.answer([rows:[[Cell:'a',Flag:'field moved, frames 3 to 5; short separate crossings',Rule:'field moved; short separate crossings']]]).cells.a
+assert both.codes==['FIELD_MOVED','SHORT_SEPARATE_CROSSINGS'] && both.qcFlags=='FIELD_MOVED; SHORT_SEPARATE_CROSSINGS' && both.flags*.code==['FIELD_MOVED','SHORT_SEPARATE_CROSSINGS'] && Checks.codesOf('')=='' && Checks.codesOf(null)==''
+// a table written by 2026.11.24.1 has no QC_flags column: it reads, with the codes from its Rule column, here and on the page
+File dirFirst=new File(still.folder,'SimpleCa-first');byte[] newTable=saved.bytes
+Csv.write(saved,Csv.read(saved).collect{it.dropRight(1)});assert Csv.read(saved)[0]==Checks.HEADER_BEFORE
+Map old=Checks.saved(dirFirst,still)
+assert old!=null && old.rows.find{it.Cell==cellOf.crossed}.QC_flags=='POSSIBLE_PASSING_OBJECT' && slurp.parseText(JsonOutput.toJson(Checks.answer(old))).cells==results.checks.cells : 'the old table gives the same checks, codes too'
+def oldSession=Session.newInstance(still.findAll{!(it.key in ['steps','prefix'])});oldSession.load(dirFirst)
+assert slurp.parseText(oldSession.resultsJson).checks.cells==results.checks.cells
+saved.bytes=newTable
+println 'PASS: the call checks table ends with QC_flags, the codes of its flags joined as the engine joins its own; a table without the column reads, with the codes from its rules; no file of the engine is written'
+
+// ---- around the cell: what is shown is what the check used, from the same code (CalciumPassingObject.traces through check)
+Map context=Checks.aroundContext(dirFirst,still),checksFirst=Checks.answer(Checks.saved(dirFirst,still))
+def aroundOf={String cell->Checks.aroundCell(context,checksFirst,cellOf[cell])}
+// the check's own traces, from inputs the test reads itself: the tables beside the analysis and the saved ring and core values
+def rawTable=Csv.read(new File(still.prefix+'gray_values_raw.csv')),groundTable=Csv.read(new File(still.prefix+'background_next_to_each_cell.csv'))
+float[][] ringValues=Rings.read(values,names as List,N);List zoneCounts=Csv.read(pixels).drop(1)
+at.keySet().each{String cell->
+    int c=(names as List).indexOf(cellOf[cell])
+    double[] raw=rawTable.drop(1).collect{Double.parseDouble(it[c+1])} as double[],ground=groundTable.drop(1).collect{Double.parseDouble(it[c+1])} as double[]
+    float[][] zone=new float[25][];(0..<25).each{int z->if((zoneCounts[c][3+z] as int)>=12)zone[z]=ringValues[c*25+z]}
+    Map ownTraces=Passing.traces(raw,ground,zone,0,39,results.calls[cellOf[cell]].Peak_s as int)
+    Map shown=aroundOf(cell)
+    assert shown.why=='' && shown.cell==cellOf[cell] && shown.name=='Cell '+(c+1) && (shown.rise as List)==(ownTraces.cell as List) : cell+': '+shown.why
+    assert (0..<25).every{int z->shown.zones[z].zone==z && shown.zones[z].key==Rings.NAMES[z] && shown.zones[z].usable==(ownTraces.trace[z]!=null) && (shown.zones[z].trace as List)==(ownTraces.trace[z] as List)} : cell
+    // the cell's rise as the rule defines it: raw minus background minus its F0 mean, averaged over 3 frames
+    double[] difference=(0..<N).collect{raw[it]-ground[it]} as double[];double f0=(0..39).sum{difference[it]}/40d
+    (0..<N).each{int f->int lo=Math.max(0,f-1),hi=Math.min(N-1,f+1);assert Math.abs(shown.rise[f]-(lo..hi).sum{difference[it]-f0}/(hi-lo+1))<1e-9}
+    assert (shown.time as List)==(0..<N).collect{it as double} && shown.eventFirst==answer(cell).firstFrame && shown.eventLast==answer(cell).lastFrame && shown.codes==answer(cell).codes && shown.text==answer(cell).text
+    assert shown.others==(0..<8).findAll{int z->shown.zones[z].usable&&!(z in shown.lines*.zone)} : cell
+}
+// the zones each flag rests on, named by place, the frames they were seen at, and the flagged frames
+Map crossedAround=aroundOf('crossed'),edgeAround=aroundOf('edge')
+assert crossedAround.lines*.part==['before','after'] && crossedAround.lines[0].place in ['ring, left','far ring, left'] && crossedAround.lines[1].place in ['ring, right','far ring, right'] : crossedAround.lines
+assert answer('crossed').detail.startsWith('seen outside at the left at frame '+crossedAround.lines[0].frame+',') && answer('crossed').detail.contains('at the right at frame '+crossedAround.lines[1].frame+',') && crossedAround.band==[55,62]
+assert edgeAround.lines.collect{[it.zone,it.place,it.part,it.frame]}==[[18,'rim, lower right','rim',null],[1,'ring, lower right','ring',null],[16,'core','core',null]] && edgeAround.band==[60,90] : edgeAround.lines
+['left','right','single','blips'].each{assert aroundOf(it).lines.collect{[it.zone,it.place,it.part]}==[[16,'core','core']] && aroundOf(it).band==null : 'no flag of rule A or B: the cell, the core and the ring sectors, no band'}
+assert Checks.place(4)=='ring, left' && Checks.place(13)=='far ring, upper left' && Checks.place(18)=='rim, lower right' && Checks.place(16)=='core'
+// when there is nothing to show, why, in the plugin's words
+assert Checks.aroundCell(context,null,cellOf.crossed).why=='This analysis was made before the calls were checked.' && Checks.AROUND_CONTROL=='Checks are made for the primary stimulus.'
+assert Checks.aroundCell(context,checksFirst,'Cell_nobody').why=='There is no cell Cell_nobody in this analysis.'
+def changedTable=Csv.read(saved);changedTable.find{it[0]==cellOf.crossed}[5]='61';Csv.write(saved,changedTable)
+assert Checks.aroundCell(context,Checks.answer(Checks.saved(dirFirst,still)),cellOf.crossed).why=='Not shown: the tables beside the analysis have changed since the check.' : 'what the check found then is not what it finds now'
+saved.bytes=newTable
+values.bytes=pixelsAtMeasure
+assert Checks.aroundCell(Checks.aroundContext(dirFirst,still),checksFirst,cellOf.crossed).why=='Not shown: the ring and core values table has changed since it was measured.'
+values.bytes=valuesAtMeasure
+assert !still.folder.list().any{it.endsWith('.part')}
+println 'PASS: around the cell gives the traces the check used, the zones its flag rests on and the flagged frames, or why not in plain words'
 
 // ---- a recording measured before this build: the files are measured when the analysis runs, and are the same files
 byte[] recordBefore=done.bytes
@@ -274,6 +334,8 @@ def closedRows=Csv.read(new File(still.folder,'still_call_checks_SimpleCa-fourth
 assert closedRows.every{it[rows[0].indexOf('Passing_object_check')]=='not checked'&&it[rows[0].indexOf('Ring_measured')]=='no'&&it[rows[0].indexOf('Not_checked_because')]=='ring and core were not measured and the recording is not open'}
 assert closed.checks.cells[cellOf.crossed].text=='' && closed.checks.cells[cellOf.crossed].firstFrame==55 && !closed.checks.cells[cellOf.crossed].checked && closed.checks.cells[cellOf.blips].text=='short separate crossings'
 assert closed.checks.cells[cellOf.crossed].why=='ring and core were not measured and the recording is not open' && closed.checks.cells[cellOf.crossed].detail=='' && closed.checks.cells[cellOf.blips].detail=='3 crossings, the longest 2 samples' : 'the detail holds the flags only; why apart'
+File dir4=new File(still.folder,'SimpleCa-fourth')
+assert Checks.aroundCell(Checks.aroundContext(dir4,still),Checks.answer(Checks.saved(dir4,still)),cellOf.crossed).why=='Not checked for a passing object: ring and core were not measured and the recording is not open.' : 'around the cell says what the checks say'
 // another recording open under the same name is not measured
 def other=movie(false);other.getStack().getProcessor(1).add(7)
 def wrong=checked(still+[movie:other],'SimpleCa-fifth')
@@ -294,6 +356,22 @@ assert !lookalikeRun.checks.ringMeasured && lookalikeRun.checks.note=='Not check
 lookalike.close();ij.macro.Interpreter.batchMode=false
 println 'PASS: missing or foreign ring files are measured again when the recording is open, and the check is not made when it is not; a recording opened again is measured'
 
+// ---- around the cell on request, over HTTP, for the cell asked for; the results do not carry it
+[values,pixels].each{if(!it.exists())it.bytes=(it==values?valuesAtMeasure:pixelsAtMeasure)}
+def asked=checked(still,'SimpleCa-around',{session->try{session.around('x');assert false}catch(IllegalStateException early){assert early.message=='Run an analysis first.'}}){call,session->
+    File dir=new File(still.folder,'SimpleCa-around');String cell=URLEncoder.encode(cellOf.crossed,'UTF-8')
+    def got=call('api/around?cell='+cell+'&folder=SimpleCa-around')
+    assert got[0]==200 && got[1].folder=='SimpleCa-around' && got[1].why=='' && got[1].lines*.part==['before','after'] && got[1].band==[55,62] && got[1].zones.size()==25 && got[1].rise.size()==N : got
+    assert got[1].findAll{it.key!='folder'}==slurp.parseText(Session.json(Checks.aroundCell(Checks.aroundContext(dir,still),Checks.answer(Checks.saved(dir,still)),cellOf.crossed))) : 'the page is given what aroundCell gives'
+    assert call('api/around?cell='+cell)[1]==got[1] : 'read once per analysis, the same every time'
+    assert call('api/around?cell='+cell+'&folder=SimpleCa-other')==[400,[error:'This is for another analysis. Reload the page.']] && call('api/around')==[400,[error:'Say which cell.']]
+    assert call('api/around?cell=Cell_nobody')[1].why=='There is no cell Cell_nobody in this analysis.'
+    def everything=call('api/results')[1]
+    assert !JsonOutput.toJson(everything.checks).contains('"zones"') && !JsonOutput.toJson(everything.checks).contains('"rise"') : 'the results carry no zone traces'
+}
+assert asked.checks.cells==results.checks.cells
+println 'PASS: the page asks for one cell at a time and is given what the check used around it'
+
 // ---- what the table says when one cell, or the whole analysis, cannot be checked
 File log=new File(root,'analysis.log')
 def sixth=checked(still,'SimpleCa-sixth');assert sixth.checks.ringMeasured && values.bytes==valuesAtMeasure && movement.bytes==movementAtMeasure
@@ -313,6 +391,7 @@ byte[] pixelsKept=pixels.bytes;def edited=Csv.read(pixels);int singleAt=edited.f
 Map noRing=Checks.run(dir6,still,log);Map noRingRow=runRows(noRing)[cellOf.single]
 assert noRingRow.Passing_object_check=='not checked' && noRingRow.Not_checked_because=='no ring around the cell' && noRingRow.Crossings==3 && noRing.note=='' && Checks.saved(dir6,still).note=='' : noRingRow
 assert runRows(noRing)[cellOf.crossed].Passing_object_check=='checked'
+assert Checks.aroundCell(Checks.aroundContext(dir6,still),Checks.answer(Checks.saved(dir6,still)),cellOf.single).why=='Passing object not checked: no ring around the cell.'
 pixels.bytes=pixelsKept
 // a scored cell without a peak time: its own reason, and its crossings still counted
 File dir7=new File(still.folder,'SimpleCa-seventh');dir7.mkdirs();dir6.listFiles().each{new File(dir7,it.name).bytes=it.bytes}
@@ -330,6 +409,7 @@ new File(dir7,'analysis_manifest.csv').bytes=new File(dir6,'analysis_manifest.cs
 new File(dir7,'normalized_traces.csv').text='Time,a\n0\n'
 Map unread=Checks.run(dir7,still,log)
 assert unread.note=='The calls were not checked: the saved analysis could not be read.' && unread.rows==[] && log.text.startsWith('Checks on the calls, the saved analysis: java.io.IOException') : log.text
+assert Checks.aroundContext(dir7,still).why=='The calls were not checked: the saved analysis could not be read.'
 List traceLines=new File(dir6,'normalized_traces.csv').readLines('UTF-8')
 new File(dir7,'normalized_traces.csv').text=traceLines.take(3).join('\n')+'\n'
 assert Checks.run(dir7,still,log).note=='The calls were not checked: the analysis has fewer than 3 frames.'
@@ -348,6 +428,10 @@ def joltRows=Csv.read(new File(jolt.prefix+'field_movement.csv')).drop(1)
 assert joltRows.findAll{Double.parseDouble(it[1])>=8d}*.getAt(0)==['46','47'] : joltRows.findAll{Double.parseDouble(it[1])>=2.5d}
 def shaken=checked(jolt,'SimpleCa-jolt').checks.cells
 assert shaken[cellOf.crossed].text=='field moved, frames 46 to 47' && shaken[cellOf.crossed].rule=='field moved' && shaken[cellOf.crossed].firstFrame==55 : shaken[cellOf.crossed]
+assert shaken[cellOf.crossed].codes==['FIELD_MOVED'] && Csv.read(new File(jolt.folder,'jolt_call_checks_SimpleCa-jolt.csv')).find{it[0]==cellOf.crossed}[-1]=='FIELD_MOVED'
+// around a cell where the field moved: the zones of the rule it stands in for, and the frames the flag names
+File dirJolt=new File(jolt.folder,'SimpleCa-jolt');Map joltAround=Checks.aroundCell(Checks.aroundContext(dirJolt,jolt),Checks.answer(Checks.saved(dirJolt,jolt)),cellOf.crossed)
+assert joltAround.why=='' && joltAround.lines*.part==['before','after'] && joltAround.band==[46,47] && joltAround.codes==['FIELD_MOVED'] : joltAround.findAll{!(it.key in ['zones','rise','time'])}
 assert shaken[cellOf.crossed].detail==~/the field was up to 1\d\.\d px from where it was over the F0 frames, at frames 46 to 47; otherwise possible passing object, frames 55 to 62: seen outside at the left .*/ : shaken[cellOf.crossed].detail
 assert shaken[cellOf.edge].text=='rise on the lower right edge, not in the cell, frames 60 to 90' : 'a movement more than the span before the event leaves the flag: '+shaken[cellOf.edge]
 assert shaken[cellOf.left].text=='' && shaken[cellOf.blips].text=='short separate crossings'
@@ -375,6 +459,12 @@ assert Passing.check(up,ground,gone,0,19,55,10).rule=='' : 'a sector with too fe
 def during=(50..59).collectEntries{[it,200f]}
 float[][] onEdge=with([(17+1):during,(1):(50..59).collectEntries{[it,260f]}])
 assert Passing.check(up,ground,onEdge,0,19,55,10).text=='rise on the lower right edge, not in the cell, frames 51 to 60'
+// the flagged frames shown around a cell are the frames its flag names: on an edge the stretch, wider than the event here
+Map wide=Passing.check(up,ground,with([(17+1):during,(1):(46..63).collectEntries{[it,260f]}]),0,19,55,10)
+assert wide.rule=='on the edge' && [wide.first,wide.last]==[51,60] && wide.edge==[1,47,64] && wide.text.endsWith('frames 47 to 64') : wide.findAll{it.key!='traces'}
+assert Checks.band(wide,['on the edge'],null)==[47,64] && Checks.band(wide,['on the edge','short separate crossings'],null)==[47,64] && Checks.band(wide,['field moved'],[first:40,last:41])==[40,41]
+assert Checks.band(wide,['short separate crossings'],null)==null && Checks.band(wide,[],null)==null && Checks.band(null,['on the edge'],null)==null
+Map passage=Passing.check(up,ground,with([(4):entering,(0):leaving]),0,19,55,10);assert Checks.band(passage,['passes through'],null)==[51,60] && Checks.band(passage,['field moved'],null)==[51,60]
 float[][] inCell=with([(17+1):during,(1):(50..59).collectEntries{[it,260f]},(16):during]);assert Passing.check(up,ground,inCell,0,19,55,10).rule=='' : 'the core rises with the cell: the rise is in the cell'
 float[][] lowRing=with([(17+1):during,(1):(50..59).collectEntries{[it,150f]}]);assert Passing.check(up,ground,lowRing,0,19,55,10).rule=='' : 'the ring must rise at least as much as the rim'
 float[][] noCore=with([(17+1):during,(1):(50..59).collectEntries{[it,260f]}]);noCore[16]=null;assert Passing.check(up,ground,noCore,0,19,55,10).rule=='' : 'no core, no edge rule'
@@ -394,7 +484,7 @@ assert Passing.check(up,ground,nanZone,0,19,55,10).rule=='' : 'a zone with a val
 float[][] flatZero=new float[25][];(0..<25).each{flatZero[it]=new float[n];Arrays.fill(flatZero[it],120f)};flatZero[17+1]=(0..<n).collect{f->f in 50..59 ? 200f : 120f} as float[];flatZero[1]=(0..<n).collect{f->f in 50..59 ? 260f : 120f} as float[]
 Map exact=Passing.check(up,ground,flatZero,0,19,55,10);assert exact.rule=='on the edge' && !exact.detail.contains('NaN') && !exact.detail.contains('Infinity') : exact
 assert Passing.frames(35,35)=='frame 35' && Passing.frames(35,36)=='frames 35 to 36'
-println 'PASS: both rules, the event and the crossings follow their written definitions on plain numbers'
+println 'PASS: both rules, the event, the crossings and the flagged frames shown around a cell follow their written definitions on plain numbers'
 
 // ---- the field-movement guard on plain shifts
 def shifts={Closure place->(0..<N).collect{int f->place(f+1) as double[]} as double[][]}
