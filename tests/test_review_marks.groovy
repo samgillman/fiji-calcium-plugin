@@ -343,7 +343,7 @@ println 'PASS: a review file without Marked_by reads as manual marks and gains t
 def realRun=Checks.getMethod('run',File,Map,File);Map flagsFor=[:]
 Checks.metaClass.static.run={File dir,Map m,File log->
     Map found=realRun.invoke(null,dir,m,log) as Map
-    found.rows.each{Map row->String rule=flagsFor[row.Cell];if(rule){row.Flag=rule.split('; ').collect{it=='passes through'?'possible passing object, frames 5 to 7':it=='on the edge'?'rise on the left edge, not in the cell, frames 5 to 8':it=='field moved'?'field moved, frames 4 to 5':it}.join('; ');row.Rule=rule;row.QC_flags=Checks.codesOf(rule);row.Passing_object_check='checked'}}
+    found.rows.each{Map row->String rule=flagsFor[row.Cell];if(rule){row.Flag=rule.split('; ').collect{it=='passes through'?'possible passing object, frames 5 to 7':it=='on the edge'?'rise on the left edge, not in the cell, frames 5 to 8':it=='field moved'?'field moved, frames 4 to 5':it=='crosses the cell'?'possible passing object, frames 4 to 9':it}.join('; ');row.Rule=rule;row.QC_flags=Checks.codesOf(rule);row.Passing_object_check='checked'}}
     Csv.write(Checks.file(m,dir),[Checks.HEADER]+found.rows.collect{Map row->Checks.HEADER.collect{row[it]}})
     found}
 flagsFor[id(1)]='passes through; short separate crossings';flagsFor[id(2)]='on the edge';flagsFor[id(3)]='field moved';flagsFor[id(4)]='short separate crossings';flagsFor[id(6)]='passes through';flagsFor[id(8)]='passes through'
@@ -454,5 +454,18 @@ String close='Close '+percentName(Y)+' if it is open in another program, then tr
 assert twice.state.message.endsWith(' No automatic mark was made. Noise: baseline SD, as saved. The review marks of '+X+' were not carried over. '+close) : twice.state.message
 assert twice.state.message.indexOf(close)==twice.state.message.lastIndexOf(close) && !new File(folder,reviewName(Y)).exists() && twice.results.review.marks==[:]
 println 'PASS: the automatic part of the finish message comes after the figures and before the noise note and the carry-over; a file that cannot be written is named once'
+
+// ---- a flag of the rule "crosses the cell" (rule C) is a possible passing object: a responder it flags is marked
+// automatically, and the Methods sentence counts it as a possible passing object
+flagsFor.clear();flagsFor[id(5)]='crosses the cell';flagsFor[id(2)]='on the edge';flagsFor[id(8)]='crosses the cell'
+String CC='SimpleCa-20261102-200000-cccccccc';File dirCC=analysis(CC,autoCells)
+def crossRun=runWith(dirCC,true);Map marksCC=crossRun.results.review.marks
+assert marksCC.findAll{it.value.markedBy=='automatic'}.keySet()==[id(2),id(5)] as Set : 'a responder rule C flags is marked, a non-responder it flags is not: '+marksCC
+assert marksCC[id(5)].subMap(['automatic','reviewed','reason','note','markedBy'])==[automatic:'Responded',reviewed:'Did not respond',reason:'Passing object',note:'',markedBy:'automatic']
+assert Checks.saved(dirCC,autoMeasurement).rows.find{it.Cell==id(5)}.QC_flags=='POSSIBLE_PASSING_OBJECT' && Checks.codesOf('crosses the cell; short separate crossings')=='POSSIBLE_PASSING_OBJECT; SHORT_SEPARATE_CROSSINGS'
+assert Review.kinds(dirCC,autoMeasurement)==[(id(2)):'rise on the edge',(id(5)):'possible passing object',(id(8)):'possible passing object']
+assert crossRun.results.review.methods=='2 of 6 cells were reclassified automatically from responder to non-responder (1 possible passing object, 1 rise on the edge).' : crossRun.results.review.methods
+assert crossRun.state.message.contains(' Marked automatically: Cell 2, Cell 5.') : crossRun.state.message
+println 'PASS: a responder flagged by the rule "crosses the cell" is marked automatically and counted as a possible passing object'
 page.server.stop()
 System.exit(0)

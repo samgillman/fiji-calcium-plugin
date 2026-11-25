@@ -17,7 +17,14 @@
 // without a trace; trace.png and heatmap.png drawn across their whole width; no mark controls on
 // excluded or unscorable cells, on a control window, while an analysis runs or while the review file is for another
 // analysis; a mark carried over to the next analysis run here; with a recording's long cell names the Cell box as wide as
-// for Cell001, the name cut in it and whole in its tooltip, and the pickers row whole in the Traces tab.
+// for Cell001, the name cut in it and whole in its tooltip, and the pickers row whole in the Traces tab. On a recording whose
+// rings the run measures from the open movie: the tick box that marks flagged responders automatically, like the one beside
+// it and part of the settings, the cells it marked in the finish message, the call line, the Review reason column and the
+// Marked group, an automatic mark removed and made by hand; the codes of the checks after the engine's in QC_flags on every
+// tab, none on the control window, the saved tables unchanged; the Around the cell tab with the call line and flags of
+// Traces, the zones of the flag each in its colour and named by place, the other ring sectors, the flagged frames and the
+// response window, the key and the plot in one place for every cell and width, the time cursor, a sentence where there is
+// nothing to draw, rule C's lines without frames, and around_the_cell.png as on screen without the cursor.
 // The window is built and never shown (with -Dapple.awt.UIElement=true no Dock icon appears on a Mac); a window that opens all
 // the same fails the test. -Dcalcium.test.pictures=<folder> saves pictures of the window there, and a saved trace plot.
 import javax.swing.*
@@ -86,7 +93,7 @@ def release={JComponent focus,int code->
 def enter={JComponent focus->press(focus,KeyEvent.VK_ENTER);release(focus,KeyEvent.VK_ENTER)}
 def click={java.awt.Component c->c.dispatchEvent(new java.awt.event.MouseEvent(c,java.awt.event.MouseEvent.MOUSE_CLICKED,System.currentTimeMillis(),0,4,4,1,false,java.awt.event.MouseEvent.BUTTON1))}
 
-def ui,original,recording,longWindow
+def ui,original,recording,longWindow,aroundWindow,aroundMovie
 def finish={->long deadline=System.nanoTime()+30000000000L;while(ui.busy&&System.nanoTime()<deadline)Thread.sleep(20);onUI{};assert !ui.busy : 'the analysis finishes'}
 // The window laid out at its usual size without being shown, and its content painted into a picture. A window that is never
 // shown is never validated, so every layout forgets the sizes it kept first (a shown window does this when it validates).
@@ -697,9 +704,299 @@ try {
             assert ui.cells.toolTipText==longName && [ui.stimuli,ui.allTraces].every{seen.contains(it.bounds)} : 'under Responded too: '+ui.cells.toolTipText+' '+[ui.stimuli,ui.allTraces]*.bounds
         } finally {ui=main}
     }
+
+    // ---- issue 29 in the window, on a synthetic recording whose rings and core the run measures from the open movie: the
+    // option that marks flagged responders automatically, the codes of the checks on the tabs, and the Around the cell tab
+    def Steps=loader.loadClass('CalciumSteps'),Card=loader.loadClass('CalciumCard'),Around=loader.loadClass('CalciumAroundPlot')
+    int W=420,H=320,N=120
+    def disc={int cx,int cy,int r->new OvalRoi(cx-r,cy-r,2*r,2*r)}
+    // a bright object crosses Cell001 from the left (a possible passing object), another rests on the lower right edge of
+    // Cell002 (a rise on the edge), Cell003 responds in place, Cell004 rises on single frames only, Cell005 is excluded
+    List aroundNames=(1..5).collect{String.format('Cell%03d',it)}
+    Roi[] aroundRois=[[80,80],[200,80],[300,80],[80,220],[300,220]].collect{disc(it[0],it[1],15)} as Roi[]
+    List<int[]> masks=aroundRois.collect{Steps.pixelsOf(it,W,H)}
+    def spotRandom=new Random(3);List spots=(1..40).collect{[20+spotRandom.nextInt(W-40),20+spotRandom.nextInt(H-40),3+spotRandom.nextInt(3),15+spotRandom.nextInt(20)]}
+    def aroundStack=new ImageStack(W,H)
+    (1..N).each{int f->
+        short[] px=new short[W*H];def noise=new Random(1000+f)
+        for(int i=0;i<px.length;i++)px[i]=(short)(100+noise.nextInt(7)-3)
+        def put={int i,int amount->px[i]+=(short)amount}
+        def blob={double bx,double by,double r,int amount->for(int y=(int)(by-r-1);y<=by+r+1;y++)for(int x=(int)(bx-r-1);x<=bx+r+1;x++)if((x-bx)*(x-bx)+(y-by)*(y-by)<=r*r&&y>=0&&y<H&&x>=0&&x<W)put(y*W+x,amount)}
+        spots.each{blob(it[0],it[1],it[2],it[3])}
+        masks.each{int[] m->m.each{put(it,50)}}
+        if(f>=50&&f<=54)blob(57,80,5,400);if(f>=55&&f<=62)blob(70+(f-55)*20d/7d,80,5,f in [58,59]?440:400);if(f>=63&&f<=67)blob(103,80,5,400)
+        if(f>=60&&f<=90)blob(200+22*Math.cos(Math.PI/4),80+22*Math.sin(Math.PI/4),8,1500)
+        if(f>=62)masks[2].each{put(it,40)}
+        if(f in [60,70,80])masks[3].each{put(it,30)}
+        aroundStack.addSlice(''+f,new ij.process.ShortProcessor(W,H,px,null))
+    }
+    aroundMovie=new ImagePlus('Around recording',aroundStack);def aroundCal=aroundMovie.calibration;aroundCal.pixelWidth=0.645d;aroundCal.pixelHeight=0.645d;aroundCal.setUnit('micron');aroundCal.frameInterval=1d
+    // what Measure leaves beside the analysis: the raw gray values of the outlines and the background next to each cell; no
+    // ring files, so the run measures them from the open movie
+    File aroundFolder=new File(work,'around');aroundFolder.mkdirs();String rec='Around'
+    List rawRows=[['Frame']+aroundNames],backRows=[['Frame']+aroundNames]
+    (1..N).each{int f->def ip=aroundStack.getProcessor(f);rawRows<<([f]+masks.collect{int[] m->double s=0d;for(int i:m)s+=ip.getf(i);s/m.length});backRows<<([f]+aroundNames.collect{100})}
+    Csv.write(new File(aroundFolder,rec+'_gray_values_raw.csv'),rawRows);Csv.write(new File(aroundFolder,rec+'_background_next_to_each_cell.csv'),backRows)
+    // the analysis a run of the engine would leave, with QC_flags in each table that has it, and a control window: F0 = frames
+    // 1-40, a rise of 10 % and 3 x the baseline SD for 2 samples in a row
+    String D='SimpleCa-20261102-100000-dddddddd',E='SimpleCa-20261102-110000-eeeeeeee'
+    String engineCalls='reference_below_3_baseline_sd_review; BASELINE_SD_AT_LEAST_ONE_THIRD_LOCAL_F0',engineQuality='reference_below_3_baseline_sd_review'
+    File dirD=new File(aroundFolder,D);dirD.mkdirs()
+    Map aroundTraces=[:],aroundStatus=[:]
+    List callHead=['Field','Cell','Role','Stimulus','Start_s','End_s','Baseline_s','Max_gap_s','Effective_end_s','Status','Reason','Baseline_mean','Baseline_SD','Threshold_increase','Peak_increase','Floor_threshold','Noise_threshold','Threshold_source','Local_reference_relative','Peak_s','Run_start_s','Run_end_s','QC_flags']
+    List callBody=[],qualityRows=[['Cell','F0','Baseline_SD_raw','Status','Reason','QC_flags']],metricRows=[['Cell','F0','Status','Reason','Peak_dFF0','QC_flags']],windowRows=[['Field','Cell','Role','Stimulus','Peak_dFF0','QC_flags']]
+    aroundNames.eachWithIndex{String cell,int c->
+        List y=rawRows.drop(1).collect{(it[c+1] as double)-100d};double f0=y[0..<40].sum()/40d
+        List n=y.collect{(it-f0)/f0};double mean=n[0..<40].sum()/40d,sd=Math.sqrt(n[0..<40].collect{(it-mean)*(it-mean)}.sum()/39d),need=Math.max(0.1d,3d*sd)
+        List r=n.collect{(it-mean)/(1d+mean)};int peak=(40..<N).max{r[it]};boolean responded=(40..<N-1).any{r[it]>=need&&r[it+1]>=need}
+        String status=c==4?'Excluded':responded?'Responded':'Did not respond';aroundStatus[cell]=status
+        String reason=c==4?'Invalid raw fluorescence baseline (F0)':responded?'Sustained threshold crossing':'No sustained threshold crossing'
+        String engineFlag=c==0?engineCalls:'',quality=c==0?engineQuality:''
+        ['Stimulus':'ATP','Control':'KCl'].each{String role,String stimulus->
+            callBody<<(c==4 ? [rec,cell,role,stimulus,40,N-1,10,1.5,N-1,status,reason,'','','','',0.1,'','','','','','',engineFlag]
+                : [rec,cell,role,stimulus,40,N-1,10,1.5,N-1,status,reason,mean,sd,need,r[peak],0.1,3d*sd,need>0.1d?'Noise':'Floor',1d+mean,peak,responded?peak:'',responded?peak+1:'',engineFlag])
+            windowRows<<[rec,cell,role,stimulus,c==4?'':r[peak],engineFlag]}
+        qualityRows<<[cell,f0,sd*f0,c==4?'Excluded':'Included',c==4?reason:'',quality];metricRows<<[cell,f0,c==4?'Excluded':'Included',c==4?reason:'',c==4?'':r[peak],quality]
+        if(c!=4)aroundTraces[cell]=n
+    }
+    assert aroundStatus==[Cell001:'Responded',Cell002:'Responded',Cell003:'Responded',Cell004:'Did not respond',Cell005:'Excluded'] : 'the synthetic cells are called as meant: '+aroundStatus
+    // the stimulus rows first, then the control rows, as the engine writes them
+    Csv.write(new File(dirD,'responder_calls.csv'),[callHead]+callBody.findAll{it[2]=='Stimulus'}+callBody.findAll{it[2]=='Control'})
+    Csv.write(new File(dirD,'window_metrics.csv'),[windowRows[0]]+windowRows.drop(1).findAll{it[2]=='Stimulus'}+windowRows.drop(1).findAll{it[2]=='Control'})
+    Csv.write(new File(dirD,'cell_quality.csv'),qualityRows);Csv.write(new File(dirD,'metrics.csv'),metricRows)
+    List traced=aroundTraces.keySet() as List
+    Csv.write(new File(dirD,'normalized_traces.csv'),[['Time']+traced]+(0..<N).collect{int f->[f]+traced.collect{aroundTraces[it][f]}})
+    Csv.write(new File(dirD,'mean_trace.csv'),[['Time','Mean','SEM','N_Cells']]+(0..<N).collect{int f->[f,traced.collect{aroundTraces[it][f]}.sum()/traced.size(),0,traced.size()]})
+    Csv.write(new File(dirD,'analysis_manifest.csv'),[['key','value'],['sampling_hz','1'],['baseline_start','1'],['baseline_end','40'],['stimulus','ATP'],['protocol_hash','synthetic']])
+    def countsHead=Csv.read(new File('tests/fixtures/simpleca/responder_counts.csv'))[0]
+    def countRow={String role,String stimulus->Map v=[Field:rec,Stimulus:stimulus,Population:'Cells in field',Registered:5,Responded:3,Nonresponders:1,Evaluable:4,Excluded:1,Unscorable:0,Percent_responding:75,Effective_end_s:N-1,Window_clipped:'FALSE',Role:role,Start_s:40,End_s:N-1];countsHead.collect{v.containsKey(it)?v[it]:''}}
+    Csv.write(new File(dirD,'responder_counts.csv'),[countsHead,countRow('Stimulus','ATP'),countRow('Control','KCl')])
+    new File(dirD,'COMPLETE').text='complete\n'
+    Map engineFiles=['responder_calls.csv','window_metrics.csv','cell_quality.csv','metrics.csv'].collectEntries{[it,Installer.digest(new File(dirD,it).bytes)]}
+    File checksD=new File(aroundFolder,rec+'_call_checks_'+D+'.csv'),reviewD=new File(aroundFolder,rec+'_reviewed_calls_'+D+'.csv'),pixelsFile=new File(aroundFolder,rec+'_ring_and_core_pixels.csv')
+    // the strings drawn on the around plot, and the plot as it is drawn at a size, on white
+    def aroundDrawn={int width,int height->def image=new java.awt.image.BufferedImage(width,height,java.awt.image.BufferedImage.TYPE_INT_RGB)
+        def spy=new TextSpy(real:image.createGraphics());java.awt.Dimension was=ui.aroundPlot.size
+        try{spy.real.color=java.awt.Color.white;spy.real.fillRect(0,0,width,height);ui.aroundPlot.setSize(width,height);ui.aroundPlot.still(spy)}finally{spy.real.dispose();ui.aroundPlot.setSize(was);ui.aroundPlot.changed()}
+        [image:image,drawn:spy.drawn,at:spy.at,top:ui.aroundPlot.@t,tall:ui.aroundPlot.@h]}
+    def aroundNow={->layOut();aroundDrawn(ui.aroundPlot.width,ui.aroundPlot.height)}
+    // only the axis titles, the tick labels and the key: the cell, the places of the zones, the other ring sectors and the bands
+    def allowedAround={String s->s in ['Time (s)','ΔF (gray levels)','other ring sectors','response window','flagged frames',ui.aroundPlot.cell]+((ui.aroundPlot.data?.lines?:[])*.place) || s==~/-?\d+(\.\d+)?/}
+    def aroundTab={->ui.tabs.indexOfTab('Around the cell')}
+    def flagWords={JComponent shownRow->shownRow.components.findAll{it instanceof JLabel}*.text}
+    def aroundRead={->long deadline=System.nanoTime()+30000000000L;boolean done=false
+        while(!done&&System.nanoTime()<deadline){onUI{done=ui.results!=null&&ui.aroundFolder==ui.results.name&&ui.aroundContext!=null};if(!done)Thread.sleep(20)}
+        assert done : 'what is shown around the cells is read'}
+    // the colour of a band at the middle of its frames, down a column of the frame: most of it is the band's
+    def bandShare={Map seen,double at,java.awt.Color colour->int x=ui.aroundPlot.X(at);(int)((seen.top..<(seen.top+seen.tall)).count{int y->(seen.image.getRGB(x,y)&0xFFFFFF)==(colour.RGB&0xFFFFFF)})/(double)seen.tall}
+    def colourCount={Map seen,java.awt.Color colour->int count=0;for(int x=62;x<seen.image.width-18;x++)for(int y=seen.top;y<seen.top+seen.tall;y++)if((seen.image.getRGB(x,y)&0xFFFFFF)==(colour.RGB&0xFFFFFF))count++;count}
+    // the key: each entry on a line of its own or after the one before, none over another and none cut short
+    def keyLaid={Map seen->List keyed=seen.at.findAll{(it[2] as int)<(seen.top as int)};def fm;def g=new java.awt.image.BufferedImage(1,1,java.awt.image.BufferedImage.TYPE_INT_RGB).createGraphics();try{Theme.smooth(g);g.font=Theme.font(java.awt.Font.PLAIN,-1f);fm=g.fontMetrics}finally{g.dispose()}
+        List rows=keyed.groupBy{it[2]}.values().collect{it.sort{a,b->a[1]<=>b[1]}}
+        rows.every{List keyRow->(1..<keyRow.size()).every{int i->(keyRow[i-1][1] as int)+fm.stringWidth(keyRow[i-1][0] as String)<(keyRow[i][1] as int)-21}} && keyed.every{!(it[0] as String).endsWith('…')}}
+    def latchE=new java.util.concurrent.CountDownLatch(1)
+    File dirE=new File(aroundFolder,E)
+    def box
+    def main=ui
+    try {
+        onUI {
+            aroundWindow=Window.newInstance([csv:new File(aroundFolder,rec+'_gray_values_raw.csv'),folder:aroundFolder,recording:rec,frames:N,hz:1d,baselineStart:1,baselineEnd:40,
+                picture:new ImagePlus('Around colour picture',new ColorProcessor(W,H)),movie:aroundMovie,names:aroundNames,rois:aroundRois.collect{(Roi)it.clone()} as Roi[]])
+            aroundWindow.runtime.home=new File(work,'runtime')
+            ui=aroundWindow   // the helpers above look at this window for now
+            // the tabs: Around the cell right after Traces
+            assert (0..<ui.tabs.tabCount).collect{ui.tabs.getTitleAt(it)}.take(4)==['Protocol','Traces','Around the cell','Heatmap'] : (0..<ui.tabs.tabCount).collect{ui.tabs.getTitleAt(it)}
+            assert ui.aroundPlot.sentence()=='Run the analysis to see traces' && !ui.aroundPlot.drawn() && !ui.aroundFlags.visible : 'before an analysis the tab says so'
+            // the option: a tick box on the Protocol tab like the one beside it, in its own words, off at first
+            box=ui.automaticBox
+            assert box instanceof JCheckBox && box.text=='Mark possible passing objects as not responders' && !box.selected : box.text
+            assert box.toolTipText=='After each analysis, a responder flagged as a possible passing object or as a rise on the edge is marked Did not respond, with the reason Passing object. A mark can be removed.' : box.toolTipText
+            assert box.font==ui.kcl.font && box.font==Theme.font() && !box.opaque && box.alignmentX==ui.kcl.alignmentX && box.UI.class==ui.kcl.UI.class : 'the tick box looks like the one for a positive control: '+box.font
+            layOut();assert box.preferredSize.height==ui.kcl.preferredSize.height : 'one height: '+box.preferredSize+' '+ui.kcl.preferredSize
+            assert SwingUtilities.isDescendingFrom(box,ui.tabs.getComponentAt(ui.tabs.indexOfTab('Protocol'))) && SwingUtilities.getAncestorOfClass(Card,box)?.title=='Review marks' : 'on the Protocol tab'
+            // the settings with the option off are what they were before it existed; on, they say so
+            assert !ui.fingerprint().contains('automatic_marks') : ui.fingerprint()
+            box.doClick();assert box.selected && ui.fingerprint().contains('"automatic_marks":true') : ui.fingerprint()
+            ui.tabs.selectedIndex=0;def port=SwingUtilities.getAncestorOfClass(JViewport,box) as JViewport;layOut()
+            port.viewPosition=new java.awt.Point(0,Math.max(0,SwingUtilities.convertPoint(box,0,0,port.view).y as int)-port.height+80);paint('fiji_protocol_tick_box',false)
+            // a run with the option on: the checks measure the rings from the open movie, then the flagged responders are marked
+            ui.confirmed.selected=true
+            ui.performAnalysis={a,b,c,d,job->dirD}
+            ui.runButton.doClick();assert ui.busy && !box.enabled : 'the option cannot change while the analysis runs'
+        }
+        finish()
+        onUI {
+            assert box.enabled : 'and can once it is done'
+            assert ui.results==dirD && pixelsFile.isFile() && checksD.isFile() : 'the run measured around the cells from the movie: '+ui.status.text
+            assert ui.status.text=='Complete. Protocol, inputs and tables saved in '+D+'. All cells: 3 of 4 responded (75.0 %), after review 1 of 4 (25.0 %). Marked automatically: Cell001, Cell002.' : 'the finish message names the cells marked automatically, after the figures: '+ui.status.text
+            assert ui.checks.cells.Cell001.codes==['POSSIBLE_PASSING_OBJECT'] && ui.checks.cells.Cell002.codes==['RISE_ON_EDGE'] && ui.checks.cells.Cell003.codes==[] : 'the flags of the synthetic cells'
+            def saved=Csv.read(reviewD)
+            assert saved[0]==Review.HEADER && saved.drop(1).collect{[it[0],it[1],it[2],it[3],it[4],it[-1]]}==[['Cell001','Responded','Did not respond','Passing object','','automatic'],['Cell002','Responded','Did not respond','Passing object','','automatic']] : saved
+            assert ui.appliedFingerprint.contains('"automatic_marks":true') && ui.appliedNote.text=='Displayed results match the applied settings.' : ui.appliedNote.text
+            // the option is a setting: changing it asks for a new run, changing it back does not
+            box.doClick();assert ui.appliedNote.text.startsWith('Settings changed') : ui.appliedNote.text
+            box.doClick();assert ui.appliedNote.text=='Displayed results match the applied settings.' : ui.appliedNote.text
+            // the mark in the call line, the Review reason column and the Marked group, as for any mark
+            ui.showGroup(0);ui.cells.selectedItem='Cell001'
+            assert strip(ui.cellStatus.text).startsWith('● Cell001: Did not respond after review · passing object · marked automatically · automatic call Responded · sustained threshold crossing · largest rise ') : strip(ui.cellStatus.text)
+            assert ui.removeMark.visible && !ui.markButton.visible : 'an automatic mark can be removed'
+            paint('fiji_marked_automatically')
+            assert rowOf(ui.calls,[Cell:'Cell001',Role:'Stimulus'])[-2..-1]==['Did not respond','Passing object, automatic'] && rowOf(ui.calls,[Cell:'Cell002',Role:'Stimulus'])[-2..-1]==['Did not respond','Passing object, automatic'] : rowOf(ui.calls,[Cell:'Cell001',Role:'Stimulus'])
+            assert rowOf(ui.calls,[Cell:'Cell001',Role:'Control'])[-2..-1]==['',''] : 'not on the control window'
+            assert (0..<ui.group.itemCount).collect{ui.group.getItemAt(it)}[-1]=='Marked (2)' : (0..<ui.group.itemCount).collect{ui.group.getItemAt(it)}
+            ui.showGroup(4);assert (0..<ui.cells.itemCount).collect{ui.cells.getItemAt(it)}==['Cell001','Cell002'] : 'the Marked group lists the automatic marks'
+            ui.showGroup(0)
+            // the codes of the checks after the engine's codes in QC_flags, joined as each table joins them; none on a row of the
+            // control window or of a cell without a flag; the saved tables as they were
+            int callFlags=columns(ui.calls).indexOf('QC_flags'),windowFlags=columns(ui.windowMetrics).indexOf('QC_flags'),qualityFlags=columns(ui.qc).indexOf('QC_flags'),metricFlags=columns(ui.metrics).indexOf('QC_flags')
+            assert rowOf(ui.calls,[Cell:'Cell001',Role:'Stimulus'])[callFlags]==engineCalls+'; POSSIBLE_PASSING_OBJECT' && rowOf(ui.calls,[Cell:'Cell002',Role:'Stimulus'])[callFlags]=='RISE_ON_EDGE' : rowOf(ui.calls,[Cell:'Cell001',Role:'Stimulus'])[callFlags]
+            assert rowOf(ui.calls,[Cell:'Cell001',Role:'Control'])[callFlags]==engineCalls && rowOf(ui.calls,[Cell:'Cell002',Role:'Control'])[callFlags]=='' && rowOf(ui.calls,[Cell:'Cell003',Role:'Stimulus'])[callFlags]=='' : 'no codes on the control window'
+            assert rowOf(ui.windowMetrics,[Cell:'Cell001',Role:'Stimulus'])[windowFlags]==engineCalls+'; POSSIBLE_PASSING_OBJECT' && rowOf(ui.windowMetrics,[Cell:'Cell002',Role:'Stimulus'])[windowFlags]=='RISE_ON_EDGE' && rowOf(ui.windowMetrics,[Cell:'Cell001',Role:'Control'])[windowFlags]==engineCalls : 'the stimulus-window metrics'
+            assert rowOf(ui.qc,[Cell:'Cell001'])[qualityFlags]==engineQuality+';POSSIBLE_PASSING_OBJECT' && rowOf(ui.qc,[Cell:'Cell002'])[qualityFlags]=='RISE_ON_EDGE' && rowOf(ui.qc,[Cell:'Cell003'])[qualityFlags]=='' : 'Cell quality: '+rowOf(ui.qc,[Cell:'Cell001'])[qualityFlags]
+            assert rowOf(ui.metrics,[Cell:'Cell001'])[metricFlags]==engineQuality+';POSSIBLE_PASSING_OBJECT' && rowOf(ui.metrics,[Cell:'Cell002'])[metricFlags]=='RISE_ON_EDGE' : 'the whole-recording metrics'
+            assert engineFiles.every{name,hash->Installer.digest(new File(dirD,name).bytes)==hash} : 'no engine table is written'
+            assert ui.calls.model.is(ui.callsSaved)==false && ui.callsSaved.getValueAt((0..<ui.callsSaved.rowCount).find{ui.callsSaved.getValueAt(it,1)=='Cell001'} as int,callFlags)==engineCalls+'; POSSIBLE_PASSING_OBJECT' : 'the reviewed columns are added to the table with its codes'
+            [['Cell response calls','fiji_codes_calls_tab',ui.calls],['Cell quality','fiji_codes_quality_tab',ui.qc]].each{String tab,String name,JTable shown->
+                def scroll=SwingUtilities.getAncestorOfClass(JScrollPane,shown) as JScrollPane;if(scroll.columnHeader?.view==null)scroll.columnHeaderView=shown.tableHeader
+                ui.tabs.selectedIndex=ui.tabs.indexOfTab(tab);layOut();def view=shown.parent as JViewport
+                int x=shown.getCellRect(0,columns(shown).indexOf('QC_flags'),true).x as int;view.viewPosition=new java.awt.Point(Math.max(0,Math.min(x-200,shown.width-view.width)),0);paint(name,false)}
+        }
+        aroundRead()
+        onUI {
+            // ---- Around the cell, rule A: the cell, the sectors seen before and after it, the other ring sectors thin and gray, the
+            // response window as on Traces and the flagged frames; the call line and the flags of Traces above it
+            ui.tabs.selectedIndex=aroundTab();ui.cells.selectedItem='Cell001';layOut()
+            Map data=ui.aroundPlot.data,direct=Checks.aroundCell(Checks.aroundContext(dirD,ui.measurement),ui.checks,'Cell001')
+            assert data.why=='' && data.rule=='passes through' && data.lines*.part==['before','after'] && data.band==[55,62] : data.subMap(['why','rule','lines','band'])
+            assert java.util.Arrays.equals(data.rise as double[],direct.rise as double[]) && (0..<data.zones.size()).every{int z->java.util.Arrays.equals(data.zones[z].trace as double[],direct.zones[z].trace as double[])} : 'the traces the check used'
+            List shown=ui.aroundPlot.lines()
+            assert shown.findAll{it[2]!='other ring sectors'}.collect{it[2]}==data.lines*.place && (0..<data.lines.size()).every{int i->shown.findAll{it[2]!='other ring sectors'}[i][3].is(data.zones.find{it.zone==data.lines[i].zone}.trace)} : 'each zone of the flag is drawn from its trace'
+            assert shown.findAll{it[2]=='other ring sectors'}.size()==data.others.size() && shown.findAll{it[2]=='other ring sectors'}.every{it[0]==Around.OTHER && it[1]<1f} : 'the other ring sectors thin and gray'
+            List colours=shown.findAll{it[2]!='other ring sectors'}.collect{it[0]};assert colours.unique(false).size()==colours.size() && !colours.contains(Theme.INK) && !colours.contains(Around.OTHER) : 'each zone of the flag in its own colour, not the cell\'s: '+colours
+            assert ui.aroundPlot.entries(shown)*.getAt(2)==['Cell001']+data.lines*.place+['other ring sectors','response window','flagged frames'] : ui.aroundPlot.entries(shown)*.getAt(2)
+            assert ui.aroundStatus.text==ui.cellStatus.text && ui.aroundStatus.toolTipText==ui.cellStatus.toolTipText && flagWords(ui.aroundFlags)==flagWords(ui.flagRow) && flagWords(ui.aroundFlags)==['possible passing object, frames 55 to 62'] : 'the call line and the flags of Traces: '+flagWords(ui.aroundFlags)
+            def around=ui.aroundFlags.components.find{it instanceof JLabel}
+            assert around.foreground==Theme.BLUE && around.cursor.type==java.awt.Cursor.HAND_CURSOR && around.toolTipText.startsWith('<html>Go to frame 55<br>') : 'the flag is a link here too'
+            Map seen=aroundNow()
+            assert seen.drawn.every{allowedAround(it)} && seen.drawn.containsAll(['Time (s)','Cell001','ring, left','ring, right','other ring sectors','response window','flagged frames']) : 'drawn on the plot: '+seen.drawn.findAll{!allowedAround(it)}+' of '+seen.drawn
+            assert keyLaid(seen) && seen.tall>=250 : 'the key is readable at the usual size and leaves the plot its room: '+seen.tall
+            assert bandShare(seen,58.5d,Around.FLAGGED)>0.6d && bandShare(seen,100d,Around.WINDOW)>0.6d && bandShare(seen,20d,Around.FLAGGED)==0d && bandShare(seen,20d,Around.WINDOW)==0d : 'the flagged frames and the response window: '+[bandShare(seen,58.5d,Around.FLAGGED),bandShare(seen,100d,Around.WINDOW)]
+            // the band runs half a frame to each side of the frames named
+            assert ui.aroundPlot.bands().find{it[3]=='flagged frames'}[0..1]==[54d-0.5d,61d+0.5d] : ui.aroundPlot.bands()
+            assert data.lines.every{Map line->colourCount(seen,ui.aroundPlot.lines().find{it[2]==line.place}[0] as java.awt.Color)>20} && colourCount(seen,Theme.INK)>20 : 'each line is drawn in its colour'
+            paint('fiji_around_rule_a',false)
+            // the time cursor follows the slider and the Traces plot; a click on the plot moves it
+            ui.showFrame(70);assert ui.aroundPlot.moment==69d && ui.plot.moment==69d : ui.aroundPlot.moment
+            ui.aroundPlot.seek.call(30.2d);assert ui.frame==31 && ui.aroundPlot.moment==30d : ui.frame
+            def tip=new java.awt.event.MouseEvent(ui.aroundPlot,java.awt.event.MouseEvent.MOUSE_MOVED,0L,0,ui.aroundPlot.X(58.5d),(seen.top as int)+20,0,false)
+            assert ui.aroundPlot.getToolTipText(tip)=='<html>response window · flagged frames<br>'+Around.HINT+'</html>' : ui.aroundPlot.getToolTipText(tip)
+            ui.showFrame(58);paint('fiji_around_rule_a_cursor',false)
+            Map placeA=[top:seen.top,y:ui.aroundPlot.y]
+            // rule B: the rim, the ring outside it and the core
+            ui.cells.selectedItem='Cell002';data=ui.aroundPlot.data;seen=aroundNow()
+            assert data.rule=='on the edge' && data.lines*.part==['rim','ring','core'] && data.band==[60,90] : data.subMap(['rule','lines','band'])
+            assert seen.drawn.every{allowedAround(it)} && ['rim, lower right','ring, lower right','core','flagged frames'].every{seen.drawn.contains(it)} && keyLaid(seen) : seen.drawn
+            colours=ui.aroundPlot.lines().findAll{it[2]!='other ring sectors'}.collect{it[0]};assert colours.unique(false).size()==3 : colours
+            assert [top:seen.top,y:ui.aroundPlot.y]==placeA : 'the plot keeps its place from cell to cell: '+seen.top+' '+placeA
+            paint('fiji_around_rule_b',false)
+            // a responder without a flag: the cell, the core and the eight near-ring sectors, no band
+            ui.cells.selectedItem='Cell003';data=ui.aroundPlot.data;seen=aroundNow()
+            assert data.band==null && data.lines*.part==['core'] && data.others==(0..7) && !seen.drawn.contains('flagged frames') && colourCount(seen,Around.FLAGGED)==0 && seen.drawn.contains('response window') : data.subMap(['band','lines','others'])
+            assert flagWords(ui.aroundFlags)==[] && !ui.aroundFlags.visible && [top:seen.top,y:ui.aroundPlot.y]==placeA : 'no flag, and the plot in its place'
+            paint('fiji_around_no_flag',false)
+            ui.cells.selectedItem='Cell004';seen=aroundNow();assert [top:seen.top,y:ui.aroundPlot.y]==placeA && seen.drawn.every{allowedAround(it)} : 'a cell that did not respond'
+            // and as narrow as at the smallest window, and at the width saved: one place for every cell
+            List widths=[400,650,ui.aroundPlot.width]
+            Map tops=['Cell001','Cell002','Cell003','Cell004'].collectEntries{ui.cells.selectedItem=it;layOut();[it,widths.collect{aroundDrawn(it as int,ui.aroundPlot.height).top}]}
+            assert (tops.values() as Set).size()==1 : 'the plot keeps its place at every width: '+tops
+            // without data: one plain sentence where the plot would be, and nothing else
+            ui.cells.selectedItem='Cell005';seen=aroundNow()
+            assert !ui.aroundPlot.drawn() && ui.aroundPlot.sentence()=='Passing object not checked: no call.' && seen.drawn==['Passing object not checked: no call.'] : seen.drawn
+            assert ui.aroundStatus.text==ui.cellStatus.text && ui.aroundPlot.y==placeA.y : 'the call line of Traces here too'
+            paint('fiji_around_no_data',false)
+            // the control window: the checks are made for the primary stimulus
+            ui.stimuli.selectedItem='KCl';ui.cells.selectedItem='Cell001'
+            assert ui.aroundPlot.sentence()=='Checks are made for the primary stimulus.' && !ui.aroundFlags.visible && ui.aroundStatus.text==ui.cellStatus.text : ui.aroundPlot.sentence()
+            paint('fiji_around_control',false)
+            ui.stimuli.selectedItem='ATP';ui.cells.selectedItem='Cell001'
+            // Save plots: around_the_cell.png with the same key and no time cursor, drawn across its whole width on white, and the
+            // plot record names it
+            ui.showFrame(58);layOut();ui.exportPlots()
+            File picture=new File(dirD,'around_the_cell.png');def first=javax.imageio.ImageIO.read(picture)
+            def record=new groovy.json.JsonSlurper().parse(new File(dirD,'plot_provenance.json'))
+            assert record.around_the_cell=='around_the_cell.png' && record.cell=='Cell001' : record
+            assert first.width==Math.max(650,ui.aroundPlot.width) && first.height==Math.max(360,ui.aroundPlot.height) && (0..<first.height).every{int y->first.getRGB(first.width-1,y)==(0xFFFFFFFF as int)} : 'around_the_cell.png is drawn to its right edge: '+first.width+' x '+first.height
+            def plain=aroundDrawn(first.width,first.height)
+            assert (0..<first.width).every{int x->(0..<first.height).every{int y->first.getRGB(x,y)==plain.image.getRGB(x,y)}} : 'around_the_cell.png is the plot with its key and nothing else'
+            assert ui.aroundPlot.moment==57d && ui.frame==58 : 'the time cursor is back on screen'
+            java.nio.file.Files.copy(picture.toPath(),new File(pictures,'fiji_around_export.png').toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            ui.cells.selectedItem='Cell002';ui.exportPlots();java.nio.file.Files.copy(picture.toPath(),new File(pictures,'fiji_around_export_rule_b.png').toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            // a cell without data saves no picture of a sentence, and takes away the one of the cell before
+            ui.cells.selectedItem='Cell005';ui.exportPlots();record=new groovy.json.JsonSlurper().parse(new File(dirD,'plot_provenance.json'))
+            assert !picture.exists() && !record.containsKey('around_the_cell') && new File(dirD,'trace.png').isFile() : record
+            // ---- rule C as the back end gives it: the near-ring sectors on the start and end sides, without frames, and the core;
+            // the window draws any mix of parts and keys nothing on the rule
+            Map real=ui.aroundOf.call(ui.aroundContext,'Cell001');Closure given=ui.aroundOf
+            Map crossing=real+[rule:'crosses the cell',text:'possible passing object, frames 54 to 63',lines:[[zone:4,place:'ring, left',part:'before',frame:null],[zone:0,place:'ring, right',part:'after',frame:null],[zone:16,place:'core',part:'core',frame:null]],others:[1,2,3,5,6,7],band:[54,63]]
+            ui.aroundOf={Map context,String cell->cell=='Cell001'?crossing:given.call(context,cell)}
+            ui.cells.selectedItem='Cell001';seen=aroundNow();shown=ui.aroundPlot.lines()
+            assert ui.aroundPlot.entries(shown)*.getAt(2)==['Cell001','ring, left','ring, right','core','other ring sectors','response window','flagged frames'] && seen.drawn.every{allowedAround(it)} : seen.drawn
+            colours=shown.findAll{it[2]!='other ring sectors'}.collect{it[0]};assert colours.unique(false).size()==3 && colours.every{colourCount(seen,it as java.awt.Color)>20} : 'three lines in three colours'
+            assert bandShare(seen,58.5d,Around.FLAGGED)>0.6d && ui.aroundPlot.bands().find{it[3]=='flagged frames'}[0..1]==[53d-0.5d,62d+0.5d] && keyLaid(seen) && seen.top==placeA.top : 'its band and key, the plot in its place'
+            paint('fiji_around_rule_c',false)
+            // a sector that is not usable is left out; a part met twice takes another colour
+            crossing.lines=[[zone:0,place:'ring, right',part:'after',frame:null],[zone:16,place:'core',part:'core',frame:null]];ui.showAround('Cell001');shown=ui.aroundPlot.lines()
+            assert ui.aroundPlot.entries(shown)*.getAt(2)==['Cell001','ring, right','core','other ring sectors','response window','flagged frames'] : ui.aroundPlot.entries(shown)*.getAt(2)
+            crossing.lines=[[zone:4,place:'ring, left',part:'after',frame:null],[zone:0,place:'ring, right',part:'after',frame:null]];ui.showAround('Cell001')
+            colours=ui.aroundPlot.lines().findAll{it[2]!='other ring sectors'}.collect{it[0]};assert colours.unique(false).size()==2 : colours
+            ui.aroundOf=given
+            // a flag of rule C on a responder: its code chooses Passing object in the mark form, as for rule A
+            Map was=ui.checks.cells.Cell003
+            ui.checks.cells.Cell003=was+[text:'possible passing object, frames 62 to 70',rule:'crosses the cell',flags:[[text:'possible passing object, frames 62 to 70',rule:'crosses the cell',code:'POSSIBLE_PASSING_OBJECT']],codes:['POSSIBLE_PASSING_OBJECT'],qcFlags:'POSSIBLE_PASSING_OBJECT']
+            ui.tabs.selectedIndex=1;ui.cells.selectedItem='Cell002';ui.cells.selectedItem='Cell003'
+            assert flagWords(ui.flagRow)==['possible passing object, frames 62 to 70'] && flagWords(ui.aroundFlags)==flagWords(ui.flagRow) : flagWords(ui.flagRow)
+            ui.markButton.doClick();assert ui.reasonBox.selectedItem=='Passing object' : 'rule C: '+ui.reasonBox.selectedItem
+            ui.cancelMark.doClick();ui.checks.cells.Cell003=was
+            // ---- an automatic mark removed, and the cell marked again by hand: a manual mark
+            ui.cells.selectedItem='Cell002';ui.removeMark.doClick()
+            assert Review.read(dirD,ui.measurement).marks.keySet()==['Cell001'] as Set && strip(ui.cellStatus.text).startsWith('● Cell002: Responded · ') : strip(ui.cellStatus.text)
+            ui.markButton.doClick();assert ui.reasonBox.selectedItem=='Passing object' : 'a rise on the edge: Passing object is chosen';ui.saveMark.doClick()
+            Map mark=Review.read(dirD,ui.measurement).marks.Cell002
+            assert mark.by=='manual' && mark.reason=='Passing object' : mark
+            assert strip(ui.cellStatus.text).startsWith('● Cell002: Did not respond after review · passing object · automatic call Responded · ') && strip(ui.aroundStatus.text)==strip(ui.cellStatus.text) : strip(ui.cellStatus.text)
+            assert rowOf(ui.calls,[Cell:'Cell002',Role:'Stimulus'])[-2..-1]==['Did not respond','Passing object'] && rowOf(ui.calls,[Cell:'Cell001',Role:'Stimulus'])[-2..-1]==['Did not respond','Passing object, automatic'] : rowOf(ui.calls,[Cell:'Cell002',Role:'Stimulus'])
+            assert ui.status.text=='Complete. Protocol, inputs and tables saved in '+D+'. All cells: 3 of 4 responded (75.0 %), after review 1 of 4 (25.0 %). Marked automatically: Cell001, Cell002.' : 'the finish message stays until the next run: '+ui.status.text
+            // while what is shown around the cells is read, the tab says so; then it shows the cell selected
+            List reads=[];ui.aroundLater={Closure read->reads<<read}
+            ui.loadResults(dirD);ui.tabs.selectedIndex=aroundTab();ui.cells.selectedItem='Cell001'
+            assert ui.aroundPlot.sentence()=='Reading the values around the cells.' && reads.size()==1 : ui.aroundPlot.sentence()
+            reads[0].call();assert ui.aroundPlot.drawn() && ui.aroundPlot.data.cell=='Cell001' : 'read: '+ui.aroundPlot.sentence()
+            // a read that ends after another analysis was loaded is not used
+            reads.clear();ui.loadResults(dirD);ui.loadResults(dirD);assert reads.size()==2
+            reads[0].call();assert ui.aroundPlot.sentence()=='Reading the values around the cells.' : 'the first read is not used'
+            reads[1].call();assert ui.aroundPlot.drawn() : 'the last one is'
+            ui.aroundLater={Closure read->read.call()}
+            // ---- the next analysis, with the option off: no automatic mark; the manual mark is carried over, the automatic one is not
+            box.doClick();assert !box.selected
+            dirE.mkdirs();dirD.listFiles().findAll{it.isFile()&&it.name.endsWith('.csv')||it.name=='COMPLETE'}.each{new File(dirE,it.name).bytes=it.bytes}
+            ui.performAnalysis={a,b,c,d,job->latchE.await(20,java.util.concurrent.TimeUnit.SECONDS);dirE}
+            ui.runButton.doClick();assert ui.busy && !box.enabled : 'the tick box waits for the run'
+        }
+        latchE.countDown();finish()
+        onUI {
+            assert ui.results.name==E && box.enabled
+            assert ui.status.text=='Complete. Protocol, inputs and tables saved in '+E+'. All cells: 3 of 4 responded (75.0 %), after review 2 of 4 (50.0 %). Review marks from '+D+': 1 carried over, 0 dropped.' : ui.status.text
+            Map marks=Review.read(dirE,ui.measurement).marks
+            assert marks.keySet()==['Cell002'] as Set && marks.Cell002.by=='manual' && marks.Cell002.carriedFrom==D : marks
+            assert !ui.appliedFingerprint.contains('automatic_marks') && ui.appliedNote.text=='Displayed results match the applied settings.' : 'the run without the option'
+            box.doClick();assert ui.appliedNote.text.startsWith('Settings changed') : 'the option turned on asks for a new run'
+            box.doClick();assert ui.appliedNote.text=='Displayed results match the applied settings.'
+            ui.tabs.selectedIndex=1
+        }
+    } finally {ui=main}
     assert appeared.isEmpty() : 'a window appeared on screen: '+appeared
-    onUI{assert !ui.visible && !ui.isDisplayable() && !longWindow.visible && !longWindow.isDisplayable() : 'the windows were never shown'}
-    println 'PASS: Step 4 window flags, links to frames, mark controls, reasons chosen from flags, refusals, Enter (once when held, never from the open Reason list) and Esc, focus back to the button, one head height with its rows one under another, tiles, plot, Show and the Cell box kept at a mark, nothing under the plot when Show lists no cell, nothing written on the plot or trace.png but its key, the key on screen as before the review controls with the frame where it started, bands and dashed lines named in the key of trace.png, laid across it, the plot in its place from cell to cell and at a mark that empties the group, the rule line with the decimals of the call line and none without a trace, saved figures drawn across their width, reviewed columns on the tabs, a review file for another analysis, marks saved and removed with every view following and Show kept, control window and busy without controls, carried marks, plot record, a long cell name cut in the Cell box with the whole row in the tab'
+    onUI{assert !ui.visible && !ui.isDisplayable() && !longWindow.visible && !longWindow.isDisplayable() && !aroundWindow.visible && !aroundWindow.isDisplayable() : 'the windows were never shown'}
+    println 'PASS: Step 4 window flags, links to frames, mark controls, reasons chosen from flags, refusals, Enter (once when held, never from the open Reason list) and Esc, focus back to the button, one head height with its rows one under another, tiles, plot, Show and the Cell box kept at a mark, nothing under the plot when Show lists no cell, nothing written on the plot or trace.png but its key, the key on screen as before the review controls with the frame where it started, bands and dashed lines named in the key of trace.png, laid across it, the plot in its place from cell to cell and at a mark that empties the group, the rule line with the decimals of the call line and none without a trace, saved figures drawn across their width, reviewed columns on the tabs, a review file for another analysis, marks saved and removed with every view following and Show kept, control window and busy without controls, carried marks, plot record, a long cell name cut in the Cell box with the whole row in the tab, the option that marks flagged responders automatically, the codes of the checks in QC_flags, the Around the cell tab and around_the_cell.png'
 } catch(Throwable t){t.printStackTrace();System.exit(1)}
-finally {onUI{ui?.dispose();longWindow?.dispose();original?.close();recording?.close()}}
+finally {onUI{ui?.dispose();longWindow?.dispose();aroundWindow?.dispose();original?.close();recording?.close();aroundMovie?.close()}}
 System.exit(0)
