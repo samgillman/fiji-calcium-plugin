@@ -5002,11 +5002,19 @@ class CalciumRingAndCore {
  *  is still below HALF its rise.
  *  On the edge: over the event the core rises less than CORE_SHARE x the whole outline, and the near-ring sector outside the
  *  rim sector that rises most rises at least as much as that rim sector and at least NOISE x its own noise.
+ *  Crosses the cell (crossing): the centre of the rise over the outline and its near ring moves across the outline, from one
+ *  side of its centre to the other, at least CROSS_TRAVEL x the outline's width, steadily and well over its noise. Its shape
+ *  and numbers were chosen on eight of the recordings of issue 29.
  *  The span was set as 10 frames at 1 frame per second (SPAN_S seconds). */
 @CompileStatic
 class CalciumPassingObject {
     static final int AVERAGE = 3, DIP = 3, APART = 2
     static final double SPAN_S = 10d, HALF = 0.5d, CELL_RISE = 1d, NOISE = 5d, CORE_SHARE = 0.25d
+    /** Crosses the cell: the window is where the cell stays at or above CROSS_LEVEL of its rise; it flags a travel of at least
+     *  CROSS_TRAVEL x the outline's width, a steadiness of at least CROSS_STEADY and a travel of at least CROSS_NOISE x its noise. */
+    static final double CROSS_LEVEL = 0.25d, CROSS_TRAVEL = 0.5d, CROSS_STEADY = 0.6d, CROSS_NOISE = 3d
+    /** The zones crossing uses: the core, the 8 rim sectors and the 8 near-ring sectors (CalciumRingAndCore.NAMES). */
+    static final int[] CROSS_ZONES = [16, 17, 18, 19, 20, 21, 22, 23, 24, 0, 1, 2, 3, 4, 5, 6, 7] as int[]
     static double[] averaged(double[] x) {
         int n = x.length, k = AVERAGE >> 1
         double[] out = new double[n]
@@ -5020,6 +5028,29 @@ class CalciumPassingObject {
     static boolean finite(float[] x) { for (float v : x) if (Float.isNaN(v) || Float.isInfinite(v)) return false; return true }
     /** "frame 7" or "frames 7 to 9", counted from 1. */
     static String frames(int first, int last) { return first == last ? 'frame ' + first : 'frames ' + first + ' to ' + last }
+    /** The stretch around the peak where the cell stays at or above "level": [first, last], counted from 0. A dip of up to DIP
+     *  frames below it does not end it. */
+    static int[] event(double[] cell, int peak, double level) {
+        int n = cell.length, a = peak, b = peak
+        while (a > 0 && cell[a - 1] >= level) a--
+        while (b < n - 1 && cell[b + 1] >= level) b++
+        boolean moved = true
+        while (moved) {
+            moved = false
+            for (int d = 2; d <= DIP + 1; d++) if (a - d >= 0 && cell[a - d] >= level) { a -= d; moved = true; while (a > 0 && cell[a - 1] >= level) a--; break }
+            for (int d = 2; d <= DIP + 1; d++) if (b + d < n && cell[b + d] >= level) { b += d; moved = true; while (b < n - 1 && cell[b + 1] >= level) b++; break }
+        }
+        return [a, b] as int[]
+    }
+    /** 1.4826 x the median absolute deviation of the frame-to-frame differences, divided by root 2: the noise of one frame. */
+    static double spread(double[] x) {
+        int n = x.length
+        double[] d = new double[n - 1]
+        for (int f = 1; f < n; f++) d[f - 1] = x[f] - x[f - 1]
+        double m = CalciumMotion.median(d)
+        for (int f = 0; f < n - 1; f++) d[f] = Math.abs(d[f] - m)
+        return 1.4826d * CalciumMotion.median(d) / Math.sqrt(2d)
+    }
     /** The largest value among the frames from..to where the cell is below "half": [value, frame], or null when there is no such frame. */
     private static double[] highest(double[] zone, double[] cell, double half, int from, int to) {
         int at = -1
@@ -5047,15 +5078,8 @@ class CalciumPassingObject {
         double rise = cell[peak]
         if (Double.isNaN(rise) || Double.isInfinite(rise) || rise <= 0d) return null
         double half = HALF * rise
-        int a = peak, b = peak
-        while (a > 0 && cell[a - 1] >= half) a--
-        while (b < n - 1 && cell[b + 1] >= half) b++
-        boolean moved = true
-        while (moved) {
-            moved = false
-            for (int d = 2; d <= DIP + 1; d++) if (a - d >= 0 && cell[a - d] >= half) { a -= d; moved = true; while (a > 0 && cell[a - 1] >= half) a--; break }
-            for (int d = 2; d <= DIP + 1; d++) if (b + d < n && cell[b + d] >= half) { b += d; moved = true; while (b < n - 1 && cell[b + 1] >= half) b++; break }
-        }
+        int[] around = event(cell, peak, half)
+        int a = around[0], b = around[1]
         Map<String, Object> out = new LinkedHashMap<String, Object>()
         out.put('cell', cell); out.put('a', a); out.put('b', b); out.put('rise', rise); out.put('half', half); out.put('trace', null); out.put('noise', null)
         if (zone == null) return out
@@ -5072,13 +5096,7 @@ class CalciumPassingObject {
             double sd = Double.NaN
             if (lastF0 > firstF0) { double m = mean(trace[z], firstF0, lastF0), ss = 0d; for (int f = firstF0; f <= lastF0; f++) ss += (trace[z][f] - m) * (trace[z][f] - m); sd = Math.sqrt(ss / (lastF0 - firstF0)) }
             double steps = Double.NaN
-            if (n > 1) {
-                double[] d = new double[n - 1]
-                for (int f = 1; f < n; f++) d[f - 1] = plain[f] - plain[f - 1]
-                double m = CalciumMotion.median(d)
-                for (int f = 0; f < n - 1; f++) d[f] = Math.abs(d[f] - m)
-                steps = 1.4826d * CalciumMotion.median(d) / Math.sqrt(2d) / Math.sqrt((double) AVERAGE)
-            }
+            if (n > 1) steps = spread(plain) / Math.sqrt((double) AVERAGE)
             noise[z] = Double.isNaN(sd) ? steps : Double.isNaN(steps) ? sd : Math.max(sd, steps)
         }
         out.put('trace', trace); out.put('noise', noise)
@@ -5086,11 +5104,14 @@ class CalciumPassingObject {
     }
     /** @param raw, background, zone, firstF0, lastF0, peak as for traces
      *  @param span frames searched before and after the event
+     *  @param centre, outline where the zones and the outline's pixels lie, as shape gives them; null when they are not known,
+     *         and then the rule "crosses the cell" is not checked
      *  @return null when the cell does not rise at the peak; else first and last (the event's frames, counted from 1), rule
-     *          ('passes through', 'on the edge' or ''), text, detail; traces (what traces gave); where a passage was seen,
-     *          before and after ([zone, frame counted from 1] of the sector seen before and after the event); and where the
-     *          rise is on an edge, edge ([rim sector 0 to 7, the stretch's first frame, its last frame, counted from 1]) */
-    static Map<String, Object> check(double[] raw, double[] background, float[][] zone, int firstF0, int lastF0, int peak, int span) {
+     *          ('passes through', 'on the edge', 'crosses the cell' or ''), text, detail; traces (what traces gave); where a
+     *          passage was seen, before and after ([zone, frame counted from 1] of the sector seen before and after the event);
+     *          where the rise is on an edge, edge ([rim sector 0 to 7, the stretch's first frame, its last frame, counted from
+     *          1]); and cross (what crossing gave; null when it was not checked) */
+    static Map<String, Object> check(double[] raw, double[] background, float[][] zone, int firstF0, int lastF0, int peak, int span, double[][] centre = null, double[][] outline = null) {
         Map<String, Object> t = traces(raw, background, zone, firstF0, lastF0, peak)
         if (t == null) return null
         int n = raw.length, a = (int) t.get('a'), b = (int) t.get('b')
@@ -5154,6 +5175,127 @@ class CalciumPassingObject {
                 } else out.put('detail', ((String) out.get('detail')) + '; also on the ' + CalciumRingAndCore.SIDES[hot] + ' edge: ' + seen)
             }
         }
+        // crosses the cell: the centre of the rise moves across the outline; when rule A or B flags the cell, said as well
+        Map<String, Object> cross = centre == null || outline == null ? null : crossing(cell, peak, background, zone, centre, outline, firstF0, lastF0)
+        out.put('cross', cross)
+        if (cross != null && cross.get('flag') == true) {
+            String seen = 'from the ' + CalciumRingAndCore.SIDES[(int) cross.get('from')] + ' to the ' + CalciumRingAndCore.SIDES[(int) cross.get('to')] + ', ' + String.format(Locale.US, '%.2f', (double) cross.get('ratio')) + ' x its width'
+            if (((String) out.get('rule')).isEmpty()) {
+                out.put('rule', 'crosses the cell')
+                out.put('text', 'possible passing object, ' + frames((int) cross.get('first'), (int) cross.get('last')))
+                out.put('detail', 'the rise crossed the cell ' + seen)
+            } else out.put('detail', ((String) out.get('detail')) + '; also crosses the cell ' + seen)
+        }
+        return out
+    }
+    /** Where the zones of one cell and its outline lie, for crossing: from the pixel indices of the outline and of its 25 zones
+     *  (CalciumRingAndCore.zonesOf) in a picture w pixels wide.
+     *  @return [centre, outline]: centre is each zone's [pixels, x, y], its pixel count and the mean x and y of its pixels minus
+     *          the mean x and y of the outline's pixels, in pixels with y down (x and y 0 for a zone without pixels); outline is
+     *          the outline's pixels about that centre, [x values, y values] */
+    static double[][][] shape(int[] outline, int[][] zones, int w) {
+        long sx = 0L, sy = 0L
+        for (int i : outline) { int y = Math.floorDiv(i, w); sx += i - y * w; sy += y }
+        double x0 = outline.length == 0 ? 0d : ((double) sx) / outline.length, y0 = outline.length == 0 ? 0d : ((double) sy) / outline.length
+        double[][] centre = new double[zones.length][], around = new double[2][outline.length]
+        for (int k = 0; k < outline.length; k++) { int y = Math.floorDiv(outline[k], w); around[0][k] = outline[k] - y * w - x0; around[1][k] = y - y0 }
+        for (int z = 0; z < zones.length; z++) {
+            double mx = 0d, my = 0d
+            for (int i : zones[z]) { int y = Math.floorDiv(i, w); mx += i - y * w - x0; my += y - y0 }
+            centre[z] = [(double) zones[z].length, zones[z].length == 0 ? 0d : mx / zones[z].length, zones[z].length == 0 ? 0d : my / zones[z].length] as double[]
+        }
+        double[][][] out = new double[2][][]
+        out[0] = centre; out[1] = around
+        return out
+    }
+    /** Crosses the cell: the centre of the rise over the core, the rim sectors and the near-ring sectors (CROSS_ZONES), each
+     *  weighted by its pixels at its centre, moves across the outline while the cell is up.
+     *  The window is the stretch around the peak where the cell stays at or above CROSS_LEVEL of its rise (event). Each zone
+     *  counts with its pixels: R(f) is the sum of pixels x zone mean less all the pixels x the cell's background, X(f) and Y(f)
+     *  the same with each zone's pixels at its centre, each less its mean over the F0 frames and averaged over AVERAGE frames.
+     *  The start is (X, Y) / R over the first half of the window, the end over its last half (in a window of an odd number of
+     *  frames the middle one is in neither). It flags when all of these hold: the travel from the start to the end is at least
+     *  CROSS_TRAVEL x the outline's width along it; the centre moves that way steadily, at least CROSS_STEADY (the frames where
+     *  R is above 0, each step weighted by the smaller R of its two frames: the steps forward less the steps back over all
+     *  steps); the travel is at least CROSS_NOISE x its noise (from 1.4826 x the median absolute deviation of the frame-to-frame
+     *  differences of X and Y before averaging, divided by root 2, carried through the averages that give the start and the
+     *  end); and the outline's centre lies between the start and the end along the travel. Nothing new is measured.
+     *  @param cell the cell's trace (traces), @param peak the frame of the call's peak, counted from 0
+     *  @param background the cell's background, @param zone the zone means as given to traces, taken to the two decimals of
+     *         the values table  @param centre, outline as shape gives them  @param firstF0, lastF0 the F0 frames, counted from 0
+     *  @return null when the cell does not rise at the peak; else first and last (the window, counted from 1) and flag; once
+     *          the start and end are found also start and end ([x, y], pixels from the outline's centre, y down), from and to
+     *          (their sectors 0 to 7: right, lower right ...), travel (pixels); and with a travel, width (pixels across the
+     *          outline along the travel), ratio (travel / width), steadiness (NaN when it cannot be worked out), noise (pixels),
+     *          overNoise (travel / noise), along (where the start and the end lie along the travel, in half widths from the
+     *          outline's centre: [start, end]) */
+    static Map<String, Object> crossing(double[] cell, int peak, double[] background, float[][] zone, double[][] centre, double[][] outline, int firstF0, int lastF0) {
+        int n = cell.length
+        double rise = cell[peak]
+        if (Double.isNaN(rise) || Double.isInfinite(rise) || rise <= 0d) return null
+        int[] window = event(cell, peak, CROSS_LEVEL * rise)
+        int a = window[0], b = window[1], frames = b - a + 1
+        Map<String, Object> out = new LinkedHashMap<String, Object>()
+        out.put('first', a + 1); out.put('last', b + 1); out.put('flag', false)
+        if (frames < 2) return out
+        // the zones summed with their pixels and centres, less the cell's background on as many pixels. The values table holds
+        // two decimals and is read as float (CalciumRingAndCore.read): these sums over hundreds of pixels take the saved two
+        // decimals back exactly, as a float would move the travel in its 4th digit
+        double[] r = new double[n], x = new double[n], y = new double[n]
+        double pixels = 0d, kx = 0d, ky = 0d
+        for (int z : CROSS_ZONES) {
+            if (zone == null || zone[z] == null || zone[z].length != n || !finite(zone[z]) || centre[z] == null || centre[z][0] < CalciumRingAndCore.MIN_PIXELS) continue
+            double count = centre[z][0], ox = centre[z][1], oy = centre[z][2]
+            for (int f = 0; f < n; f++) { double m = Math.rint(zone[z][f] * 100d) / 100d; r[f] += count * m; x[f] += count * ox * m; y[f] += count * oy * m }
+            pixels += count; kx += count * ox; ky += count * oy
+        }
+        for (int f = 0; f < n; f++) { r[f] -= pixels * background[f]; x[f] -= kx * background[f]; y[f] -= ky * background[f] }
+        double r0 = mean(r, firstF0, lastF0), x0 = mean(x, firstF0, lastF0), y0 = mean(y, firstF0, lastF0)
+        double[] rs = new double[n], xs = new double[n], ys = new double[n]
+        for (int f = 0; f < n; f++) { rs[f] = r[f] - r0; xs[f] = x[f] - x0; ys[f] = y[f] - y0 }
+        rs = averaged(rs); xs = averaged(xs); ys = averaged(ys)
+        // the start over the first half of the window, the end over its last half
+        int k = frames >> 1
+        double d1 = 0d, d2 = 0d, x1 = 0d, y1 = 0d, x2 = 0d, y2 = 0d
+        for (int f = a; f < a + k; f++) { d1 += rs[f]; x1 += xs[f]; y1 += ys[f] }
+        for (int f = b - k + 1; f <= b; f++) { d2 += rs[f]; x2 += xs[f]; y2 += ys[f] }
+        if (!(d1 > 0d) || !(d2 > 0d)) return out
+        double[] start = [x1 / d1, y1 / d1] as double[], end = [x2 / d2, y2 / d2] as double[]
+        double travel = Math.hypot(end[0] - start[0], end[1] - start[1])
+        out.put('start', start); out.put('end', end); out.put('travel', travel)
+        out.put('from', CalciumRingAndCore.sector(start[1], start[0])); out.put('to', CalciumRingAndCore.sector(end[1], end[0]))
+        if (!(travel > 0d) || Double.isInfinite(travel)) return out
+        double ux = (end[0] - start[0]) / travel, uy = (end[1] - start[1]) / travel
+        double lo = Double.POSITIVE_INFINITY, hi = Double.NEGATIVE_INFINITY
+        for (int i = 0; i < outline[0].length; i++) { double p = outline[0][i] * ux + outline[1][i] * uy; if (p < lo) lo = p; if (p > hi) hi = p }
+        double width = hi - lo
+        // steadiness: the frames of the window where R is above 0, in order
+        double forward = 0d, all = 0d, before = Double.NaN, weight = 0d
+        int used = 0
+        for (int f = a; f <= b; f++) {
+            if (!(rs[f] > 0d)) continue
+            double q = (xs[f] * ux + ys[f] * uy) / rs[f]
+            if (used > 0) { double v = Math.min(weight, rs[f]), s = q - before; forward += v * s; all += v * Math.abs(s) }
+            before = q; weight = rs[f]; used++
+        }
+        double steadiness = used >= 2 && all > 0d ? forward / all : Double.NaN
+        // the noise of the travel: the noise of one frame of X and Y, carried through the averages the start and the end are made of
+        double sx = spread(x), sy = spread(y)
+        double[] w0 = new double[n], w1 = new double[n], w2 = new double[n]
+        int h = AVERAGE >> 1
+        for (int f = firstF0; f <= lastF0; f++) { int lo2 = Math.max(0, f - h), hi2 = Math.min(n, f + h + 1); for (int g = lo2; g < hi2; g++) w0[g] += 1d / (hi2 - lo2) }
+        for (int g = 0; g < n; g++) w0[g] /= (lastF0 - firstF0 + 1)
+        for (int f = a; f < a + k; f++) { int lo2 = Math.max(0, f - h), hi2 = Math.min(n, f + h + 1); for (int g = lo2; g < hi2; g++) w1[g] += 1d / (hi2 - lo2) }
+        for (int f = b - k + 1; f <= b; f++) { int lo2 = Math.max(0, f - h), hi2 = Math.min(n, f + h + 1); for (int g = lo2; g < hi2; g++) w2[g] += 1d / (hi2 - lo2) }
+        double sum = 0d
+        for (int g = 0; g < n; g++) { double dw = (w2[g] - k * w0[g]) / d2 - (w1[g] - k * w0[g]) / d1; sum += dw * dw }
+        double noise = Math.sqrt(sum * (sx * sx * ux * ux + sy * sy * uy * uy))
+        double ratio = travel / width, overNoise = travel / noise
+        double[] along = [(start[0] * ux + start[1] * uy) / (width / 2d), (end[0] * ux + end[1] * uy) / (width / 2d)] as double[]
+        out.put('width', width); out.put('ratio', ratio); out.put('steadiness', steadiness); out.put('noise', noise); out.put('overNoise', overNoise); out.put('along', along)
+        // NaN is tested for first: Groovy can count it as larger than any number
+        out.put('flag', width > 0d && !Double.isNaN(ratio) && ratio >= CROSS_TRAVEL && !Double.isNaN(steadiness) && steadiness >= CROSS_STEADY &&
+            !Double.isNaN(overNoise) && overNoise >= CROSS_NOISE && !Double.isNaN(along[0]) && along[0] <= 0d && !Double.isNaN(along[1]) && along[1] >= 0d)
         return out
     }
     /** Stretches of samples at or above the rise a cell needs, inside its response window, as the engine counts them: a sample
@@ -5185,6 +5327,10 @@ class CalciumUnchecked extends RuntimeException { CalciumUnchecked(String messag
  *     event (CalciumMotion.movedNear, from the span before the event to the span after it: MOVED pixels or more from where it
  *     was over the F0 frames, or between two of those frames) the row says "field moved, frames a to b" instead: a field that
  *     moves gives the same picture as an object.
+ *   - "possible passing object, frames a to b" of the rule "crosses the cell" (CalciumPassingObject.crossing), with a and b
+ *     its own window, and the field moved near that window as above. When rule A or B already flags the cell, that flag
+ *     stays and its detail says the rise also crosses the cell. Where the zones lie is rebuilt from the outlines (shapes);
+ *     without them, or when they do not give the saved counts, the detail says the crossing was not checked.
  *   - "short separate crossings": a responder whose rise reached what it needs CROSSINGS or more separate times in the
  *     response window and never for more than SHORT samples, counted from the engine's own columns.
  *  A stretch of one frame reads "frame a". Only the event of the largest rise is looked at. The F0 frames are the analysis's
@@ -5202,7 +5348,7 @@ class CalciumCallChecks {
     static final List HEADER=HEADER_BEFORE+['QC_flags']
     /** The code of each rule's flag, defined here only: the QC_flags column of the table holds them, as the engine's own
      *  QC_flags holds its codes. */
-    static final Map CODES=['passes through':'POSSIBLE_PASSING_OBJECT','on the edge':'RISE_ON_EDGE','field moved':'FIELD_MOVED','short separate crossings':'SHORT_SEPARATE_CROSSINGS']
+    static final Map CODES=['passes through':'POSSIBLE_PASSING_OBJECT','on the edge':'RISE_ON_EDGE','field moved':'FIELD_MOVED','short separate crossings':'SHORT_SEPARATE_CROSSINGS','crosses the cell':'POSSIBLE_PASSING_OBJECT']
     /** Each code as a table on screen names it: the names the filters of the flagged list use. */
     static final Map LABELS=[POSSIBLE_PASSING_OBJECT:'Possible passing object',RISE_ON_EDGE:'Rise on the edge',FIELD_MOVED:'Field moved',SHORT_SEPARATE_CROSSINGS:'Short separate crossings']
     /** Codes are joined as the engine joins its own (responder_qc_flags in analysis/upstream/responders.R). */
@@ -5254,7 +5400,8 @@ class CalciumCallChecks {
         for(int f=0;f<shifts.length;f++)text.append(f+1).append(',').append(String.format(Locale.US,'%.2f,%.2f,%.2f',size[f],shifts[f][0],shifts[f][1])).append('\n')
         file.setText(text.toString(),'UTF-8')
     }
-    /** The saved files, when they belong to these cells, these outlines and this raw table. @return values, counts, area and near, or why not */
+    /** The saved files, when they belong to these cells, these outlines and this raw table.
+     *  @return values, counts, area, near and size (the saved pixel size in micrometres, '' without one), or why not */
     static Map savedAround(String prefix,List names,Roi[] rois,String rawHash,int frames) {
         File pixels=new File(prefix+PIXELS),values=new File(prefix+VALUES)
         if(!pixels.isFile()||!values.isFile())return [why:'ring and core were not measured']
@@ -5268,7 +5415,8 @@ class CalciumCallChecks {
             if(body.any{it[rawAt]!=rawHash})return [why:'the ring and core files are for another raw table']
             String valuesHash=CalciumInstaller.digest(values.bytes)
             if(body.any{it[valuesAt]!=valuesHash})return [why:'the ring and core values table has changed since it was measured']
-            return [values:CalciumRingAndCore.read(values,names.collect{''+it},frames),counts:body.collect{List row->(3..<3+CalciumRingAndCore.ZONES).collect{row[it] as int}},area:body.collect{it[2] as int},near:body.collect{it[nearAt] as int}]
+            return [values:CalciumRingAndCore.read(values,names.collect{''+it},frames),counts:body.collect{List row->(3..<3+CalciumRingAndCore.ZONES).collect{row[it] as int}},area:body.collect{it[2] as int},near:body.collect{it[nearAt] as int},
+                    size:body?''+body[0][PIXEL_HEADER.indexOf('Pixel_size_um')]:'']
         }catch(Throwable problem){return [why:'the ring and core files cannot be read']}
     }
     /** Whether a recording gives the saved raw gray values: every cell on the first, the middle and the last frame. */
@@ -5340,6 +5488,29 @@ class CalciumCallChecks {
             for(int f=0;f<frames;f++){out[f][0]=CalciumCsv.number(''+rows[f+1][x]);out[f][1]=CalciumCsv.number(''+rows[f+1][y]);if(!Double.isFinite(out[f][0])||!Double.isFinite(out[f][1]))return null}
             return out
         }catch(Throwable ignored){return null}
+    }
+    /** Where the zones of every cell lie, for the rule "crosses the cell": rebuilt from the outlines with the zone code of Measure
+     *  (CalciumRingAndCore) and the saved pixel size, on a picture of the recording's size, and used for a cell only when every
+     *  rebuilt count is the saved one. Nothing is measured. @param ring what around gave
+     *  @return cells, one per cell of names: centre and outline as CalciumPassingObject.shape gives them, or why not; or why,
+     *          for every cell */
+    static Map shapes(Map measurement,List names,Map ring) {
+        Roi[] rois=measurement?.rois instanceof Roi[]&&(measurement.rois as Roi[]).length==names.size()?measurement.rois as Roi[]:null
+        ImagePlus picture=[measurement?.picture,measurement?.movie].find{it instanceof ImagePlus&&(it as ImagePlus).getWidth()>0&&(it as ImagePlus).getHeight()>0} as ImagePlus
+        if(rois==null||picture==null||ring?.counts==null)return [why:'the outlines are not at hand']
+        try {
+            int w=picture.getWidth(),h=picture.getHeight()
+            int[][] cellPx=rois.collect{Roi roi->CalciumSteps.pixelsOf(roi,w,h)} as int[][]
+            double size=ring.size?CalciumCsv.number(''+ring.size):Double.NaN
+            def rebuilt=new CalciumRingAndCore(cellPx,w,h,size,size,'micron')
+            List cells=(0..<names.size()).collect{int c->
+                List counts=ring.counts[c] as List
+                if(cellPx[c].length!=(ring.area[c] as int)||(0..<CalciumRingAndCore.ZONES).any{int z->rebuilt.pixels(c,z)!=(counts[z] as int)})return [why:'the outline does not match its ring file']
+                double[][][] at=CalciumPassingObject.shape(cellPx[c],(0..<CalciumRingAndCore.ZONES).collect{int z->rebuilt.zonePx[c*CalciumRingAndCore.ZONES+z]} as int[][],w)
+                [centre:at[0],outline:at[1]]
+            }
+            return [cells:cells]
+        }catch(Throwable problem){return [why:'the outlines cannot be placed on the recording']}
     }
     /** "frames 32 to 35 and 40", for stretches [a, b] counted from 1. */
     static String runsText(List runs){
@@ -5416,7 +5587,8 @@ class CalciumCallChecks {
         Map ring=measured.why ? [why:measured.why] : around(measurement,frames,log,measure)
         double[][] shifts=ring.values!=null?movement(new File(measurement.folder as File,measurement.recording+'_').path,frames):null
         String unchecked=ring.values!=null?'':(''+(ring.why?:'ring and core were not measured'))   // why no cell is checked for a passing object
-        [header:h,byCell:byCell,statusAt:statusAt,samples:samples,time:time,frames:frames,traceAt:traceAt,first:first,last:last,names:names,span:span,measured:measured,ring:ring,shifts:shifts,unchecked:unchecked]
+        Map shapes=ring.values!=null?shapes(measurement,names,ring):null   // where the zones lie, for the rule "crosses the cell"
+        [header:h,byCell:byCell,statusAt:statusAt,samples:samples,time:time,frames:frames,traceAt:traceAt,first:first,last:last,names:names,span:span,measured:measured,ring:ring,shifts:shifts,unchecked:unchecked,shapes:shapes]
     }
     /** The row of one cell of the table, from what context read. @param c the cell's place in context.names
      *  @param keep when given, what the row was made from is put in it: event (CalciumPassingObject.check, with its traces),
@@ -5431,7 +5603,7 @@ class CalciumCallChecks {
                  Field_movement_measured:shifts!=null?'yes':'no',Passing_object_check:'not checked',Not_checked_because:'',Crossings:'',Longest_crossing_samples:'',QC_flags:'']
         if(ring.values!=null){row.Near_ring_sectors_usable=ring.near[c];row.Area_pixels=ring.area[c]}
         List flags=[]   // a flag is [text, rule, detail]
-        String why=''
+        String why='',crossNote=''   // crossNote: why the rule "crosses the cell" was not checked on a cell that was checked
         Map event=null,moved=null;float[][] zone=null
         double peakAt=number(h,call,'Peak_s')
         if(!scored)why='no call'
@@ -5444,17 +5616,23 @@ class CalciumCallChecks {
                 int peak=0;for(int f=1;f<frames;f++)if(Math.abs(time[f]-peakAt)<Math.abs(time[peak]-peakAt))peak=f
                 int outside=0
                 if(ring.values!=null){zone=new float[CalciumRingAndCore.ZONES][];for(int z=0;z<CalciumRingAndCore.ZONES;z++)if((ring.counts[c][z] as int)>=CalciumRingAndCore.MIN_PIXELS){zone[z]=(ring.values as float[][])[c*CalciumRingAndCore.ZONES+z];if(z<16)outside++}}
-                event=CalciumPassingObject.check(raw,background,zone,first,last,peak,span)
+                Map shape=context.shapes==null?null:(context.shapes as Map).why?context.shapes as Map:((context.shapes as Map).cells as List)[c] as Map
+                event=CalciumPassingObject.check(raw,background,zone,first,last,peak,span,shape?.centre as double[][],shape?.outline as double[][])
                 if(event!=null){row.Event_first_frame=event.first;row.Event_last_frame=event.last}
                 if(zone==null)why=unchecked
                 else if(event==null)why='no rise at the peak'
                 else if(outside==0)why='no ring around the cell'   // no ring sector has enough pixels: neither rule can be tested
                 else {
                     row.Passing_object_check='checked'
+                    if(shape?.why)crossNote='crossing not checked: '+shape.why
                     if(event.rule) {
-                        moved=shifts==null?null:CalciumMotion.movedNear(shifts,first+1,last+1,(event.first as int)-span,(event.last as int)+span)
-                        if(moved!=null)flags<<['field moved, '+CalciumPassingObject.frames(moved.first as int,moved.last as int),'field moved',movedText(moved)+'; otherwise '+event.text+': '+event.detail]
-                        else flags<<[event.text,event.rule,event.detail]
+                        // the field moved near the frames the flag names: the event, or the window of the rule "crosses the cell"
+                        Map frameOf=event.rule=='crosses the cell'?event.cross as Map:event
+                        moved=shifts==null?null:CalciumMotion.movedNear(shifts,first+1,last+1,(frameOf.first as int)-span,(frameOf.last as int)+span)
+                        String detail=event.detail+(crossNote?'; '+crossNote:'')
+                        if(moved!=null)flags<<['field moved, '+CalciumPassingObject.frames(moved.first as int,moved.last as int),'field moved',movedText(moved)+'; otherwise '+event.text+': '+detail]
+                        else flags<<[event.text,event.rule,detail]
+                        crossNote=''
                     }
                 }
             }
@@ -5472,7 +5650,7 @@ class CalciumCallChecks {
                 if(status=='Responded'&&crossed[0]>=CROSSINGS&&crossed[1]<=SHORT)flags<<['short separate crossings','short separate crossings',crossed[0]+' crossings, the longest '+crossed[1]+' samples']
             }
         }
-        row.Flag=flags.collect{it[0]}.join('; ');row.Rule=flags.collect{it[1]}.join('; ');row.Detail=flags.collect{it[2]}.join('; ');row.Not_checked_because=why
+        row.Flag=flags.collect{it[0]}.join('; ');row.Rule=flags.collect{it[1]}.join('; ');row.Detail=((crossNote ? [crossNote] : [])+flags.collect{it[2]}).join('; ');row.Not_checked_because=why
         row.QC_flags=codesOf(row.Rule)
         if(keep!=null){keep.event=event;keep.zone=zone;keep.moved=moved}
         row
@@ -5498,9 +5676,10 @@ class CalciumCallChecks {
      *          background minus its F0 mean, averaged over 3 frames), zones (the 25 zones in CalciumRingAndCore.NAMES order:
      *          zone, key, place, usable, trace in gray levels, null when not usable), eventFirst and eventLast (frames, counted
      *          from 1), rule, text, flags and codes (as answer gives them), lines (the zones the flag rests on, each with zone,
-     *          place, part: before, after, rim, ring or core, and frame where the sector was seen, else null; for a cell
-     *          without a flag of rule A or B, the core), others (every other usable near-ring sector), band (the event's
-     *          frames, [first, last], for a cell with a flag; null without one) */
+     *          place, part: before, after, rim, ring or core, and frame where the sector was seen, else null; for rule C the
+     *          near-ring sectors on the side the rise came from and went to, and the core; for a cell without a flag of rule
+     *          A, B or C, the core), others (every other usable near-ring sector), band (the frames the flag's text names,
+     *          [first, last], as band gives them; null without one) */
     static Map aroundCell(Map context,Map checks,String cell) {
         List names=(context?.names?:[]) as List
         Map out=[cell:cell,name:CalciumReview.shown(names,cell),why:'']
@@ -5527,21 +5706,34 @@ class CalciumCallChecks {
         out.rule=now.rule;out.text=now.text;out.flags=now.flags;out.codes=now.codes
         List rules=(now.flags as List).collect{it.rule},lines=[]
         def line={int z,String part,Object frame->if(trace[z]!=null)lines<<[zone:z,place:place(z),part:part,frame:frame]}
-        // a field that moved replaces rule A or B: the zones are the ones that rule rests on
-        boolean flagged=rules.any{it in ['passes through','on the edge','field moved']}
+        // a field that moved replaces rule A, B or C: the zones are the ones that rule rests on; rule C's only when A and B do
+        // not flag the cell
+        boolean flagged=rules.any{it in ['passes through','on the edge','field moved','crosses the cell']}
+        Map cross=event.cross as Map
         if(flagged&&event.before!=null){List a=event.before as List,b=event.after as List;line(a[0] as int,'before',a[1]);line(b[0] as int,'after',b[1])}
         else if(flagged&&event.edge!=null){int hot=(event.edge as List)[0] as int;line(CalciumRingAndCore.CORE+1+hot,'rim',null);line(hot,'ring',null);line(CalciumRingAndCore.CORE,'core',null)}
+        else if(flagged&&cross?.flag==true){line(cross.from as int,'before',null);if(cross.to!=cross.from)line(cross.to as int,'after',null);line(CalciumRingAndCore.CORE,'core',null)}
         else line(CalciumRingAndCore.CORE,'core',null)
         out.lines=lines
         Set named=lines.collect{it.zone} as Set
         out.others=(0..<8).findAll{int z->trace[z]!=null&&!named.contains(z)}
-        out.band=band(event,rules)
+        out.band=band(event,rules,keep.moved as Map)
         out
     }
-    /** The frames shown as "flagged frames" around a cell: the event's frames, for a cell with any flag.
+    /** The frames shown as "flagged frames" around a cell: the frames its flag's text names. Rule A (passes through): the
+     *  event; rule B (on the edge): the stretch on the edge; rule C (crosses the cell): its window; field moved: the moved
+     *  frames. Short separate crossings alone names no frames: no band.
      *  @param event what CalciumPassingObject.check gave  @param rules the rules of the cell's flags
-     *  @return [first, last], counted from 1; null without a flag */
-    static List band(Map event,List rules){event==null||!rules?null:[event.first,event.last]}
+     *  @param moved what CalciumMotion.movedNear gave for the flag (cellRow)
+     *  @return [first, last], counted from 1; null without a flag that names frames */
+    static List band(Map event,List rules,Map moved=null){
+        String rule=(rules?:[]).find{it!='short separate crossings'}
+        if(event==null||rule==null)return null
+        if(rule=='field moved')return moved==null?null:[moved.first,moved.last]
+        if(rule=='on the edge'){List edge=event.edge as List;return edge==null?null:[edge[1],edge[2]]}
+        if(rule=='crosses the cell'){Map cross=event.cross as Map;return cross==null?null:[cross.first,cross.last]}
+        [event.first,event.last]
+    }
     /** The note for the whole analysis: '' when every evaluable cell could be checked as written. */
     static String note(boolean ring,boolean movement,String unchecked){!ring?'Not checked for a passing object'+(unchecked?': '+unchecked:'')+'.':movement?'':'The movement of the field was not saved, so a moving field is not told from an object.'}
     /** The checks as the Step 4 page is given them: for every cell the flag's text, its rule and the first frame of the event.
@@ -5590,8 +5782,9 @@ class CalciumReview {
     /** Marked_by is last: manual, or automatic for a mark made at the end of an analysis (automatic). */
     static final List HEADER=HEADER_BEFORE+['Marked_by']
     static final List BY=['manual','automatic']
-    /** The rules whose flag on a responder gets an automatic mark: a possible passing object and a rise on the edge. */
-    static final List AUTOMATIC_RULES=['passes through','on the edge']
+    /** The rules whose flag on a responder gets an automatic mark: a possible passing object (passes through, crosses the
+     *  cell) and a rise on the edge. */
+    static final List AUTOMATIC_RULES=['passes through','on the edge','crosses the cell']
     static final String AUTOMATIC_REASON='Passing object'
     /** "Cell 16, Cell 97": the first five names, then "and N more". */
     static String listed(List names){names.size()<=5?names.join(', '):names.take(5).join(', ')+' and '+(names.size()-5)+' more'}
