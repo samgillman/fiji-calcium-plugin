@@ -12,7 +12,7 @@
   const inGroup = (call, group, name) => group === 0 || (group === 1 && call === 'Responded') || (group === 2 && call === 'Did not respond') ||
     (group === 3 && call === 'Excluded') || (group === 4 && call === 'Unscorable') || (group === 5 && qualityFor(name).length > 0 && (!S.qualityFlag || qualityFor(name).includes(S.qualityFlag))) ||
     (group === 6 && !!markOf(name));
-  const S = { unlinked: new Set(), validationShown: null, imported: null, info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], frame: 1, view: 'raw', viewChosen: false,
+  const S = { unlinked: new Set(), validationShown: null, imported: null, info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], keep: null, frame: 1, view: 'raw', viewChosen: false,
     every: false, thresholds: false, plotMode: 'mean', signal: 'dff', outlines: true, outlineWidth: 1, outlineColours: 'call', numberCells: false, saveArea: 'whole', timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false,
     marking: null, reviewing: false, carried: null, said: null };   // the open mark form ({ cell }); a mark on its way to Fiji; the carried marks of this run; what Fiji said after the last mark
   const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, y: {}, hover: null, at: null, readout: null, line: false, movedAt: -1e9, rest: null, geom: null, scrubbing: false, drawn: [], series: [] };
@@ -594,12 +594,14 @@
       // each flag is a filter of its own, so a small group (for example the cells whose ΔF/F₀ falls below −1) can be isolated
       const li = document.createElement('li'), link = document.createElement('button'); link.type = 'button'; link.className = 'flag-filter' + (S.qualityFlag === flag ? ' on' : '');
       link.textContent = flagShort(flag) + ': ' + plural(count.total, 'cell') + (called() ? ', ' + plural(count.responders, 'responder') : ''); link.title = S.qualityFlag === flag ? 'Show all flagged cells again' : 'Show only these cells';
-      link.addEventListener('click', () => { S.qualityFlag = S.qualityFlag === flag ? null : flag; S.group = 5; $('group').value = 5; showQuality(); listCells(); showTab('review'); });
+      link.addEventListener('click', () => { S.qualityFlag = S.qualityFlag === flag ? null : flag; S.group = 5; $('group').value = 5; S.keep = null; showQuality(); listCells(); showTab('review'); });
       li.appendChild(link);
       if (flagShort(flag) !== flagText(flag)) { const what = document.createElement('span'); what.className = 'flag-what'; what.textContent = flagText(flag) + '.'; li.appendChild(what); }
       list.appendChild(li);
     }
-    for (const message of new Set(notices)) { const li = document.createElement('li'); li.textContent = message; list.appendChild(li); }
+    // the notices; a note that already leads the list is not said again under it
+    for (const message of new Set(notices)) { if (onlyNote && message === note) continue; const li = document.createElement('li'); li.textContent = message; list.appendChild(li); }
+    list.hidden = !list.children.length;
   }
   // ---------------------------------------------------------------- the saved columns in words: one dictionary for every table on screen
   const DFF = 'ΔF/F₀', SEC = 's', PCT = '%', GRAY = 'gray levels', AREA = 'ΔF/F₀ × s', RATE = 'ΔF/F₀ per s', FRAMES = 'frames', CELLS = 'cells', PIXELS = 'pixels';
@@ -915,7 +917,10 @@
     S.results = await api('results'); const r = S.results;
     // the marks carried over when this analysis was run: Fiji gives them for this analysis until the next run, marks or none
     const carried = r.review && r.review.carried; S.carried = carried && carried.text ? { folder: r.folder, text: carried.text } : null;
-    S.said = null; S.markSaid = null; closeMark();
+    // while marks apply after a good finish of this analysis, the status line is what Fiji says now, as after a mark (applyReview)
+    // and as in the Fiji window; a page opened on another analysis, a failed or empty run, or no marks: "Done." (finishLine)
+    const now = S.state; S.said = marked() && now && now.tone === 'good' && now.folder === r.folder ? (now.message || null) : null;
+    S.markSaid = null; S.keep = null; closeMark();
     const records = (data) => Object.fromEntries(((data && data.rows) || []).map((row) => [row[data.header.indexOf('Cell')], Object.fromEntries(data.header.map((key, i) => [key, row[i]]))]));
     S.quality = records(r.tables.quality);
     const windows = r.windows && r.windows.length ? r.windows : [{ key: 'Stimulus::' + (r.counts.Stimulus || 'Stimulus'), role: 'Stimulus', stimulus: r.counts.Stimulus || 'Stimulus' }];
@@ -957,11 +962,13 @@
     const share = (c) => ({ text: shareText(c[0], c[1]), key: c[1] ? c[0] / c[1] : '', num: true }), count = (n) => ({ text: String(n), key: n, num: true });
     // six columns, so the table fits its tab; the saved file has every number in a column of its own. While review marks
     // apply, two more: the share after review and how many calls the marks changed.
+    // After review follows "Leave out … below zero" as the headline does: the figure written there is the one in this column
     const reviewed = !!(t.reviewed && marked()), of = (c) => c[1] ? { text: shareText(c[0], c[1]) + ' (' + c[0] + ' of ' + c[1] + ')', key: c[0] / c[1], num: true } : { text: '–', key: '', num: true };
+    const after = (row) => S.withoutBelowZero ? row.reviewed.without : row.reviewed.counted;
     const header = ['Cells', '% responding', 'Responded', 'Evaluable', 'Cells below zero', 'Without them'].concat(reviewed ? ['After review', 'Calls changed'] : []);
     table('table-tally', { header, columns: header.map((name, index) => ({ name, index, given: true })),
       rows: t.rows.map((row) => [row.label, share(row.counted), count(row.counted[0]), count(row.counted[1]), count(row.counted[2] - row.without[2]), of(row.without)]
-        .concat(reviewed ? (row.reviewed ? [of(row.reviewed.counted), count(row.reviewed.changed)] : [{ text: '–', key: '', num: true }, { text: '–', key: '', num: true }]) : [])) });
+        .concat(reviewed ? (row.reviewed ? [of(after(row)), count(row.reviewed.changed)] : [{ text: '–', key: '', num: true }, { text: '–', key: '', num: true }]) : [])) });
   }
   /** The headline numbers for the selected response window (the primary stimulus or its control), from the saved counts. */
   function showTiles() {
@@ -999,18 +1006,27 @@
       o.textContent = name + (reviewing && (i === 1 || i === 2) ? ' after review' : '') + ' (' + S.info.names.filter((n) => inGroup(callOf(n), i, n)).length + ')'; group.appendChild(o); });
     group.value = S.group; Plot.dirty = true; listCells(); drawHeatmap();
   }
-  /** Lists the cells of the chosen group, and draws only those on the picture and behind the mean. */
+  /** Lists the cells of the chosen group, and draws only those on the picture and behind the mean. A cell that a mark or its
+   *  removal took out of the group (S.keep, refreshReview) stays in the list, in its place, while it is selected: the arrows go
+   *  on from it to the next cell of the group. It is not counted or drawn with the group. */
   function listCells() {
     const names = S.info.names;
-    S.listed = S.results ? names.filter((n) => inGroup(callOf(n), S.group, n)) : names.slice();
+    S.listed = S.results ? names.filter((n) => inGroup(callOf(n), S.group, n) || n === S.keep) : names.slice();
+    offerCells();
+    pick(S.listed.includes(S.cell) ? S.cell : null);   // the selection never changes by itself: a cell that is not listed is no longer selected
+  }
+  /** The Cell box's list and the arrows, from the cells listed. */
+  function offerCells() {
     const offered = $('cell-names'); offered.replaceChildren();
     for (const name of S.listed) { const o = document.createElement('option'); o.value = shortName(name); offered.appendChild(o); }
     $('previous').disabled = $('next').disabled = S.listed.length < 1;
-    pick(S.listed.includes(S.cell) ? S.cell : null);   // the selection never changes by itself: a cell that is not listed is no longer selected
   }
-  function showGroup(group) { if (S.group !== group) { S.group = group; $('group').value = group; listCells(); } }
+  /** Show is set to another group, by the person or by a flag: the cell a mark kept listed is let go first. */
+  function showGroup(group) { if (S.group !== group) { S.group = group; $('group').value = group; S.keep = null; listCells(); } }
   /** Selects a cell everywhere: the list, the picture, the plot, the heatmap and the tables. */
   function pick(name) {
+    // the selection moves away from a cell kept listed after its mark: it leaves the list when it is not in the group
+    if (S.keep && name !== S.keep) { const kept = S.keep; S.keep = null; if (S.results && !inGroup(callOf(kept), S.group, kept)) { S.listed = S.listed.filter((n) => n !== kept); offerCells(); } }
     if (name && S.results && !S.listed.includes(name)) { S.group = 0; $('group').value = 0; S.cell = name; listCells(); return; }
     S.cell = name || null; $('cell').value = name ? shortName(name) : '';
     const verdict = $('verdict'), row = name && S.results ? calls()[name] : null;
@@ -1156,13 +1172,13 @@
     S.said = marked() ? (answer.message || null) : null; S.marking = null; S.markSaid = null; $('mark-form').hidden = true;
     refreshReview(); showState();
   }
-  /** Draws again, from the review and tally on hand, everything that counts, groups, colours or lists cells by call. The selected
-   *  cell stays selected, also when it leaves the group the Show list is on. */
+  /** Draws again, from the review and tally on hand, everything that counts, groups, colours or lists cells by call. Show stays
+   *  on its group and the selected cell stays selected, also when it leaves that group: it stays listed until another cell is
+   *  chosen (listCells). Only Marked, once no mark is left, gives way to All cells (updateWindow). */
   function refreshReview() {
-    const keep = S.cell;
+    if (S.cell) S.keep = S.cell;
     showCalls(); showTally(); showMethods(); showMetricTable();
     updateWindow();
-    if (keep && S.cell !== keep) pick(keep);
   }
   /** The Methods sentence of the review, to copy, with how many cells were marked; nothing without marks that changed a call.
    *  Called whenever the review may have changed (results loaded, a mark), so "Copied" from an earlier sentence goes. */
@@ -3271,10 +3287,10 @@
     $('mark-cancel').addEventListener('click', closeMark);
     $('copy-methods').addEventListener('click', copyMethods);
     $('all-call-columns').addEventListener('change', showCalls); $('all-count-columns').addEventListener('change', showCounts); $('all-metric-columns').addEventListener('change', showMetricTable);
-    $('response-window').addEventListener('change', () => { S.window = $('response-window').value; updateWindow(); });
+    $('response-window').addEventListener('change', () => { S.window = $('response-window').value; S.keep = null; updateWindow(); });
     $('metrics-table').addEventListener('change', showMetricTable);
-    $('below-zero').addEventListener('change', () => { S.withoutBelowZero = $('below-zero').checked; showTiles(); Plot.dirty = true; drawPlot(); });   // the plot leaves the same cells out
-    $('group').addEventListener('change', () => { S.group = Number($('group').value); listCells(); });
+    $('below-zero').addEventListener('change', () => { S.withoutBelowZero = $('below-zero').checked; showTiles(); showTally(); Plot.dirty = true; drawPlot(); });   // the plot and After review leave the same cells out
+    $('group').addEventListener('change', () => { S.group = Number($('group').value); S.keep = null; listCells(); });
     // The Cell box. A full name, typed or picked from its list, opens that cell at once; a number alone opens it on Enter.
     // An empty box is no cell, and its ✕ empties it. Text that names no cell in the Show list is put back to the cell that is open.
     // Esc in the box undoes the typing and leaves the box (the browser's own Esc, which would empty a search box, is stopped).

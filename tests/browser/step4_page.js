@@ -2008,7 +2008,7 @@ const assert = require('assert/strict');
           traces: Object.fromEntries(Object.entries(kept.results.traces).map(([c, t]) => [c, t.map((v) => Math.max(v, 0))])), checks: withoutCheckFlags ? Object.assign({}, kept.results.checks, { cells: {} }) : kept.results.checks });
         f.refreshReview(); return [document.getElementById('quality-summary').textContent, document.getElementById('quality-lead').textContent, document.getElementById('quality-list').textContent];
       } finally { S.quality = kept.quality; S.results = kept.results; f.refreshReview(); } }, withoutCheckFlags);
-    assert.deepEqual(await noteAlone(false), ['Passing objects not checked', uncheckedNote, uncheckedNote]);
+    assert.deepEqual(await noteAlone(false), ['Passing objects not checked', uncheckedNote, ''], 'the note leads the list and is not said again under it');
     // An analysis made before the checks has none: nothing is said about them, and nothing fails.
     assert.deepEqual(await page.evaluate(() => { const f = window.calciumStep4, kept = f.S.results.checks; try { f.S.results.checks = null; f.refreshReview(); f.pick('Cell001'); return [document.getElementById('cell-checks').hidden, document.getElementById('quality-list').textContent.includes('passing object')]; } finally { f.S.results.checks = kept; f.refreshReview(); f.pick('Cell001'); } }), [true, false]);
 
@@ -2049,6 +2049,12 @@ const assert = require('assert/strict');
     await page.locator('#quality-review summary').click();
     // the list grows with its filters: at this size nothing in it is cut off, and nothing scrolls out of sight
     assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.quality-pop, #quality-list')].map((e) => e.scrollHeight <= e.clientHeight + 1)), [true, true], 'every filter and note of the flagged list is shown whole');
+    // The table of flagged cells is never cut: with more rows than this fixture has (12, as on a real recording with more than 7),
+    // every row is inside the table's own box; in a short window the whole list scrolls instead.
+    assert.deepEqual(await page.evaluate(() => { const box = document.getElementById('quality-cells'), body = document.getElementById('table-flagged').tBodies[0], first = body.rows[0];
+      try { while (body.rows.length < 12) body.appendChild(first.cloneNode(true));
+        const edge = box.getBoundingClientRect(); return [body.rows.length, box.scrollHeight <= box.clientHeight + 1, [...body.rows].every((row) => { const r = row.getBoundingClientRect(); return r.top >= edge.top - 0.5 && r.bottom <= edge.bottom + 0.5; })];
+      } finally { window.calciumStep4.refreshReview(); } }), [12, true, true], 'twelve flagged cells: every row of the table is shown');
     await page.locator('#quality-list .flag-filter', { hasText: 'Possible passing object' }).click();
     assert.equal(await page.inputValue('#group'), '5'); assert.deepEqual(await cellsOffered(), ['Cell001']);
     await page.evaluate(() => { document.getElementById('quality-review').open = false; }); await page.selectOption('#group', '0');
@@ -2101,7 +2107,23 @@ const assert = require('assert/strict');
       return [id(mark.previousElementSibling), id(mark.nextElementSibling), Math.round(verdict.getBoundingClientRect().width) === Math.round(card.clientWidth - parseFloat(look.paddingLeft) - parseFloat(look.paddingRight)),
         mark.getBoundingClientRect().top >= document.getElementById('cell-checks').getBoundingClientRect().bottom - 0.5]; }), ['cell-checks', 'mark-form', true, true], 'the mark button under the call line and the flags');
     const callLine = () => page.evaluate(() => { const box = document.getElementById('verdict').getBoundingClientRect(); return [box.width, box.height]; }), lineBefore = await callLine();
+    // The form is one row, as high as the button's own: opening it moves neither the plot's buttons nor the plot. Also with the
+    // card as wide as in the pictures of real recordings (506 px inside); a narrower card lets the form wrap.
+    const plotButtonsAt = () => page.evaluate(() => [document.querySelector('[data-plot=mean]').getBoundingClientRect().top, document.getElementById('plot').getBoundingClientRect().top]);
+    const formRow = (inner) => page.evaluate(async (inner) => { const card = document.getElementById('cell-card'), form = document.getElementById('mark-form'), look = getComputedStyle(card);
+      if (inner) card.style.maxWidth = (inner + parseFloat(look.paddingLeft) + parseFloat(look.paddingRight)) + 'px';
+      try { await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+        const tops = [...form.children].map((e) => Math.round(e.getBoundingClientRect().top)), control = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--control-h'));
+        // each box inside its label, one after another without overlapping, the last inside the form
+        const boxes = [...form.children].map((e) => e.getBoundingClientRect()), inLabels = [...form.querySelectorAll('label')].every((l) => { const box = l.getBoundingClientRect(), c = l.querySelector('select, input').getBoundingClientRect(); return c.left >= box.left - 0.5 && c.right <= box.right + 0.5; });
+        const apart = boxes.every((b, i) => i === 0 || boxes[i - 1].right <= b.left + 0.5) && boxes[boxes.length - 1].right <= form.getBoundingClientRect().right + 0.5;
+        return { inner: Math.round(card.clientWidth - parseFloat(look.paddingLeft) - parseFloat(look.paddingRight)), oneRow: tops.every((t) => Math.abs(t - tops[0]) <= 1), fits: form.getBoundingClientRect().height <= control + parseFloat(getComputedStyle(form).paddingTop) + 0.5 && inLabels && apart };
+      } finally { card.style.maxWidth = ''; } }, inner);
+    const buttonsBefore = await plotButtonsAt();
     await page.click('#mark'); assert.deepEqual(await callLine(), lineBefore, 'opening the form leaves the call line as it is');
+    { const here = await formRow(null), pictured = await formRow(506);
+      assert.deepEqual([here.oneRow, here.fits, pictured.inner, pictured.oneRow, pictured.fits], [true, true, 506, true, true], 'the form on one row, here (' + here.inner + ' px inside the card) and at the pictures\' width');
+      assert.deepEqual(await plotButtonsAt(), buttonsBefore, 'opening the form moves neither the plot buttons nor the plot'); }
     assert.deepEqual(await page.evaluate(() => { const r = document.getElementById('mark-reason'), n = document.getElementById('mark-note');
       return { reason: r.value, options: [...r.options].filter((o) => !o.hidden).map((o) => o.textContent), placeholder: n.placeholder, max: n.maxLength, focus: document.activeElement.id, button: document.getElementById('mark').hidden,
         labels: [...document.querySelectorAll('#mark-form label')].map((l) => l.firstChild.textContent.trim()), buttons: [...document.querySelectorAll('#mark-form button')].map((b) => b.textContent) }; }),
@@ -2173,7 +2195,12 @@ const assert = require('assert/strict');
     const reviewedAll = (await page.evaluate(() => window.calciumStep4.S.results.tally.rows.find((row) => row.key === 'all'))).reviewed;
     await page.check('#below-zero');
     assert.equal(await page.locator('#tile-responding > span').first().textContent(), 'Capsaicin: ' + reviewedAll.without[0] + ' of ' + reviewedAll.without[1] + ' evaluable cells after review; ' + allRow.without[0] + ' before review · 1 below zero left out');
+    // After review on the Responder counts tab follows the switch as the headline does: the headline's figure is in the table
+    const afterReviewCell = async () => (await tableNow('table-tally')).rows.find((row) => row[0] === 'All cells')[6];
+    const headlineFigure = async () => (await page.locator('#tile-responding > b').textContent()) + ' (' + (await page.locator('#tile-responding > span').first().textContent()).match(/: (\d+ of \d+) evaluable/)[1] + ')';
+    assert.deepEqual([await afterReviewCell(), await headlineFigure()], ['0.0% (0 of 2)', '0.0% (0 of 2)'], 'with the cells below zero left out, After review is the headline\'s figure');
     await page.uncheck('#below-zero');
+    assert.deepEqual([await afterReviewCell(), await headlineFigure()], ['33.3% (1 of 3)', '33.3% (1 of 3)'], 'and with every cell counted, it is again');
     assert.deepEqual(await page.locator('#group option').allTextContents(), ['All cells (6)', 'Responded after review (1)', 'Did not respond after review (2)', 'Excluded (2)', 'Unscorable (1)', 'Needs quality review (3)', 'Marked (1)']);
     await page.selectOption('#group', '6'); assert.deepEqual(await cellsOffered(), ['Cell001']); await page.selectOption('#group', '2'); assert.deepEqual(await cellsOffered(), ['Cell001', 'Cell002']); await page.selectOption('#group', '0');
     assert.deepEqual(await page.evaluate(() => [0, 1, 4].map((i) => window.calciumStep4.outlineLook(i).pen)), ['not', 'not', 'responded'], 'the outlines take the call after review');
@@ -2252,7 +2279,7 @@ const assert = require('assert/strict');
       ['66.7%', 'Capsaicin: 2 of 3 evaluable cells after review; 2 before review', '2 cells marked', '2 of 3 cells were reclassified after manual review: 1 from responder to non-responder (passing object) and 1 from non-responder to responder (other).']);
     // Remove mark: once the last is gone, everything is as it was before any mark; the Show list leaves Marked and keeps the cell.
     await page.click('#mark'); await page.waitForFunction(() => !window.calciumStep4.S.results.review.marks.Cell002);
-    // A cell marked out of the group the Show list is on stays selected: the list goes to all cells.
+    // A cell marked out of the group the Show list is on stays selected, and Show stays on its group.
     await page.selectOption('#group', '1'); await openCell('Cell005');
     // Held down on the button, Enter opens the form, and its repeats do not then save the reason the flag chose.
     await page.focus('#mark'); await page.keyboard.down('Enter'); await page.waitForFunction(() => document.activeElement.id === 'mark-reason');
@@ -2260,7 +2287,8 @@ const assert = require('assert/strict');
     assert.deepEqual(await page.evaluate(() => [document.getElementById('mark-form').hidden, document.getElementById('mark-reason').value, !!window.calciumStep4.S.results.review.marks.Cell005]), [false, 'Movement', false], 'a held Enter opens the form and saves nothing');
     await page.selectOption('#mark-reason', 'Noise'); await page.click('#mark-save');
     await page.waitForFunction(() => !!window.calciumStep4.S.results.review.marks.Cell005);
-    assert.deepEqual([await page.evaluate(() => window.calciumStep4.S.cell), await page.inputValue('#group'), await page.inputValue('#cell')], ['Cell005', '0', 'Cell005'], 'the cell stays selected after Save');
+    assert.deepEqual([await page.evaluate(() => window.calciumStep4.S.cell), await page.inputValue('#group'), await page.locator('#group option:checked').textContent(), await page.inputValue('#cell'), await cellsOffered()],
+      ['Cell005', '1', 'Responded after review (0)', 'Cell005', ['Cell005']], 'the cell stays selected after Save, and Show on its group');
     await page.click('#mark'); await page.waitForFunction(() => !window.calciumStep4.S.results.review.marks.Cell005);
     await page.selectOption('#group', '6'); await openCell('Cell001'); await page.click('#mark');
     await page.waitForFunction(() => Object.keys(window.calciumStep4.S.results.review.marks).length === 0);
@@ -2275,6 +2303,19 @@ const assert = require('assert/strict');
         document.getElementById('copy-methods').hidden, document.getElementById('review-count').hidden, document.getElementById('counts-before').hidden]; }), [false, 6, 12, true, true, true, true], 'the record, the tally, the calls table, its export, the Methods line and the counts as before any mark');
     assert.ok(!fs.existsSync(reviewFile), 'no marks, no review file');
     assert.equal(resultsLoads, 0, 'no mark or removal loaded the results again'); page.off('request', countLoads);
+    // A pass through the responders: under Show = Responded a mark keeps Show and the cell, which stays in the list in its place
+    // until another cell is chosen; the group's count, mean, traces and picture leave it out, and the next arrow goes on to the next responder.
+    await page.selectOption('#group', '1'); await openCell('Cell001'); await page.click('#mark'); await page.selectOption('#mark-reason', 'Noise'); await page.click('#mark-save');
+    await page.waitForFunction(() => !!window.calciumStep4.S.results.review.marks.Cell001);
+    assert.deepEqual([await page.inputValue('#group'), await page.locator('#group option:checked').textContent(), await page.evaluate(() => window.calciumStep4.S.cell), await cellsOffered()],
+      ['1', 'Responded after review (1)', 'Cell001', ['Cell001', 'Cell005']], 'Show stays on Responded and the marked cell stays selected, listed in its place');
+    assert.deepEqual(await page.evaluate(() => { const f = window.calciumStep4; return [f.plotCells().shown, f.outlineLook(0), !!f.outlineLook(4)]; }), [['Cell005'], null, true], 'the group\'s mean, traces and outlines are of the group alone');
+    await page.click('#next');
+    assert.deepEqual([await page.evaluate(() => window.calciumStep4.S.cell), await page.inputValue('#group'), await cellsOffered()], ['Cell005', '1', ['Cell005']], 'the next arrow goes on to the next responder, and the marked cell leaves the list');
+    await page.selectOption('#group', '6'); await openCell('Cell001'); await page.click('#mark');
+    await page.waitForFunction(() => Object.keys(window.calciumStep4.S.results.review.marks).length === 0);
+    assert.deepEqual([await page.inputValue('#group'), await page.evaluate(() => window.calciumStep4.S.cell)], ['0', 'Cell001'], 'Marked gives way to All cells once no mark is left');
+    assert.ok(!fs.existsSync(reviewFile), 'no marks, no review file');
 
     // A later analysis of the recording: the marks of this one are carried over where the automatic call is as it was, and dropped
     // where it changed, as Fiji says in the status line until the next run. Its checks say that the field's movement was not saved.
@@ -2293,8 +2334,23 @@ const assert = require('assert/strict');
     await page.check('#confirmed'); await page.click('#analyze');
     await page.waitForFunction(() => { const S = window.calciumStep4.S; return !S.state.busy && S.results && S.results.folder === 'browser-results-2'; }, null, { timeout: 15000 });
     const carried = 'Review marks from browser-results: 1 carried over, 1 dropped. Cell002: call changed.';
-    assert.equal(await text('#status'), 'Done. ' + carried, 'the marks carried over and dropped, in the status line');
+    // A carried mark applies: the status line is Fiji's finish message, with the figures after review and the marks carried over
+    // and dropped, as after a mark and as in the Fiji window; also when the results are read again, as after a reload.
+    const finished = await page.evaluate(() => window.calciumStep4.S.state.message);
+    assert.ok(finished.startsWith('Complete. Protocol, inputs and tables saved in browser-results-2.') && /after review/.test(finished) && finished.endsWith(carried), 'Fiji\'s finish message: ' + finished);
+    assert.deepEqual([await text('#status'), await page.locator('#status').evaluate((e) => e.classList.contains('full'))], [finished, true], 'the finish message and the marks carried over and dropped, in the status line');
     assert.ok(await page.locator('#status').evaluate((e) => e.offsetParent !== null && e.scrollHeight <= e.clientHeight + 1), 'in full, without pointing at it');
+    await page.evaluate(() => window.calciumStep4.loadResults());
+    assert.equal(await text('#status'), await page.evaluate(() => window.calciumStep4.S.state.message), 'and when the results are read again, as after a reload');
+    // Without a good finish of the analysis shown (a page opened on another analysis, a failed or an empty run) it is "Done." as before.
+    const saidWhen = async (change) => {
+      await page.route('**/api/state', async (route) => { const response = await route.fetch(), body = await response.json(); await route.fulfill({ response, body: JSON.stringify(Object.assign(body, change)) }); });
+      try { await page.waitForFunction((c) => Object.keys(c).every((k) => window.calciumStep4.S.state[k] === c[k]), change); await page.evaluate(() => window.calciumStep4.loadResults());
+        return [await page.evaluate(() => window.calciumStep4.S.said), change.tone ? null : await text('#status')];
+      } finally { await page.unroute('**/api/state'); await page.waitForFunction(() => window.calciumStep4.S.state.tone === 'good' && window.calciumStep4.S.state.folder === 'browser-results-2'); await page.evaluate(() => window.calciumStep4.loadResults()); } };
+    assert.deepEqual([await saidWhen({ folder: 'another-analysis' }), await saidWhen({ tone: 'bad', message: 'The analysis failed.' }), await saidWhen({ tone: 'warn' })],
+      [[null, 'Done. ' + carried], [null, null], [null, null]], 'another analysis\'s finish, a failure or an empty run: the status line as before any mark');
+    assert.equal(await text('#status'), finished, 'and the finish message again once it is this analysis\'s good finish');
     assert.deepEqual([await page.evaluate(() => window.calciumStep4.S.cell), await page.isHidden('#mark-said'), await text('#mark')], ['Cell001', true, 'Remove mark'], 'the cell stays selected, without the refusal made on the earlier analysis');
     assert.deepEqual(await methodsLine(), ['1 cell marked', true], 'the Methods line of the marks carried over');
     await openCell('Cell001'); assert.match(await text('#verdict'), /^Cell001: Did not respond after review · noise · from an earlier analysis · automatic call Responded · /);
@@ -2305,7 +2361,7 @@ const assert = require('assert/strict');
     assert.ok(!(await flaggedRows()).some((row) => row[0] === 'Cell002'), 'a cell that was not checked is not a flagged cell');
     // When that note is all there is to say and the rings were measured, the chip calls it a note of the checks: the cells were checked for a passing object.
     const movedNote = 'The movement of the field was not saved, so a moving field is not told from an object.';
-    assert.deepEqual(await noteAlone(true), ['Checks note', movedNote, movedNote]);
+    assert.deepEqual(await noteAlone(true), ['Checks note', movedNote, ''], 'the note leads the list and is not said again under it');
     // On the control window: the note, which is about the whole analysis, and no cell's line about the checks.
     await page.selectOption('#response-window', 'Control::Ionomycin');
     assert.ok((await page.locator('#quality-list li').allTextContents()).includes(movedNote), 'the control window has the note too');

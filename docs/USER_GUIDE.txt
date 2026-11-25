@@ -112,12 +112,13 @@ A cell without a flag is not shown to be free of objects.
 The flags are on screen in the words of the table, in both views, for the primary stimulus only:
 the control window shows none. On the page each flag joins the list of flagged cells, which has a
 filter for each kind: Possible passing object, Rise on the edge, Field moved and Short separate
-crossings. The cell panel gives the selected cell's flags under its call line. Click one to go to
-the first frame of the event, in the recording when a still picture is shown; pointing at it names
-the frame. A cell with a call that was not checked says so in its panel, for example "passing
-object not checked: no rise at the peak". When the whole analysis could not be checked, or the
-movement of the field was not saved, the list of flagged cells says so once, on either window.
-With no cell flagged, the button that opens the list then reads "Passing objects not checked", or
+crossings. The list shows every flagged cell; in a short window the whole list scrolls. The cell
+panel gives the selected cell's flags under its call line. Click one to go to the first frame of
+the event, in the recording when a still picture is shown; pointing at it names the frame. A cell
+with a call that was not checked says so in its panel, for example "passing object not checked:
+no rise at the peak". When the whole analysis could not be checked, or the movement of the field
+was not saved, the list of flagged cells says so once, on the control window too. When that note
+is all the list has to say, the button that opens it reads "Passing objects not checked", or
 "Checks note" when only the movement was not saved. In the Fiji window the flags, and the line of a
 cell that was not checked, are under the selected cell's call line too; a click on a flag goes to
 that frame in the Traces tab, and the finish message ends with the same note.
@@ -132,20 +133,26 @@ and counted by the plugin.
 
   Marking     Select the cell. Under its call line and its flags, in both views, a button reads Mark
               as not a responder on a responder, Mark as a responder on a non-responder, and Remove
-              mark on a marked cell. A form opens in its place: Reason, Note, Save and Cancel. On a
-              flagged responder the reason is already chosen from the flag: Passing object for a
-              possible passing object or a rise on the edge, Movement for a field that moved, Noise
-              for short separate crossings. Tab moves through the form, Enter saves, and Esc closes
-              it and keeps the cell. After Save, Cancel or Esc the button has the focus again. A mark
-              that is refused says why in the form. There is no button on excluded or unscorable
-              cells, in the control window, while an analysis runs or while the review file does not
-              match its analysis.
+              mark on a marked cell. A form opens in its place, on one row: Reason, Note, Save and
+              Cancel. On a flagged responder the reason is already chosen from the flag: Passing
+              object for a possible passing object or a rise on the edge, Movement for a field that
+              moved, Noise for short separate crossings. Tab moves through the form, Enter saves, and
+              Esc closes it and keeps the cell. After Save, Cancel or Esc the button has the focus
+              again. A key held down opens the form, saves or removes a mark once. A mark that is
+              refused says why in the form. There is no button on excluded or unscorable cells, in
+              the control window, while an analysis runs or while the review file does not match its
+              analysis.
+  Show        A mark or its removal leaves Show on its group, in both views. The cell stays
+              selected and stays in the Cell list until you choose another cell, but it is not
+              counted or drawn with the group, and the next arrow goes on to the next cell of the
+              group. To go through the responders, choose Responded under Show and mark them one by
+              one.
   Shown       A marked cell's line starts with the call after review, then the reason and note,
               then the automatic call: "Cell 97: Did not respond after review · passing object ·
               automatic call Responded". A mark carried over adds "from an earlier analysis";
               pointing at it names that analysis, and pointing at the reason gives the time of the
-              mark. In the Fiji window the line, and the caption of the % responding tile, wrap onto
-              a second line instead of being cut off.
+              mark. In the Fiji window the line, and the caption of the % responding tile, wrap
+              instead of being cut off.
 
   Where       ..._reviewed_calls_<analysis>.csv beside the percent table, one row per mark: the
               cell, the automatic call, the reviewed call, the reason, the note, the time to the
@@ -159,17 +166,20 @@ and counted by the plugin.
               the right while there are marks: responded_after_review,
               percent_responding_after_review, responded_without_them_after_review,
               percent_without_them_after_review and cells_reclassified. With no marks it is as
-              before. The finish message gives both figures and follows every mark. So do the page
-              and the Fiji window, at once: the headline gives % responding after review with the
-              count before review beside it, the groups under Show read "Responded after review" and
-              "Did not respond after review", Show also has Marked while there are marks, and the
-              outlines, plots and heatmap follow the call after review. In both views the Cell
-              response calls tab adds Reviewed call and Review reason, and the Responder counts tab
-              adds After review and Calls changed; in the Fiji window these columns are on screen
-              only. On the page the Export of the calls table adds Reviewed_call, Review_reason and
-              Review_note, the engine's counts below the tally, which stay as saved, are headed
-              Before review, and the other tables follow too: in the Whole-recording metrics and
-              Cell quality tables, and in the list of flagged cells of the primary stimulus, the
+              before. The finish message gives both figures and follows every mark; while there are
+              marks it is the status line of both views, also on a page opened again. The page and
+              the Fiji window follow every mark at once too: the headline gives % responding after
+              review with the count before review beside it, the groups under Show read "Responded
+              after review" and "Did not respond after review", Show also has Marked while there are
+              marks, and the outlines, plots and heatmap follow the call after review. In both views
+              the Cell response calls tab adds Reviewed call and Review reason, and the Responder
+              counts tab adds After review and Calls changed; in the Fiji window these columns are
+              on screen only. On the page After review leaves out the cells below zero while the
+              switch for them is ticked, as the headline does, and while there are marks the Export
+              of the calls table adds Reviewed_call, Review_reason and Review_note. The engine's
+              counts under the first table of the Responder counts tab, which stay as saved, are
+              headed Before review, and the other tables follow too: in the Whole-recording metrics
+              and Cell quality tables, and in the list of flagged cells of the primary stimulus, the
               Call column reads Call after review.
               Without marks the calls, the % responding, the tables and their exports are as before;
               the flags of the checks still join the list of flagged cells and Needs quality review.
@@ -177,10 +187,13 @@ and counted by the plugin.
               review, the review file and its SHA-256, from the page and from the Fiji window. On
               the page the Exports of the calls table and of the metric summary record the same.
               Figures of the control window and the other tables' Exports record no review.
-              The Fiji window's trace plot carries no sentences or band names, with or without
-              marks: the cell and its call, its local threshold and what the green dashed line is
-              are under the plot on screen, pointing at a band names it, and the saved trace.png has
-              none of them and no time cursor.
+              The Fiji window's trace plot carries no sentences, with or without marks: the cell
+              and its call, its local threshold and what the green dashed line is are under the plot
+              on screen. Its legend names the bands and dashed lines in the page's words, on screen
+              and in the saved trace.png: F₀ frames, baseline, response window, response and
+              required rise, and noise threshold, minimum rise and baseline mean when they are drawn.
+              Pointing at a band names it. trace.png has no time cursor, and trace.png and
+              heatmap.png are drawn across their whole width.
   Saved       A mark is saved together with the percent table, or not at all. If the percent table
               is open in another program, close it and set the mark again.
   Methods     A sentence from the marks, for example "3 of 143 cells were reclassified after
