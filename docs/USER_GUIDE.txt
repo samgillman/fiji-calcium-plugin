@@ -145,8 +145,8 @@ and counted by the plugin.
   Show        A mark or its removal leaves Show on its group, in both views. The cell stays
               selected and stays in the Cell list until you choose another cell, but it is not
               counted or drawn with the group, and the next arrow goes on to the next cell of the
-              group. To go through the responders, choose Responded under Show and mark them one by
-              one.
+              group. Only Marked gives way to All cells, once its last mark is removed. To go
+              through the responders, choose Responded under Show and mark them one by one.
   Shown       A marked cell's line starts with the call after review, then the reason and note,
               then the automatic call: "Cell 97: Did not respond after review · passing object ·
               automatic call Responded". A mark carried over adds "from an earlier analysis";

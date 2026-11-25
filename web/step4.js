@@ -14,7 +14,7 @@
     (group === 6 && !!markOf(name));
   const S = { unlinked: new Set(), validationShown: null, imported: null, info: null, state: null, results: null, version: -1, group: 0, cell: null, listed: [], keep: null, frame: 1, view: 'raw', viewChosen: false,
     every: false, thresholds: false, plotMode: 'mean', signal: 'dff', outlines: true, outlineWidth: 1, outlineColours: 'call', numberCells: false, saveArea: 'whole', timer: null, lost: 0, note: null, polling: false, paths: [], boxes: [], draft: null, draftAck: '', revision: 0, draftTimer: null, draftQueue: Promise.resolve(), window: null, saving: false, initialDraft: null, protocolDrafts: {}, quality: {}, metrics: {}, closed: false,
-    marking: null, reviewing: false, carried: null, said: null };   // the open mark form ({ cell }); a mark on its way to Fiji; the carried marks of this run; what Fiji said after the last mark
+    marking: null, reviewing: false, carried: null, said: null, finishing: false };   // the open mark form ({ cell }); a mark on its way to Fiji; the carried marks of this run; what Fiji said after the last mark; results read before the run was over (poll)
   const Plot = { dirty: true, layer: document.createElement('canvas'), x0: null, x1: null, y: {}, hover: null, at: null, readout: null, line: false, movedAt: -1e9, rest: null, geom: null, scrubbing: false, drawn: [], series: [] };
   const LINGER = 1500;   // ms the plot keeps showing where the picture is after the frame last moved
   const HINT_TIMES = 3, HINT_READ = 1000;   // how often the line that says how to zoom and move is shown, over all sessions; a showing counts once it has been up this long (ms)
@@ -852,7 +852,10 @@
       if (wasBusy && !state.busy) S.note = null;
       // only a newer analysis reloads the results: a mark's own answer brings its review and tally (applyReview), so a poll
       // that crossed it, or one made while it is on its way, does not load the whole results again
-      if (state.version > 0 && state.version > S.version && !S.reviewing) { await loadResults(); S.version = state.version; }
+      if (state.version > 0 && state.version > S.version && !S.reviewing) { await loadResults(); S.version = state.version; S.finishing = !!state.busy; }
+      // results read while the run was still finishing (Fiji's load() moves the version on before the finish message and its
+      // tone): once the run is over, the status line is what loadResults would have made of it
+      else if (S.finishing && !state.busy) { S.finishing = false; S.said = saidNow(); }
       showState(); updateTransport();
     } catch (problem) { if (++S.lost >= 3) $('lost').classList.add('on'); }
     finally { S.polling = false; }
@@ -900,6 +903,8 @@
     $('review-stage').textContent = S.results ? (pending ? 'Changes pending' : 'Completed analysis') : 'Preview · no analysis yet';
     $('workflow-help').textContent = S.results ? 'Select a cell or response window. Use the same timeline for the movie and traces.' : 'Drag the frame slider or press Play. You can review the movie before running analysis.';
   }
+  /** What Fiji says after a good finish of the analysis shown, while marks apply; null otherwise (finishLine says "Done."). */
+  function saidNow() { const now = S.state, r = S.results; return marked() && now && r && now.tone === 'good' && now.folder === r.folder ? (now.message || null) : null; }
   /** The status line after a good finish: "Done." and the marks carried over from the earlier analysis; after a mark, what Fiji
    *  said then. Both are Fiji's own words; the carried marks stay until the next run. */
   function finishLine() {
@@ -919,7 +924,7 @@
     const carried = r.review && r.review.carried; S.carried = carried && carried.text ? { folder: r.folder, text: carried.text } : null;
     // while marks apply after a good finish of this analysis, the status line is what Fiji says now, as after a mark (applyReview)
     // and as in the Fiji window; a page opened on another analysis, a failed or empty run, or no marks: "Done." (finishLine)
-    const now = S.state; S.said = marked() && now && now.tone === 'good' && now.folder === r.folder ? (now.message || null) : null;
+    S.said = saidNow();
     S.markSaid = null; S.keep = null; closeMark();
     const records = (data) => Object.fromEntries(((data && data.rows) || []).map((row) => [row[data.header.indexOf('Cell')], Object.fromEntries(data.header.map((key, i) => [key, row[i]]))]));
     S.quality = records(r.tables.quality);
@@ -3330,7 +3335,7 @@
     // A press that moves more than 3 pixels is a drag, never a click. Zoomed in, it moves the picture; with "Zoom to region" on,
     // or Shift held, it draws a rectangle and the view zooms to it. What was open when a click (or the first click of a double-click) began is kept.
     picture.addEventListener('mousedown', (event) => { if (event.button) return; const p = panelPoint(event);
-      Pic.drag = { x: event.clientX, y: event.clientY, band: Pic.region || event.shiftKey ? [p.x, p.y] : null }; Pic.moved = false; if (event.detail < 2) Pic.held = { cell: S.cell, mode: S.plotMode }; });
+      Pic.drag = { x: event.clientX, y: event.clientY, band: Pic.region || event.shiftKey ? [p.x, p.y] : null }; Pic.moved = false; if (event.detail < 2) Pic.held = { cell: S.cell, keep: S.keep, mode: S.plotMode }; });
     window.addEventListener('mousemove', (event) => { const drag = Pic.drag; if (!drag) return;
       if (!Pic.moved && Math.abs(event.clientX - drag.x) + Math.abs(event.clientY - drag.y) <= 3) return;
       Pic.moved = true; tip('');
@@ -3343,7 +3348,10 @@
     picture.addEventListener('click', (event) => { if (Pic.moved) return; const i = cellAt(event), name = i >= 0 ? S.info.names[i] : null; if (name || S.cell) chooseCell(name); });   // (the open cell clicked again: the zoomed view centres on it)
     // A double-click shows the whole picture. On empty space it keeps the cell that was open: its first click had cleared it.
     picture.addEventListener('dblclick', (event) => { const held = Pic.held;
-      if (held && held.cell && !S.cell && cellAt(event) < 0) { pick(held.cell); if (S.plotMode !== held.mode) setPlotMode(held.mode); }
+      if (held && held.cell && !S.cell && cellAt(event) < 0) {
+        // a cell a mark kept listed (S.keep) comes back to the list in its place, so Show stays on its group
+        if (held.keep === held.cell && !S.listed.includes(held.cell)) { S.keep = held.cell; S.listed = S.info.names.filter((n) => n === held.cell || S.listed.includes(n)); offerCells(); }
+        pick(held.cell); if (S.plotMode !== held.mode) setPlotMode(held.mode); }
       setView(1); });
     picture.addEventListener('mousemove', (event) => { Pic.pointer = panelPoint(event); if (Pic.drag) return; const i = cellAt(event); tip(i >= 0 ? fullName(S.info.names[i]) + (callOf(S.info.names[i]) ? ' · ' + callOf(S.info.names[i]) : '') : '', event.clientX, event.clientY); });
     picture.addEventListener('mouseleave', () => { Pic.pointer = null; tip(''); });

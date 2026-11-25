@@ -2310,6 +2310,13 @@ const assert = require('assert/strict');
     assert.deepEqual([await page.inputValue('#group'), await page.locator('#group option:checked').textContent(), await page.evaluate(() => window.calciumStep4.S.cell), await cellsOffered()],
       ['1', 'Responded after review (1)', 'Cell001', ['Cell001', 'Cell005']], 'Show stays on Responded and the marked cell stays selected, listed in its place');
     assert.deepEqual(await page.evaluate(() => { const f = window.calciumStep4; return [f.plotCells().shown, f.outlineLook(0), !!f.outlineLook(4)]; }), [['Cell005'], null, true], 'the group\'s mean, traces and outlines are of the group alone');
+    // A double-click on empty space of the picture shows the whole picture and keeps the cell open, still listed: Show stays on Responded.
+    { await page.evaluate(() => window.calciumStep4.showTab('review'));
+      const empty = await page.evaluate(() => { const r = document.getElementById('picture').getBoundingClientRect();
+        for (let y = r.bottom - 20; y > r.top + 40; y -= 7) for (let x = r.left + 20; x < r.right - 20; x += 11) if (window.calciumStep4.cellAt({ clientX: x, clientY: y }) < 0) return [x, y]; return null; });
+      assert.ok(empty, 'an empty point on the picture');
+      await page.mouse.dblclick(empty[0], empty[1]);
+      assert.deepEqual([await page.inputValue('#group'), await page.evaluate(() => window.calciumStep4.S.cell), await cellsOffered()], ['1', 'Cell001', ['Cell001', 'Cell005']], 'a double-click on empty space keeps the marked cell listed and Show on its group'); }
     await page.click('#next');
     assert.deepEqual([await page.evaluate(() => window.calciumStep4.S.cell), await page.inputValue('#group'), await cellsOffered()], ['Cell005', '1', ['Cell005']], 'the next arrow goes on to the next responder, and the marked cell leaves the list');
     await page.selectOption('#group', '6'); await openCell('Cell001'); await page.click('#mark');
@@ -2331,8 +2338,15 @@ const assert = require('assert/strict');
     await page.evaluate(() => { window.calciumStep4.S.results.review.folder = 'browser-results'; });
     fs.writeFileSync(path.join(out, 'rerun'), '');
     fs.writeFileSync(path.join(out, 'checks.csv'), checksTable('Cell002,Responded,,,,,,7,400,yes,no,not checked,no rise at the peak,0,0').replace(/,yes,yes,/g, ',yes,no,'));
+    // A poll that comes while Fiji is still finishing the run (its version moved on, not yet its finish message or tone) reads the
+    // results; once the run is over the status line is the finish message all the same.
+    let finishing = 0; const versionBefore = await page.evaluate(() => window.calciumStep4.S.version);
+    await page.route('**/api/state', async (route) => { const response = await route.fetch(), body = await response.json();
+      if (!finishing && Number(body.version) > versionBefore && !body.busy) { finishing++; Object.assign(body, { busy: true, tone: 'plain', message: 'Preparing analysis', stage: 'Checking the calls', percent: 100 }); }
+      await route.fulfill({ response, body: JSON.stringify(body) }); });
     await page.check('#confirmed'); await page.click('#analyze');
     await page.waitForFunction(() => { const S = window.calciumStep4.S; return !S.state.busy && S.results && S.results.folder === 'browser-results-2'; }, null, { timeout: 15000 });
+    await page.unroute('**/api/state'); assert.equal(finishing, 1, 'one poll came while the run was finishing');
     const carried = 'Review marks from browser-results: 1 carried over, 1 dropped. Cell002: call changed.';
     // A carried mark applies: the status line is Fiji's finish message, with the figures after review and the marks carried over
     // and dropped, as after a mark and as in the Fiji window; also when the results are read again, as after a reload.
