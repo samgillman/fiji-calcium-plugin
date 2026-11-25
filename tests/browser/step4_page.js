@@ -15,11 +15,12 @@ const assert = require('assert/strict');
     page = await browser.newPage({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
     page.setDefaultTimeout(10000);
     const problems = [];
-    let injectedFrameFailure = false, refusals = false;
+    let injectedFrameFailure = false, refusals = false, aroundAborted = false;
     page.on('console', (message) => {
       if (message.type() !== 'error') return;
       if (injectedFrameFailure && /503|410/.test(message.text())) return;
       if (refusals && /status of 400/.test(message.text())) return;   // a review mark refused on purpose
+      if (aroundAborted && /ERR_FAILED/.test(message.text())) return;   // an answer for "Around the cell" lost on purpose
       problems.push('console: ' + message.text());
     });
     page.on('pageerror', (error) => problems.push('page error: ' + error.message));
@@ -1549,7 +1550,7 @@ const assert = require('assert/strict');
       [['Whole-trace noise', 'Saved: Baseline noise · Noise_source: Whole-trace noise'], ['Noise floor', 'Saved: Baseline noise · Noise_source: Noise floor'], ['Baseline SD', 'Saved: Baseline noise · Noise_source: Baseline SD'],
         ['Minimum rise', 'Saved: Floor'], ['Baseline noise', ''], ['Baseline noise', '']], 'the noise that set the required rise is named as the Fiji window names it; a table without Noise_source says Baseline noise');
     assert.ok(await page.locator('#table-calls').evaluate((t) => { const even = t.tBodies[0].rows[1], style = (e) => getComputedStyle(e).backgroundColor;
-      return style(even.cells[0]) === style(even) && style(even.cells[0]) !== style(t.tBodies[0].rows[0].cells[0]); }), 'the column that stays put takes the stripe of its row');
+      return style(even.cells[0]) === style(even) && style(even.cells[0]) !== style(t.tBodies[0].rows[0].cells[0]); }, undefined, { timeout: 10000 }), 'the column that stays put takes the stripe of its row');
     assert.deepEqual(at(calls, 'Cell002', 'Largest rise at, s', 'Stimulus'), { text: '–', tip: 'Saved: 3 · Did not respond' }, 'the timing of a cell that did not respond is a dash, its saved value in the tooltip');
     assert.equal(at(calls, 'Cell002', 'Largest rise', 'Stimulus').text, '0.0%', 'its largest rise, the number compared with the threshold, is shown');
     assert.equal(at(calls, 'Cell003', 'Required rise', 'Stimulus').text, '–', 'one dash for a value that was not saved');
@@ -2058,23 +2059,40 @@ const assert = require('assert/strict');
     await page.locator('#quality-list .flag-filter', { hasText: 'Possible passing object' }).click();
     assert.equal(await page.inputValue('#group'), '5'); assert.deepEqual(await cellsOffered(), ['Cell001']);
     await page.evaluate(() => { document.getElementById('quality-review').open = false; }); await page.selectOption('#group', '0');
-    // The cell's panel: its check flags under its call; a flag whose event has a first frame goes there.
+    // The cell's panel: its check flags under its call; a flag goes to the first frame it names, one that names none to the
+    // first frame of the event.
     const checksLine = () => page.evaluate(() => { const box = document.getElementById('cell-checks'); return { text: box.hidden ? '' : box.textContent, links: [...box.querySelectorAll('button.jump')].map((b) => [b.textContent, b.title]) }; });
     await openCell('Cell001');
     assert.deepEqual(await checksLine(), { text: 'possible passing object, frames 9 to 12', links: [['possible passing object, frames 9 to 12', 'Go to frame 9\n' + passDetail]] });
     assert.ok(await page.isHidden('#cell-quality'), 'the engine\'s flags keep a line of their own');
     await openCell('Cell005');
-    assert.deepEqual(await checksLine(), { text: 'field moved, frames 3 to 5 · short separate crossings', links: [['field moved, frames 3 to 5', 'Go to frame 4\n' + movedDetail], ['short separate crossings', 'Go to frame 4\n' + movedDetail]] });
+    assert.deepEqual(await checksLine(), { text: 'field moved, frames 3 to 5 · short separate crossings', links: [['field moved, frames 3 to 5', 'Go to frame 3\n' + movedDetail], ['short separate crossings', 'Go to frame 4\n' + movedDetail]] },
+      'field moved goes to the first frame it names, short separate crossings, which names none, to the event\'s first frame');
     assert.match(await text('#cell-quality'), /^Low F₀ relative to baseline noise/); assert.ok(!(await text('#cell-quality')).includes('field moved'));
+    await page.evaluate(() => window.calciumStep4.setFrame(1)); await page.locator('#cell-checks .jump').first().click(); await waitFrame(3);
     await openCell('Cell001'); await page.selectOption('#view', 'picture'); await page.evaluate(() => window.calciumStep4.setFrame(1));
     await page.locator('#cell-checks .jump').first().click(); await waitFrame(9);
     assert.deepEqual(await page.evaluate(() => [window.calciumStep4.S.view, document.getElementById('view').value]), ['raw', 'raw'], 'from the colour overview to the recording, at the event\'s first frame');
     await page.selectOption('#view', 'flat'); await page.evaluate(() => window.calciumStep4.setFrame(2)); await page.locator('#cell-checks .jump').first().click(); await waitFrame(9);
     assert.equal(await page.evaluate(() => window.calciumStep4.S.view), 'flat', 'a view of the recording stays as it is');
     await page.selectOption('#view', 'raw');
-    assert.deepEqual(await page.evaluate(() => { const f = window.calciumStep4, c = f.S.results.checks.cells.Cell001, kept = c.firstFrame;
-      try { c.firstFrame = null; f.pick('Cell001'); const box = document.getElementById('cell-checks'); return [box.textContent, box.querySelectorAll('.jump').length]; } finally { c.firstFrame = kept; f.pick('Cell001'); } }),
-      ['possible passing object, frames 9 to 12', 0], 'without a first frame the flag is text: its frames are never read from its words');
+    // The frame is the first of the flag's frames as Fiji gives them; from an answer without them, the first frame its text names.
+    // A flag whose frames are none goes to the event's first frame, and without that either it is text.
+    assert.deepEqual(await page.evaluate(() => { const f = window.calciumStep4, cells = f.S.results.checks.cells, one = cells.Cell001, five = cells.Cell005;
+      const kept = [one.firstFrame, JSON.stringify(one.flags), five.firstFrame, JSON.stringify(five.flags)], seen = [];
+      const links = (name) => { f.pick(name); return [...document.getElementById('cell-checks').children].map((e) => e.tagName === 'BUTTON' ? e.title.split('\n')[0] : 'text: ' + e.textContent); };
+      try {
+        for (const flag of one.flags.concat(five.flags)) delete flag.frames;
+        one.firstFrame = 11; seen.push(links('Cell001'));
+        one.flags[0].frames = [10, 12]; seen.push(links('Cell001'));
+        one.flags[0].frames = null; seen.push(links('Cell001'));
+        one.firstFrame = null; seen.push(links('Cell001'));
+        delete one.flags[0].frames; seen.push(links('Cell001'));
+        five.firstFrame = null; seen.push(links('Cell005'));
+        return seen;
+      } finally { one.firstFrame = kept[0]; one.flags = JSON.parse(kept[1]); five.firstFrame = kept[2]; five.flags = JSON.parse(kept[3]); f.pick('Cell001'); } }),
+      [['Go to frame 9'], ['Go to frame 10'], ['Go to frame 11'], ['text: possible passing object, frames 9 to 12'], ['Go to frame 9'], ['Go to frame 3', 'text: short separate crossings']],
+      'from the text without frames, Fiji\'s frames first, the event\'s first frame for none, text without either');
 
     // The codes of the checks join QC_flags, after the engine's own: in the calls table on the rows of the primary stimulus, in
     // Cell quality on every cell's row, each joined as that table joins its own; and so in their Exports, whose record says so.
@@ -2120,14 +2138,15 @@ const assert = require('assert/strict');
     // What the passing-object check used around the selected cell, asked of Fiji cell by cell. This fixture has no ring files
     // beside it, so Fiji says why there is nothing to show: the button is off, and its tooltip says it.
     const aroundButton = () => page.evaluate(() => { const b = document.querySelector('[data-plot=around]'); return [b.disabled, b.title]; });
-    const aroundTitle = 'The selected cell, its core and the ring around it, in gray levels, as the checks on the calls saw them';
+    const aroundTitle = 'The cell, its core and the ring around it, in gray levels';
+    const AROUND_STYLE = ['zoneWidth', 'colourBefore', 'colourAfter', 'colourCore', 'colourAgain', 'otherWidth', 'colourOtherSectors', 'flagged', 'colourFlagged'];   // the settings of this plot alone
     await openCell('Cell001'); await page.waitForFunction(() => window.calciumStep4.Around.got.has('Cell001'));
     const realWhy = await page.evaluate(() => window.calciumStep4.Around.got.get('Cell001').why);
     assert.deepEqual(await aroundButton(), [true, realWhy], 'Fiji\'s sentence in the tooltip of the button, which is off'); assert.match(realWhy, /^[A-Z][^()]*\.$/, 'a sentence: ' + realWhy);
-    // Fiji's answers for five cells: rule A on Cell001 (the sectors seen before and after, with their frames, one in the far
-    // ring, and one sector of the ring not usable), rule B on Cell002 (rim, ring, core), rule C on Cell005 (the sectors on the
-    // start and end sides without frames, and the core; a band of one frame), no flag on Cell006 (the core and the eight sectors
-    // of the ring, no band) and a cell with nothing to show.
+    // Fiji's answers for six cells: rule A on Cell001 (the sectors seen before and after, with their frames, one in the far
+    // ring, and one sector of the ring not usable), rule B on Cell002 (rim, ring, core; a band that ends at the pause of the
+    // fixture's clock), rule C on Cell005 (the sectors on the start and end sides without frames, and the core; a band of one
+    // frame), no flag on Cell006 and Cell004 (the core and the eight sectors of the ring, no band) and a cell with nothing to show.
     const fixtureClock = Array.from({ length: 30 }, (_, i) => i / 2 + (i >= 15 ? 5 : 0)), sides = ['right', 'lower right', 'bottom', 'lower left', 'left', 'upper left', 'top', 'upper right'];
     const placeOf = (z) => z === 16 ? 'core' : (z < 8 ? 'ring, ' : z < 16 ? 'far ring, ' : 'rim, ') + sides[z < 16 ? z % 8 : z - 17];
     const aroundOf = (cell, flag, lines, others, band, unusable = []) => ({ folder: 'browser-results', cell, name: cell, why: '', time: fixtureClock, rise: fixtureClock.map((t, i) => i >= 8 && i <= 11 ? 40 : 0),
@@ -2136,31 +2155,45 @@ const assert = require('assert/strict');
       lines: lines.map(([zone, part, frame]) => ({ zone, place: placeOf(zone), part, frame })), others, band });
     const passing = (rule, text) => ({ rule, text, code: rule === 'on the edge' ? 'RISE_ON_EDGE' : 'POSSIBLE_PASSING_OBJECT' });
     const faked = { Cell001: aroundOf('Cell001', passing('passes through', 'possible passing object, frames 9 to 12'), [[1, 'before', 8], [13, 'after', 13]], [0, 2, 3, 4, 5, 6, 7], [9, 12], [3]),
-      Cell002: aroundOf('Cell002', passing('on the edge', 'rise on the lower right edge, not in the cell, frames 7 to 14'), [[18, 'rim', null], [1, 'ring', null], [16, 'core', null]], [0, 2, 3, 4, 5, 6, 7], [7, 14]),
+      Cell002: aroundOf('Cell002', passing('on the edge', 'rise on the lower right edge, not in the cell, frames 7 to 15'), [[18, 'rim', null], [1, 'ring', null], [16, 'core', null]], [0, 2, 3, 4, 5, 6, 7], [7, 15]),
       Cell005: aroundOf('Cell005', passing('crosses the cell', 'possible passing object, frames 5 to 5'), [[4, 'before', null], [0, 'after', null], [16, 'core', null]], [1, 2, 3, 5, 6, 7], [5, 5]),
-      Cell006: aroundOf('Cell006', null, [[16, 'core', null]], [0, 1, 2, 3, 4, 5, 6, 7], null),
+      Cell006: aroundOf('Cell006', null, [[16, 'core', null]], [0, 1, 2, 3, 4, 5, 6, 7], null), Cell004: aroundOf('Cell004', null, [[16, 'core', null]], [0, 1, 2, 3, 4, 5, 6, 7], null),
       Cell003: { folder: 'browser-results', cell: 'Cell003', name: 'Cell003', why: 'Passing object not checked: no call.' } };
-    const aroundAsked = [];
-    await page.route('**/api/around*', (route) => { const cell = new URL(route.request().url()).searchParams.get('cell'); aroundAsked.push(cell); return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(faked[cell] || { cell, why: 'There is no cell ' + cell + ' in this analysis.' }) }); });
+    // aroundHeld: an answer kept on its way until the test lets it go; aroundLost: a cell whose next answer is lost, as when Fiji
+    // is not connected
+    const aroundAsked = [], aroundHeld = {}, aroundLost = new Set();
+    await page.route('**/api/around*', async (route) => { const cell = new URL(route.request().url()).searchParams.get('cell'); aroundAsked.push(cell);
+      if (aroundLost.has(cell)) { aroundLost.delete(cell); return route.abort('failed'); }
+      if (aroundHeld[cell]) await aroundHeld[cell];
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(faked[cell] || { cell, why: 'There is no cell ' + cell + ' in this analysis.' }) }); });
     await page.evaluate(() => window.calciumStep4.loadResults()); await openCell('Cell001');   // the results read again: what was asked before is asked again
     await page.waitForFunction(() => { const a = window.calciumStep4.Around.got.get('Cell001'); return !!a && !a.why; });
     assert.deepEqual(await aroundButton(), [false, aroundTitle], 'with something to show the button is on, with its own tooltip');
     await page.click('[data-plot=around]');
     const aroundShown = () => page.evaluate(() => { const f = window.calciumStep4, a = f.Plot.around, g = f.Plot.geom;
-      return { legend: g.items.map((i) => i.text), lines: a.lines.map((l) => [l.place, l.part, l.frame, f.STYLE.plot[l.colour]]), others: a.others.map((o) => o.zone), band: a.band, frames: a.frames,
+      return { legend: g.items.map((i) => i.text), inks: g.items.map((i) => i.colour), lines: a.lines.map((l) => [l.place, l.part, l.frame, f.zoneInk(f.STYLE.plot, l)]), others: a.others.map((o) => o.zone), band: a.band, frames: a.frames,
         hidden: [document.getElementById('signal-label').hidden, document.getElementById('every-label').hidden], label: document.getElementById('plot').getAttribute('aria-label') }; });
-    const zoneColours = ['#0072b2', '#c8660e', '#009e73', '#6a3d9a'];   // the first and second zone of a flag, the third, the core
+    // The colours of the parts, the same in the Fiji window: before and rim, after and ring, the core; a colour met a second time
+    // for one cell takes the next of four. The other ring sectors and the flagged frames in their own; none is a call's colour.
+    const BEFORE = '#0072b2', AFTER = '#aa3377', CORE = '#009e73', AGAIN = ['#e69f00', '#56b4e9', '#cc79a7', '#882255'], OTHERS = '#aeb8c2', FLAGGED = '#e2d6f3', CALL_INKS = ['#177465', '#c8660e', '#8a94a0'];
     { const shown = await aroundShown();
       assert.deepEqual([shown.legend, shown.lines, shown.others, shown.band, shown.frames], [['Cell001', 'ring, lower right', 'far ring, upper left', 'other ring sectors', 'flagged frames'],
-        [['ring, lower right', 'before', 8, zoneColours[0]], ['far ring, upper left', 'after', 13, zoneColours[1]]], [0, 2, 4, 5, 6, 7], [3.75, 5.75], [9, 12]], 'rule A: the cell, the sector seen before and the one seen after by their places, the other usable ring sectors once, the flagged frames half a frame to each side');
+        [['ring, lower right', 'before', 8, BEFORE], ['far ring, upper left', 'after', 13, AFTER]], [0, 2, 4, 5, 6, 7], [3.75, 5.75], [9, 12]], 'rule A: the cell, the sector seen before and the one seen after by their places, the other usable ring sectors once, the flagged frames half a frame step to each side');
+      assert.deepEqual(shown.inks, ['#1f2933', BEFORE, AFTER, OTHERS, FLAGGED], 'the legend: the cell, the zones of its flag, the other ring sectors, the band, each in its colour');
       assert.deepEqual(shown.hidden, [true, true], 'Signal and All traces belong to the other plots');
       assert.match(shown.label, /^Plot of ΔF \(gray levels\) against time: Cell001; ring, lower right; far ring, upper left; other ring sectors; flagged frames$/, 'a screen reader is told what it shows'); }
-    assert.ok(new Set(zoneColours.concat(['#1f2933'])).size === 5, 'the zones of a flag, the core and the cell in colours of their own');
+    { const inks = [BEFORE, AFTER, CORE, ...AGAIN, OTHERS, FLAGGED, '#1f2933'].concat(CALL_INKS); assert.equal(new Set(inks).size, inks.length, 'the zones, the other sectors, the band, the cell and the calls in colours of their own'); }
+    // any mix of parts: a colour met again for the cell takes the next of AGAIN, in order, the last for any more
+    assert.deepEqual(await page.evaluate(() => { const f = window.calciumStep4, time = [0, 1, 2], trace = [0, 1, 0];
+      const a = { time, rise: trace, zones: Array.from({ length: 25 }, (_, z) => ({ zone: z, place: 'zone ' + z, usable: true, trace })), others: [],
+        lines: [[1, 'before'], [2, 'rim'], [3, 'after'], [16, 'core'], [4, 'ring'], [5, 'before'], [6, 'other'], [7, 'after']].map(([zone, part]) => ({ zone, part, frame: null })) };
+      return f.aroundParts(a).lines.map((l) => f.zoneInk(f.STYLE.plot, l)); }), [BEFORE, AGAIN[0], AFTER, CORE, AGAIN[1], AGAIN[2], AGAIN[3], AGAIN[3]], 'parts met again');
     // Nothing is written on it but the axis titles, the tick labels, "stimulus" and the legend; its entries and its marks go one to one.
     const cleanAround = (seen, view) => {
       assert.deepEqual(wordsOf(seen), ['Time (s)', 'stimulus', 'ΔF (gray levels)'], view + ': outside the legend, only the axis titles, the tick labels and "stimulus" are written');
       assert.deepEqual(seen.texts.filter((t) => inLegend(seen, t.x, t.y)).map((t) => t.text), seen.wrapped.flat(), view + ': the legend holds its entries and nothing else');
-      assert.deepEqual(marksOf(seen), entriesOf(seen), view + ': legend entries and drawn marks, one to one'); return seen; };
+      assert.deepEqual(marksOf(seen), entriesOf(seen), view + ': legend entries and drawn marks, one to one');
+      assert.deepEqual(seen.lines.concat(seen.boxes).filter((m) => CALL_INKS.includes(String(m.ink).toLowerCase())), [], view + ': nothing in a colour of a call'); return seen; };
     { const onPage = cleanAround(await drawing(false), 'around the cell, rule A, on the page'), fig = cleanAround(await drawing(true), 'around the cell, rule A, in the figure');
       assert.ok(onPage.lo <= Math.min(0, 1 - 8) && onPage.hi >= 13 - 8 + 30, 'the Y axis holds every line: ' + [onPage.lo, onPage.hi]); assert.deepEqual(fig.legend, onPage.legend);
       assert.deepEqual([fig.x0, fig.x1], [0, 19.5], 'the whole recording'); }
@@ -2175,7 +2208,13 @@ const assert = require('assert/strict');
       assert.match(body.name, /^Fixture_recording_around_the_cell_Cell001_\d{8}-\d{6}$/, 'the file is named for this plot and cell');
       assert.deepEqual([body.metadata.signal, body.metadata.plotted, body.metadata.around_the_cell],['dF (gray levels)', ['Cell001', 'ring, lower right', 'far ring, upper left', 'other ring sectors', 'flagged frames'],
         { cell: 'Cell001', rule: 'passes through', flag: 'possible passing object, frames 9 to 12', units: 'gray levels', lines: [{ zone: 1, place: 'ring, lower right', part: 'before', frame: 8 }, { zone: 13, place: 'far ring, upper left', part: 'after', frame: 13 }],
-          other_ring_sectors: [0, 2, 4, 5, 6, 7].map((zone) => ({ zone, place: placeOf(zone) })), flagged_frames: [9, 12], flagged_frames_s: [3.75, 5.75] }], 'the record: the signal in gray levels, what is plotted, and the lines, sectors and flagged frames'); }
+          other_ring_sectors: [0, 2, 4, 5, 6, 7].map((zone) => ({ zone, place: placeOf(zone) })), flagged_frames: [9, 12], flagged_frames_s: [4, 5.5] }], 'the record: the signal in gray levels, what is plotted, and the lines, sectors and flagged frames, with the times of the first and last');
+      assert.ok(AROUND_STYLE.every((key) => key in body.metadata.picture.figure), 'its figure settings include those of this plot'); }
+    // The record beside a figure of another plot has none of this plot's settings: it is as it was before this plot.
+    { await page.click('[data-plot=cell]'); const sent = page.waitForRequest((r) => r.url().includes('/api/export') && r.method() === 'POST'); await page.locator('#export-plot > summary').click(); await page.click('#save-plot-folder');
+      const figure = JSON.parse((await sent).postData()).metadata.picture.figure, own = await page.evaluate(() => Object.keys(window.calciumStep4.STYLE.plot));
+      assert.deepEqual(Object.keys(figure), ['kind'].concat(own.filter((key) => !AROUND_STYLE.includes(key))), 'One cell + average: every setting but those of Around the cell, in their order');
+      await page.waitForFunction(() => /^Saved /.test(document.getElementById('plot-saved').textContent)); await page.click('[data-plot=around]'); }
     // the figure editor offers the boxes of this plot: the zone lines and the flagged frames, not the mean's or the baseline's
     await page.locator('#export-plot > summary').click(); await page.click('#edit-plot'); await previewReady();
     assert.deepEqual(await page.evaluate(() => ['zoneWidth', 'flagged', 'cellWidth', 'meanWidth', 'baseline', 'window', 'sem'].map((key) => !!document.getElementById('figure-' + key))), [true, true, true, false, false, false, false], 'the figure editor\'s boxes for this plot');
@@ -2186,29 +2225,43 @@ const assert = require('assert/strict');
     await page.click('[data-plot=cell]'); assert.deepEqual([await page.inputValue('#y-max'), await page.evaluate(() => window.calciumStep4.Plot.geom.hi !== 80)], ['', true], 'One cell + average keeps its own Y axis');
     await page.click('[data-plot=around]'); assert.deepEqual([await page.inputValue('#y-max'), await page.evaluate(() => window.calciumStep4.Plot.geom.hi)], ['80', 80], 'and Around the cell its own');
     await page.click('#y-auto'); await page.waitForFunction(() => window.calciumStep4.Plot.geom.hi !== 80);
+    // The Y title and limits typed in the figure editor are kept for each kind of plot: those of the other plots come back after
+    // Around the cell, and its own after them.
+    const yTyped = () => page.evaluate(() => { const p = window.calciumStep4.Fig.plot; return [p.yTitle, p.yMax]; });
+    const editPlot = async () => { await page.locator('#export-plot > summary').click(); await page.click('#edit-plot'); await previewReady(); };
+    await page.click('[data-plot=cell]'); await editPlot(); await page.fill('#figure-yTitle', 'Signal title'); await typeBox('yMax', '3'); await page.click('#figure-close');
+    await page.click('[data-plot=around]'); assert.deepEqual(await yTyped(), [null, null], 'Around the cell has none of them');
+    await editPlot(); await page.fill('#figure-yTitle', 'Gray title'); await page.click('#figure-close');
+    await page.click('[data-plot=cell]'); assert.deepEqual(await yTyped(), ['Signal title', 3], 'One cell + average gets its own back');
+    await page.click('[data-plot=around]'); assert.deepEqual(await yTyped(), ['Gray title', null], 'and Around the cell its own');
+    await page.evaluate(() => { window.calciumStep4.Fig.plot.yTitle = null; });   // its own title again, for the figures drawn below
     // Rule B: the rim sector, the ring sector outside it and the core, in that order, with the flagged frames.
     await openCell('Cell002'); await page.waitForFunction(() => !!window.calciumStep4.Plot.around && window.calciumStep4.Plot.around.lines.length === 3);
     { const shown = await aroundShown();
       assert.deepEqual([shown.legend, shown.lines, shown.band], [['Cell002', 'rim, lower right', 'ring, lower right', 'core', 'other ring sectors', 'flagged frames'],
-        [['rim, lower right', 'rim', null, zoneColours[0]], ['ring, lower right', 'ring', null, zoneColours[1]], ['core', 'core', null, zoneColours[3]]], [2.75, 6.75]], 'rule B: rim, ring and core by their places'); }
+        [['rim, lower right', 'rim', null, BEFORE], ['ring, lower right', 'ring', null, AFTER], ['core', 'core', null, CORE]], [2.75, 7.25]], 'rule B: rim, ring and core by their places; the band half the median frame step beyond its last frame, also at the pause'); }
     cleanAround(await drawing(false), 'around the cell, rule B, on the page');
     // Rule C, "crosses the cell": the ring sectors on the start and end sides, which have no frame, and the core; a band of
     // one frame is half a frame to each side of it.
     await openCell('Cell005'); await page.waitForFunction(() => !!window.calciumStep4.Plot.around && window.calciumStep4.Plot.around.lines.some((l) => l.place === 'ring, left'));
     { const shown = await aroundShown();
       assert.deepEqual([shown.legend, shown.lines, shown.band, shown.frames], [['Cell005', 'ring, left', 'ring, right', 'core', 'other ring sectors', 'flagged frames'],
-        [['ring, left', 'before', null, zoneColours[0]], ['ring, right', 'after', null, zoneColours[1]], ['core', 'core', null, zoneColours[3]]], [1.75, 2.25], [5, 5]], 'rule C: the sectors on the start and end sides and the core'); }
+        [['ring, left', 'before', null, BEFORE], ['ring, right', 'after', null, AFTER], ['core', 'core', null, CORE]], [1.75, 2.25], [5, 5]], 'rule C: the sectors on the start and end sides and the core'); }
     cleanAround(await drawing(true), 'around the cell, rule C, in the figure');
-    // No flag: the cell, the core and the eight ring sectors in gray; no band.
-    await openCell('Cell006'); await page.waitForFunction(() => !!window.calciumStep4.Plot.around && window.calciumStep4.Plot.around.others.length === 8);
+    // No flag: the cell, the core and the eight ring sectors in gray; no band. While Fiji's answer is on its way the button is
+    // off, without a tooltip.
+    let letGo; aroundHeld.Cell006 = new Promise((resolve) => { letGo = resolve; });
+    await openCell('Cell006'); assert.deepEqual(await aroundButton(), [true, ''], 'an answer on its way: the button is off, without a tooltip'); letGo(); delete aroundHeld.Cell006;
+    await page.waitForFunction(() => !!window.calciumStep4.Plot.around && window.calciumStep4.Plot.around.others.length === 8);
+    assert.deepEqual(await aroundButton(), [false, aroundTitle], 'and on again with its answer');
     { const shown = await aroundShown();
-      assert.deepEqual([shown.legend, shown.lines, shown.band], [['Cell006', 'core', 'other ring sectors'], [['core', 'core', null, zoneColours[3]]], null], 'no flag: the cell, the core and the ring, no band'); }
+      assert.deepEqual([shown.legend, shown.lines, shown.band, shown.inks], [['Cell006', 'core', 'other ring sectors'], [['core', 'core', null, CORE]], null, ['#1f2933', CORE, OTHERS]], 'no flag: the cell, the core and the ring, no band'); }
     cleanAround(await drawing(false), 'around the cell, no flag, on the page');
     // Nothing to show: the plot says why, the button is off with the same words, and the Export entries are off.
     await openCell('Cell003'); await page.waitForFunction(() => window.calciumStep4.Around.got.has('Cell003'));
     const emptyPlot = () => page.evaluate(() => [document.getElementById('plot-empty').hidden, document.getElementById('plot-empty').textContent, ...['save-plot', 'save-plot-folder', 'edit-plot'].map((id) => document.getElementById(id).disabled), window.calciumStep4.Plot.geom, document.getElementById('plot').getAttribute('aria-label')]);
     assert.deepEqual([await page.evaluate(() => window.calciumStep4.S.plotMode), await aroundButton(), await emptyPlot()], ['around', [true, 'Passing object not checked: no call.'], [false, 'Passing object not checked: no call.', true, true, true, null, 'Passing object not checked: no call.']], 'nothing to show: why, in the plot, in the tooltip and to a screen reader; nothing to export');
-    assert.ok(await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-plot=around]')).backgroundColor === 'rgb(183, 211, 227)', null, { timeout: 2000 }).then(() => true, () => false), 'chosen with nothing to show, the button looks off');   // after its 120 ms change of colour
+    assert.ok(await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-plot=around]')).backgroundColor === 'rgb(183, 211, 227)', null, { timeout: 10000 }).then(() => true, () => false), 'chosen with nothing to show, the button looks off');   // after its 120 ms change of colour
     // The control window: the checks are made for the primary stimulus, so the button is off on it and says so.
     await openCell('Cell001'); await page.waitForFunction(() => !!window.calciumStep4.Plot.around);
     await page.selectOption('#response-window', 'Control::Ionomycin');
@@ -2218,9 +2271,16 @@ const assert = require('assert/strict');
     assert.equal(aroundAsked.length, 5, 'and asked once');
     await page.selectOption('#response-window', 'Stimulus::Capsaicin'); await page.waitForFunction(() => !!window.calciumStep4.Plot.around && window.calciumStep4.S.cell === 'Cell002');
     assert.deepEqual([(await aroundButton())[0], await page.isHidden('#plot-empty')], [false, true], 'back on the primary stimulus, the plot again');
-    // Without a cell the plot goes back to the average, and the button says why it is off.
-    await openCell(''); assert.deepEqual([await page.evaluate(() => window.calciumStep4.S.plotMode), await aroundButton(), await page.evaluate(() => ['signal-label', 'every-label'].map((id) => document.getElementById(id).hidden))],
-      ['mean', [true, 'No cell selected.'], [false, false]], 'no cell: the average with its Signal and All traces, and the button off');
+    // An answer lost because Fiji was not connected is asked again once Fiji answers a poll, without choosing the cell again.
+    { aroundAborted = true; aroundLost.add('Cell004'); const from = aroundAsked.length; await openCell('Cell004');
+      await page.waitForFunction(() => { const a = window.calciumStep4.Around.got.get('Cell004'); return !!a && Array.isArray(a.time); }, null, { timeout: 10000 });
+      assert.deepEqual([aroundAsked.slice(from), await aroundButton(), await page.isHidden('#plot-empty')], [['Cell004', 'Cell004'], [false, aroundTitle], true], 'lost once and asked again: the plot, with nothing to say about Fiji');
+      aroundAborted = false; }
+    // Without a cell the plot goes back to the average, and the button says why it is off; the average has its own Y title back.
+    await openCell(''); assert.deepEqual([await page.evaluate(() => window.calciumStep4.S.plotMode), await aroundButton(), await page.evaluate(() => ['signal-label', 'every-label'].map((id) => document.getElementById(id).hidden)), await yTyped()],
+      ['mean', [true, 'No cell selected.'], [false, false], ['Signal title', 3]], 'no cell: the average with its Signal, All traces and Y title, and the button off');
+    await editPlot(); await page.click('#figure-reset'); await page.click('#figure-close');
+    assert.deepEqual([await yTyped(), await page.evaluate(() => window.calciumStep4.Fig.yKept)], [[null, null], {}], 'Reset to defaults: no Y title kept for any plot');
     await page.unroute('**/api/around*'); await page.evaluate(() => window.calciumStep4.loadResults()); await page.selectOption('#group', '0');
 
     // The mark button says what it does; there is none for a cell with no call to review, nor on the control window.
@@ -2608,9 +2668,41 @@ const assert = require('assert/strict');
       [false, 0, true, false], 'off: no mark, the calls Export without Marked_by, nothing said of automatic marks');
     assert.equal(await text('#status'), 'Done.');
     assert.ok(!fs.existsSync(path.join(out, 'Fixture recording_reviewed_calls_browser-results-2.csv')), 'and no review file');
+    // With the option on and no responder to mark, "Done." too: Fiji's finish message is the status line only once a run has
+    // marked a cell. A mark set by hand and removed again leaves "Done." as well.
+    const runNow = async () => { const from = await page.evaluate(() => window.calciumStep4.S.version); await page.check('#confirmed'); await page.click('#analyze');
+      await page.waitForFunction((v) => { const S = window.calciumStep4.S; return !S.state.busy && S.version > v && !!S.results && S.results.folder === 'browser-results-2' && !!S.state.message; }, from, { timeout: 15000 }); };
+    fs.writeFileSync(path.join(out, 'checks.csv'), checksTable('Cell002,Did not respond,,,,,,7,400,yes,yes,checked,,0,0,').replace(/^Cell001,.*$/m, 'Cell001,Responded,,,9,12,,8,400,yes,yes,checked,,2,6,'));
+    await page.evaluate(() => { document.getElementById('protocol-details').open = true; }); await page.check('#automatic-marks'); await synced(); await runNow();
+    assert.deepEqual(await page.evaluate(() => { const r = window.calciumStep4.S.results; return [r.appliedDraft.values.automatic_marks, Object.keys(r.review.marks).length, /^Complete\. /.test(window.calciumStep4.S.state.message)]; }), [true, 0, true], 'the option on, no mark made');
+    assert.equal(await text('#status'), 'Done.', 'no automatic mark: "Done.", not the finish message');
+    await openCell('Cell001'); await page.click('#mark'); await page.selectOption('#mark-reason', 'Noise'); await page.click('#mark-save');
+    await page.waitForFunction(() => Object.keys(window.calciumStep4.S.results.review.marks).length === 1); assert.ok((await text('#status')).startsWith('Complete. '), 'with a mark, the finish message');
+    await page.click('#mark'); await page.waitForFunction(() => Object.keys(window.calciumStep4.S.results.review.marks).length === 0);
+    assert.equal(await text('#status'), 'Done.', 'the mark removed: "Done." again');
+    await page.evaluate(() => { document.getElementById('protocol-details').open = true; }); await page.uncheck('#automatic-marks'); await synced();
+    // An analysis whose call checks table was written by 2026.11.24.1, without QC_flags: its codes come from its Rule column, in
+    // the Flags column and in the Export's QC_flags, and Around the cell shows its cells.
+    const oldTable = checksTable('Cell002,Did not respond,"rise on the left edge, not in the cell, frames 20 to 24",on the edge,20,24,"' + edgeDetail + '",7,400,yes,yes,checked,,0,0,RISE_ON_EDGE').trim().split('\n').map((line) => line.replace(/,[^,]*$/, '')).join('\n') + '\n';
+    // (Fiji's answer for Around the cell is given here: this fixture has no ring files)
+    await page.route('**/api/around*', (route) => new URL(route.request().url()).searchParams.get('cell') === 'Cell001' ? route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(Object.assign({}, faked.Cell001, { folder: 'browser-results-2' })) }) : route.continue());
+    fs.writeFileSync(path.join(out, 'checks.csv'), oldTable); await runNow();
+    assert.equal(fs.readFileSync(path.join(out, 'Fixture recording_call_checks_browser-results-2.csv'), 'utf8').split(/\r?\n/)[0].split(',').length, 15, 'the table as 2026.11.24.1 wrote it');
+    assert.deepEqual(await page.evaluate(() => { const c = window.calciumStep4.S.results.checks.cells; return [c.Cell001.codes, c.Cell002.codes, c.Cell005.codes, c.Cell003.codes]; }),
+      [['POSSIBLE_PASSING_OBJECT'], ['RISE_ON_EDGE'], ['FIELD_MOVED', 'SHORT_SEPARATE_CROSSINGS'], []], 'the codes from the Rule column');
+    await page.click('.tab[data-tab=calls]');
+    { const shown = await tableNow('table-calls');
+      assert.deepEqual([at(shown, 'Cell001', 'Flags', 'Stimulus'), at(shown, 'Cell005', 'Flags', 'Stimulus').text], [{ text: 'Duration under a frame · Possible passing object', tip: 'DURATION_BELOW_SAMPLE_INTERVAL; POSSIBLE_PASSING_OBJECT' }, 'Duration under a frame · Field moved · Short separate crossings'], 'in the Flags column'); }
+    await page.locator('#export-calls > summary').click(); await page.click('#calls-save'); await page.waitForFunction((before) => { const now = document.getElementById('calls-saved').textContent; return /^Saved in plots: /.test(now) && now !== before; }, await text('#calls-saved'));
+    { const saved = savedCsv(await text('#calls-saved'));
+      assert.deepEqual([saved.at('QC_flags', 'Cell001', 'Stimulus'), saved.at('QC_flags', 'Cell002', 'Stimulus'), saved.record.qc_flags], ['DURATION_BELOW_SAMPLE_INTERVAL; POSSIBLE_PASSING_OBJECT', 'DURATION_BELOW_SAMPLE_INTERVAL; RISE_ON_EDGE', codesNote], 'and in the Export\'s QC_flags'); }
+    await page.click('.tab[data-tab=review]'); await openCell('Cell001'); await page.waitForFunction(() => { const a = window.calciumStep4.Around.got.get('Cell001'); return !!a && Array.isArray(a.time); });
+    await page.click('[data-plot=around]'); await page.waitForFunction(() => !!window.calciumStep4.Plot.around);
+    assert.deepEqual(await page.evaluate(() => [window.calciumStep4.Plot.geom.items.map((i) => i.text), document.getElementById('plot-empty').hidden]), [['Cell001', 'ring, lower right', 'far ring, upper left', 'other ring sectors', 'flagged frames'], true], 'Around the cell shows the cell');
+    await page.unroute('**/api/around*'); await page.click('[data-plot=cell]');
     refusals = false;
     assert.deepEqual(problems, []);
-    console.log('PASS: movie preview and pointer scrubbing, Play/manual seek, static view, stale/error frames, portable protocols/precision, primary/control results, picture zoom/move/region/map, plain outlines and numbered cells, saving an area and a baseline and peak pair, irregular-time heatmap, pending settings, exports, figure editor numbers, limits, fit and Reset, responsive layouts, the flags of the checks and their codes in the tables, around the cell, review marks and carried marks, automatic marks');
+    console.log('PASS: movie preview and pointer scrubbing, Play/manual seek, static view, stale/error frames, portable protocols/precision, primary/control results, picture zoom/move/region/map, plain outlines and numbered cells, saving an area and a baseline and peak pair, irregular-time heatmap, pending settings, exports, figure editor numbers, limits, fit and Reset, responsive layouts, the flags of the checks and their codes in the tables, around the cell, review marks and carried marks, automatic marks, a call checks table of 2026.11.24.1');
   } catch (error) {
     if (page) {
       // what the movie was doing, read before the screenshot (a full-page screenshot resizes the page and reloads the frame)

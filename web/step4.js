@@ -865,6 +865,7 @@
       // results read while the run was still finishing (Fiji's load() moves the version on before the finish message and its
       // tone): once the run is over, the status line is what loadResults would have made of it
       else if (S.finishing && !state.busy) { S.finishing = false; S.said = saidNow(); }
+      askAroundAgain();   // Fiji answers again: what did not come while it was not connected is asked again
       showState(); updateTransport();
     } catch (problem) { if (++S.lost >= 3) $('lost').classList.add('on'); }
     finally { S.polling = false; }
@@ -912,11 +913,14 @@
     $('review-stage').textContent = S.results ? (pending ? 'Changes pending' : 'Completed analysis') : 'Preview · no analysis yet';
     $('workflow-help').textContent = S.results ? 'Select a cell or response window. Use the same timeline for the movie and traces.' : 'Drag the frame slider or press Play. You can review the movie before running analysis.';
   }
-  /** What Fiji says after a good finish of the analysis shown, while marks apply or when it was run with automatic marks (its
-   *  message then says which cells were marked, or why none was, until the next run); null otherwise (finishLine says "Done."). */
-  function saidNow() { const now = S.state, r = S.results; return (marked() || automaticRun()) && now && r && now.tone === 'good' && now.folder === r.folder ? (now.message || null) : null; }
+  /** What Fiji says after a good finish of the analysis shown, while marks apply or when its run made an automatic mark (the
+   *  message then names the cells marked, until the next run); null otherwise (finishLine says "Done."). */
+  function saidNow() { const now = S.state, r = S.results; return now && r && (marked() || automaticMade(now.message)) && now.tone === 'good' && now.folder === r.folder ? (now.message || null) : null; }
   /** Whether the analysis shown was run with "Mark possible passing objects as not responders" ticked. */
   const automaticRun = () => { const d = S.results && S.results.appliedDraft; return !!(d && d.values && d.values.automatic_marks === true); };
+  /** Whether that run made at least one automatic mark: one is among the marks, or Fiji's message names the cells it marked,
+   *  as it does until the next run, also once they are removed. */
+  const automaticMade = (message) => automaticRun() && (Object.values(marked() || {}).some(automaticMark) || /(^|\s)Marked automatically: /.test(message || ''));
   /** The status line after a good finish: "Done." and the marks carried over from the earlier analysis; after a mark, what Fiji
    *  said then. Both are Fiji's own words; the carried marks stay until the next run. */
   function finishLine() {
@@ -1089,16 +1093,22 @@
   const markedAt = (mark) => mark.time ? 'Marked ' + String(mark.time).replace('T', ' ').replace(/:\d\d(\.\d+)?([+-]\d\d:?\d\d|Z)?$/, '') : '';
 
   // ---------------------------------------------------------------- the selected cell's checks, and its review mark
-  /** The selected cell's check flags, under its call. A flag of a cell whose event has a first frame goes to that frame (from a
-   *  still picture to the recording, when there is one); without one it is text. An evaluable cell that the checks could not
-   *  look at, in an analysis whose rings were measured, says why. The frames come from the checks, never from the words. */
+  /** The first frame a check flag names: the first of its frames as Fiji gives them, or, from an answer without them, the first
+   *  frame its own text names ("frames 9 to 12", "frame 7"); null when it names none, as short separate crossings. */
+  const flagFirst = (flag) => {
+    if (flag.frames !== undefined) return Array.isArray(flag.frames) ? flag.frames[0] : null;
+    const named = /\bframes? (\d+)/.exec(flag.text || ''); return named ? Number(named[1]) : null;
+  };
+  /** The selected cell's check flags, under its call. A flag goes to the first frame it names, or, when it names none, to the
+   *  first frame of the cell's event (from a still picture to the recording, when there is one); without either it is text. An
+   *  evaluable cell that the checks could not look at, in an analysis whose rings were measured, says why. */
   function showChecks(name) {
     const box = $('cell-checks'); box.replaceChildren();
     const c = shownChecks(name), checks = S.results && S.results.checks, items = [];
     if (c) {
-      const frame = Number.isInteger(c.firstFrame) && c.firstFrame >= 1 && c.firstFrame <= S.info.frames ? c.firstFrame : null;
+      const frameOf = (frame) => Number.isInteger(frame) && frame >= 1 && frame <= S.info.frames ? frame : null;
       for (const flag of checkFlags(name)) {
-        const item = document.createElement(frame ? 'button' : 'span'); item.textContent = flag.text;
+        const frame = frameOf(flagFirst(flag)) || frameOf(c.firstFrame), item = document.createElement(frame ? 'button' : 'span'); item.textContent = flag.text;
         if (frame) { item.type = 'button'; item.className = 'jump'; item.title = 'Go to frame ' + frame + (c.detail ? '\n' + c.detail : ''); item.addEventListener('click', () => goToFrame(frame)); }
         else if (c.detail) item.title = c.detail;
         items.push(item);
@@ -1187,8 +1197,8 @@
     const r = S.results; if (!r || answer.folder !== r.folder) return;
     r.review = answer.review; r.tally = answer.tally;
     S.version = answer.version; if (S.state) S.state.version = answer.version;
-    // what Fiji said is the status line while marks apply; with none left it is "Done." again, as before any mark (finishLine)
-    S.said = marked() || automaticRun() ? (answer.message || null) : null; S.marking = null; S.markSaid = null; $('mark-form').hidden = true;
+    // what Fiji said is the status line while marks apply or after a run that marked automatically; else "Done." again (finishLine)
+    S.said = marked() || automaticMade(answer.message) ? (answer.message || null) : null; S.marking = null; S.markSaid = null; $('mark-form').hidden = true;
     refreshReview(); showState();
   }
   /** Draws again, from the review and tally on hand, everything that counts, groups, colours or lists cells by call. Show stays
@@ -1252,8 +1262,10 @@
   /** The plot opens on the average alone and stays on what was chosen: picking a cell never changes what the plot shows.
    *  A cell's own trace appears only under "One cell + average". */
   function setPlotMode(mode) {
-    // "Around the cell" is in gray levels: a Y axis typed in the figure editor for the other plots is not its, nor the other way round
-    if ((mode === 'around') !== (S.plotMode === 'around')) Fig.plot.yTitle = Fig.plot.yMin = Fig.plot.yMax = Fig.plot.yStep = null;
+    // "Around the cell" is in gray levels: the Y axis typed in the figure editor for the other plots is kept for them, and its
+    // own for it, each put back when its kind of plot is shown again
+    const from = yKind(S.plotMode), to = yKind(mode);
+    if (from !== to) { Fig.yKept[from] = Object.fromEntries(Y_TYPED.map((key) => [key, Fig.plot[key]])); const back = Fig.yKept[to] || {}; for (const key of Y_TYPED) Fig.plot[key] = back[key] !== undefined ? back[key] : STYLE.plot[key]; }
     S.plotMode = mode; Plot.hover = null;
     for (const button of document.querySelectorAll('[data-plot]')) { const on = button.dataset.plot === mode; button.classList.toggle('on', on); button.setAttribute('aria-pressed', on ? 'true' : 'false'); }
     showY(); Plot.dirty = true; drawPlot();
@@ -1722,12 +1734,17 @@
     const had = Around.got.get(name); if (had && !had.failed) return;
     const generation = Around.generation; Around.asking.add(name);
     api('around?cell=' + encodeURIComponent(name) + (r.folder ? '&folder=' + encodeURIComponent(r.folder) : ''))
-      .catch((problem) => ({ why: /fetch/i.test(problem.message) ? 'Fiji is not connected.' : problem.message, failed: true }))
+      .catch((problem) => { const lost = /fetch/i.test(problem.message); return { why: lost ? 'Fiji is not connected.' : problem.message, failed: true, lost }; })
       .then((answer) => {
         if (generation !== Around.generation) return; Around.asking.delete(name);
         Around.got.delete(name); Around.got.set(name, answer); while (Around.got.size > AROUND_KEPT) Around.got.delete(Around.got.keys().next().value);
         if (name === S.cell) { showAroundButton(); Plot.dirty = true; drawPlot(); }
       });
+  }
+  /** Once Fiji answers a poll again: the selected cell's answer that did not come because Fiji was not connected is asked again. */
+  function askAroundAgain() {
+    const got = S.cell && Around.got.get(S.cell); if (!got || !got.lost || Around.asking.has(S.cell)) return;
+    Around.got.delete(S.cell); askAround(S.cell); showAroundButton(); Plot.dirty = true; drawPlot();
   }
   /** "Around the cell" for the selected cell on the window shown: { data } to draw, { why } when there is nothing to show, and
    *  {} while Fiji's answer is on its way. */
@@ -1736,27 +1753,34 @@
     const got = Around.got.get(S.cell); if (!got) return {};
     return got.why || !Array.isArray(got.time) ? { why: got.why || '' } : { data: got };
   }
+  /** The colour of each part of a flag on "Around the cell", the same in the Fiji window: a style entry. A colour met a second
+   *  time for one cell, or a part without one, takes the next of colourAgain. */
+  const PART_COLOUR = { before: 'colourBefore', rim: 'colourBefore', after: 'colourAfter', ring: 'colourAfter', core: 'colourCore' };
+  /** A zone line's colour in a look. */
+  const zoneInk = (look, line) => line.colour === 'colourAgain' ? look.colourAgain[Math.min(line.again, look.colourAgain.length - 1)] : look[line.colour];
   /** The lines of "Around the cell" from one cell's data: its time; the cell's rise; the zones the flag rests on, each by its
-   *  place, in a colour of its own (zone colours in order, the core in its own); every other usable near-ring sector; and
-   *  the flagged frames (band, frames from 1) as a span of time, half a frame to each side. Any mix of parts is drawn. */
+   *  place, in the colour of its part (PART_COLOUR); every other usable near-ring sector; and the flagged frames (band, frames
+   *  from 1) as a span of time, from half the median frame step before the first to half of it after the last, as in the Fiji
+   *  window. Any mix of parts is drawn. */
   function aroundParts(a) {
     const zones = new Map((a.zones || []).map((z) => [z.zone, z])), time = a.time;
     const trace = (zone) => { const z = zones.get(zone); return z && z.usable !== false && Array.isArray(z.trace) ? z.trace : null; };
     const placeOf = (zone, given) => given || (zones.get(zone) || {}).place || 'zone ' + zone;
-    let next = 0; const colours = ['colourZone1', 'colourZone2', 'colourZone3'];
-    const lines = (a.lines || []).filter((line) => line && trace(line.zone)).map((line) => ({ zone: line.zone, part: line.part, frame: line.frame == null ? null : line.frame, place: placeOf(line.zone, line.place), values: trace(line.zone),
-      colour: line.part === 'core' ? 'colourCore' : colours[Math.min(colours.length - 1, next++)] }));
+    const used = new Set(); let again = 0;
+    const colourOf = (part) => { const own = PART_COLOUR[part]; if (own && !used.has(own)) { used.add(own); return { colour: own }; } return { colour: 'colourAgain', again: again++ }; };
+    const lines = (a.lines || []).filter((line) => line && trace(line.zone)).map((line) => Object.assign({ zone: line.zone, part: line.part, frame: line.frame == null ? null : line.frame, place: placeOf(line.zone, line.place), values: trace(line.zone) }, colourOf(line.part)));
     const others = (a.others || []).filter((zone) => trace(zone)).map((zone) => ({ zone, place: placeOf(zone), values: trace(zone) }));
     const frames = Array.isArray(a.band) && a.band.length === 2 && Number.isInteger(a.band[0]) && Number.isInteger(a.band[1]) && a.band[0] >= 1 && a.band[1] >= a.band[0] && a.band[1] <= time.length ? a.band : null;
-    // half the interval to the frame beside, or half the usual interval at either end of the recording and across a pause
-    const steps = time.slice(1).map((t, i) => t - time[i]).filter((d) => d > 0).sort((x, y) => x - y), typical = steps.length ? steps[steps.length >> 1] : 0;
-    const half = (i, j) => Math.min(j >= 0 && j < time.length ? Math.abs(time[j] - time[i]) : typical, 1.5 * typical) / 2;
-    const band = frames ? [time[frames[0] - 1] - half(frames[0] - 1, frames[0] - 2), time[frames[1] - 1] + half(frames[1] - 1, frames[1])] : null;
+    // the median frame step, as the Fiji window takes it: the middle one of the steps in order, the upper middle of an even count
+    const steps = time.slice(1).map((t, i) => t - time[i]).filter((d) => d > 0).sort((x, y) => x - y), half = (steps.length ? steps[steps.length >> 1] : 0) / 2;
+    const band = frames ? [time[frames[0] - 1] - half, time[frames[1] - 1] + half] : null;
     return { time, cell: a.rise, lines, others, frames, band, rule: a.rule || '', text: a.text || '' };
   }
-  /** The "Around the cell" button: off, with why in its tooltip, when there is nothing to show; as it was while an answer is on its way. */
+  /** The "Around the cell" button: off, with why in its tooltip, when there is nothing to show; off without a tooltip while an
+   *  answer is on its way. */
   function showAroundButton() {
-    const button = document.querySelector('[data-plot="around"]'), now = aroundNow(); if (!now.data && now.why === undefined) return;
+    const button = document.querySelector('[data-plot="around"]'), now = aroundNow();
+    if (!now.data && now.why === undefined) { button.disabled = true; button.title = ''; return; }
     button.disabled = !now.data; button.title = now.data ? button.dataset.title : now.why || button.dataset.title;
   }
   /** Whether "Around the cell" is on screen with something to draw. */
@@ -1765,6 +1789,11 @@
   const plotYTitle = () => S.plotMode === 'around' ? 'ΔF (gray levels)' : signalName();
   /** What the Y axis limits typed under the plot belong to: the signal on screen, or "Around the cell", which is in gray levels. */
   const yKey = () => S.plotMode === 'around' ? 'around' : S.signal;
+  /** The kind of Y axis a plot has, for what the figure editor keeps (Y_TYPED): the signal's, or the gray levels of "Around the cell". */
+  const yKind = (mode) => mode === 'around' ? 'around' : 'signal';
+  const Y_TYPED = ['yTitle', 'yMin', 'yMax', 'yStep'];
+  /** The style entries of "Around the cell" alone: the record beside a figure of another plot leaves them out. */
+  const AROUND_STYLE = ['zoneWidth', 'colourBefore', 'colourAfter', 'colourCore', 'colourAgain', 'otherWidth', 'colourOtherSectors', 'flagged', 'colourFlagged'];
   // ---------------------------------------------------------------- style: how the plot and the heatmap look
   const PT = 96 / 72;   // pixels in a point
   /** The fonts a figure can be written in, in the order the editor offers them: [key, name, family]. The one list for the editor
@@ -1796,10 +1825,11 @@
       // and the run that counted, a band: never narrower than runWidth, with a tick at the top of the plot where it starts, so
       // that a run of two or three frames can be seen
       run: true, colourRun: '#d5eedd', runWidth: 2.25, runTick: 4.5,
-      // "Around the cell": the zones a flag rests on, each in a colour of its own (the core always in the last), the other
-      // near-ring sectors thin and gray, and the flagged frames as a band
-      zoneWidth: 1.3, colourZone1: '#0072b2', colourZone2: '#c8660e', colourZone3: '#009e73', colourCore: '#6a3d9a', otherWidth: 0.6, colourOtherSectors: CALL.other.toLowerCase(),
-      flagged: true, colourFlagged: '#fbe7b0' }),
+      // "Around the cell", in the Fiji window's colours: the zones a flag rests on by their part (PART_COLOUR), before and rim,
+      // after and ring, the core, and a colour met a second time in the next of colourAgain; none is a colour of a call. The
+      // other near-ring sectors thin and gray, and the flagged frames as a band
+      zoneWidth: 1.3, colourBefore: '#0072b2', colourAfter: '#aa3377', colourCore: '#009e73', colourAgain: ['#e69f00', '#56b4e9', '#cc79a7', '#882255'], otherWidth: 0.6, colourOtherSectors: '#aeb8c2',
+      flagged: true, colourFlagged: '#e2d6f3' }),
     heatmap: Object.assign({}, STYLE_SHARED, { width: 7, height: 5, barTitle: null,
       // time: the whole recording, or the limits typed in the editor. The colour range: automatic (heatmapRange), or the two numbers typed there
       xMin: null, xMax: null, xStep: null, barMin: null, barMax: null,
@@ -1971,7 +2001,7 @@
     const items = [], around = parts.around;
     if (around) {   // the cell; each zone of its flag by its place; the other ring sectors once; the flagged frames
       items.push({ kind: 'line', colour: look.colourCell, width: look.cellWidth, text: shortName(S.cell) });
-      for (const line of around.lines) items.push({ kind: 'line', colour: look[line.colour], width: look.zoneWidth, text: line.place });
+      for (const line of around.lines) items.push({ kind: 'line', colour: zoneInk(look, line), width: look.zoneWidth, text: line.place });
       if (around.others.length) items.push({ kind: 'line', colour: look.colourOtherSectors, width: look.otherWidth, text: 'other ring sectors' });
       if (around.band) items.push({ kind: 'box', colour: look.colourFlagged, outline: true, text: 'flagged frames' });
       return items;
@@ -2227,7 +2257,7 @@
       if (around) {   // the other ring sectors, thin, under the zones of the flag; the cell on top, as on the other plots
         const zone = (values) => strokeTrace(ctx, around.time, values, X, Y, gapLimit);
         ctx.strokeStyle = look.colourOtherSectors; ctx.lineWidth = look.otherWidth; for (const other of around.others) zone(other.values);
-        for (const one of around.lines) { ctx.strokeStyle = look[one.colour]; ctx.lineWidth = look.zoneWidth; zone(one.values); }
+        for (const one of around.lines) { ctx.strokeStyle = zoneInk(look, one); ctx.lineWidth = look.zoneWidth; zone(one.values); }
         if (around.cell) { ctx.strokeStyle = look.colourCasing; ctx.lineWidth = look.cellWidth + 2 * look.casing; zone(around.cell); ctx.strokeStyle = look.colourCell; ctx.lineWidth = look.cellWidth; zone(around.cell); }
       }
       if (spans.run && spans.run[0] >= x0 && spans.run[0] <= x1) { const sx = X(spans.run[0]); ctx.strokeStyle = look.colourLevelRequired; ctx.lineWidth = look.requiredWidth; ctx.lineCap = 'butt'; ctx.beginPath(); ctx.moveTo(sx, T); ctx.lineTo(sx, T + look.runTick); ctx.stroke(); }
@@ -2733,10 +2763,11 @@
       : { time_range: [drew.x0, drew.x1], time_zoomed: typedTime };
   }
   /** What a saved "Around the cell" shows, for the file kept beside it: the cell, its flag, each zone drawn (by number, place and
-   *  part, with the frame where a sector was seen), the other ring sectors, and the flagged frames, as frames from 1 and in seconds. */
+   *  part, with the frame where a sector was seen), the other ring sectors, and the flagged frames, as frames from 1 and as the
+   *  times of the first and the last of them. */
   const aroundRecord = (around) => ({ cell: S.cell, rule: around.rule, flag: around.text, units: 'gray levels',
     lines: around.lines.map((line) => ({ zone: line.zone, place: line.place, part: line.part, frame: line.frame })), other_ring_sectors: around.others.map((other) => ({ zone: other.zone, place: other.place })),
-    flagged_frames: around.band ? around.frames : null, flagged_frames_s: around.band });
+    flagged_frames: around.band ? around.frames : null, flagged_frames_s: around.band ? [around.time[around.frames[0] - 1], around.time[around.frames[1] - 1]] : null });
   /** How saved pictures are written. Format, resolution and TIFF compression are one setting for every saved picture, the
    *  figures and the pictures of the cells alike; size is the width of a picture of the cells (a figure has its own). Each has
    *  a list on the page (saveBoxes), and showSaveOptions makes those lists show what is set here. */
@@ -2763,7 +2794,7 @@
   /** The two figures as edited (each starts as its style), which one the editor shows, and what the last drawing placed where.
    *  earlier: what start() took from the preferences, for each figure and for the file settings (Save), so that the editor
    *  can say while any of it is in use. rows: the editor's number boxes, each with the line it speaks on (figureSay). */
-  const Fig = { plot: Object.assign({}, STYLE.plot), heatmap: Object.assign({}, STYLE.heatmap), open: null, queued: false, drawn: null, earlier: { plot: {}, heatmap: {}, save: {} }, rows: {} };
+  const Fig = { plot: Object.assign({}, STYLE.plot), heatmap: Object.assign({}, STYLE.heatmap), open: null, queued: false, drawn: null, earlier: { plot: {}, heatmap: {}, save: {} }, rows: {}, yKept: {} };
   /** The boxes of the figure editor, in order: [section, key, label, type, more]; key is an entry of the style table. Types:
    *  number (unit, with the least and the most it takes, or "above": the number it must be greater than; an empty box is
    *  "auto" where the default is null; scale: what the box shows for 1 of the entry, 100 for an opacity typed in %), text
@@ -2963,7 +2994,7 @@
    *  table and are no longer kept. The lists and tick boxes that live on the page go back to how the page opens, the file
    *  settings that all saved pictures share among them. */
   function resetFigure() {
-    const kind = Fig.open; if (!kind) return; Fig[kind] = Object.assign({}, STYLE[kind]); Fig.earlier[kind] = {}; Fig.earlier.save = {}; store('step4.figure.' + kind, null);
+    const kind = Fig.open; if (!kind) return; Fig[kind] = Object.assign({}, STYLE[kind]); Fig.earlier[kind] = {}; Fig.earlier.save = {}; store('step4.figure.' + kind, null); if (kind === 'plot') Fig.yKept = {};
     for (const [, key, , type, more] of FIGURE_FIELDS[kind]) {
       if (type !== 'page' || (more && more.when && !more.when())) continue;
       const box = $(key), ticked = box.type === 'checkbox', value = ticked ? 'checked' : 'value', first = ticked ? box.defaultChecked : (Array.from(box.options).find((option) => option.defaultSelected) || box.options[0]).value;
@@ -2976,10 +3007,13 @@
   const pictureOptions = () => ({ format: Save.format, dpi: Save.dpi, compression: Save.compression });
   /** What a saved heatmap shows that its settings alone do not say: the cell of each row from the top, and the colour range used. */
   function heatmapRecord() { const cells = heatmapCells(), range = heatmapRange(cells.steady, Fig.heatmap); return { rows: cells.rows, colour_range: [range.low, range.high], cell_names: S.rowNames, excluded_hidden: S.hideExcluded }; }
+  /** A figure's settings, for the record beside it: every one, but for a plot other than "Around the cell" without that plot's
+   *  own (AROUND_STYLE), so that its record is as it was before that plot. */
+  const figureSettings = (kind) => kind === 'plot' && S.plotMode !== 'around' ? Object.fromEntries(Object.entries(Fig.plot).filter(([key]) => !AROUND_STYLE.includes(key))) : Fig[kind];
   /** How a saved picture was made, for the file kept beside it: a figure's size and every setting of the editor; or, for a
    *  picture of the cells, the size from Options, the area it shows (picture.area; picture.barred: with a scale bar) and
    *  how the cells were drawn. */
-  const pictureRecord = (picture) => Object.assign(picture.figure ? { size: Fig[picture.figure].width + 'x' + Fig[picture.figure].height, figure: Object.assign({ kind: picture.figure }, Fig[picture.figure]) } : Object.assign({ size: Save.size }, areaRecord(picture.area, picture.barred), outlineRecord()),
+  const pictureRecord = (picture) => Object.assign(picture.figure ? { size: Fig[picture.figure].width + 'x' + Fig[picture.figure].height, figure: Object.assign({ kind: picture.figure }, figureSettings(picture.figure)) } : Object.assign({ size: Save.size }, areaRecord(picture.area, picture.barred), outlineRecord()),
     picture.figure === 'heatmap' ? { heatmap: heatmapRecord() } : {}, pictureOptions());
   /** The file kept beside a saved picture, made once the picture is drawn: what the page showed (exportMetadata; before an
    *  analysis, the view and the frame), then what the picture itself shows in place of that (a figure's own ranges and means,
@@ -3202,7 +3236,7 @@
       now[end] = finite(value) ? value : null; Plot.dirty = true; drawPlot();
     });
     $('y-auto').addEventListener('click', () => { delete Plot.y[yKey()]; showY(); Plot.dirty = true; drawPlot(); });
-    const setSignal = (value) => { if (value !== S.signal) Fig.plot.yTitle = Fig.plot.yMin = Fig.plot.yMax = Fig.plot.yStep = null;   // typed for the other signal
+    const setSignal = (value) => { if (value !== S.signal) { if (yKind(S.plotMode) === 'signal') Fig.plot.yTitle = Fig.plot.yMin = Fig.plot.yMax = Fig.plot.yStep = null; else delete Fig.yKept.signal; }   // typed for the other signal
       S.signal = Data.signal = value; $('signal').value = value; $('data-signal').value = value; showY(); Plot.dirty = true; drawPlot(); if (S.results && !$('panel-data').hidden) showData(); };
     $('signal').addEventListener('change', () => setSignal($('signal').value));
     $('save-plot-folder').addEventListener('click', () => saveToFolder(plotPicture, plotKind(), 'plot-saved', plotNumbers()));
@@ -3563,5 +3597,5 @@
 
   wire();
   start().catch((problem) => { $('lost').classList.add('on'); $('status').textContent = problem.message; });
-  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, STYLE, shownCall, startingReason, markProblem, refreshReview, loadResults, callsRows, outlineLook, place, tableColumns, shownCell, setView, viewArea, savedArea, viewCanvas, pairCanvas, scaleBarLength, pictureKey, cellNumber, plotCells, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, legendLayout, exportMetadata, heatmapAt, heatmapData, pictureRecord, decimal, columnWords, metricSummary, showCalls, showCounts, showMetricTable, plotNumbers, plotKind, COLUMN_WORDS, SUMMARY_ROWS, withCodes, metricRows, Around, aroundNow, aroundParts, savedRecord, plotPicture };   // for the browser test
+  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, STYLE, shownCall, startingReason, markProblem, refreshReview, loadResults, callsRows, outlineLook, place, tableColumns, shownCell, setView, viewArea, savedArea, viewCanvas, pairCanvas, scaleBarLength, pictureKey, cellNumber, plotCells, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, legendLayout, exportMetadata, heatmapAt, heatmapData, pictureRecord, decimal, columnWords, metricSummary, showCalls, showCounts, showMetricTable, plotNumbers, plotKind, COLUMN_WORDS, SUMMARY_ROWS, withCodes, metricRows, Around, aroundNow, aroundParts, zoneInk, savedRecord, plotPicture };   // for the browser test
 })();
