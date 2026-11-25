@@ -7,7 +7,8 @@
 // line, the calls and counts tabs, the finish message and the record of saved plots following it, and the time cursor
 // staying where it is; the head over the picture and the plot one height for every cell, on a control window, with a refusal
 // of two lines and with the longest note, with the call line, its flags, the mark controls and a refusal directly under one
-// another; the tiles, the tabs and the plot not moving at a mark; nothing written on the plot or the saved trace.png but its
+// another; the tiles, the tabs and the plot not moving at a mark, nor Show, the Cell box and the arrows, in either window;
+// nothing under the plot naming a cell when Show lists none; nothing written on the plot or the saved trace.png but its
 // axes and key; on screen the key holds the cell, the mean and the traces behind it, so the plot starts where it did before
 // the review controls, and a band is named by pointing at it; trace.png's key also names its bands and dashed lines in the
 // Step 4 page's words; the plot keeping its place from cell to cell, for a cell without a trace too, and at a mark that
@@ -93,6 +94,8 @@ def heights={->layOut();[head:(ui.reviewBox.parent as JComponent).height,plot:ui
 // the rows of the head that are shown, from the top: each directly under the one before, the room left of the head under them
 def stacked={->layOut();List rows=[ui.cellStatus,ui.flagRow,ui.markRow,ui.markProblem].findAll{it.visible}
     (1..<rows.size()).every{int i->rows[i].y==rows[i-1].y+rows[i-1].height} && ui.headRoom.y==rows[-1].y+rows[-1].height}
+// the width of Show, and where the Cell box and the next arrow beside it start, as laid out at the window's usual size
+def pickers={->layOut();[show:ui.group.width,cell:ui.cells.x,next:ui.nextCell.x]}
 // which rows of the head are shown, by name
 def shownRows={->[call:ui.cellStatus,flags:ui.flagRow,mark:ui.markRow,refusal:ui.markProblem].findAll{k,v->v.visible}.keySet().toList()}
 // a table on its tab: its column names, and a row by the values of two of its columns
@@ -412,6 +415,7 @@ try {
         // ---- a mark saved: every view follows it at once, the cell stays selected and the time cursor stays
         ui.showGroup(1);assert ui.cells.selectedItem=='Cell001' : 'Cell001 is a responder'
         paint('fiji_traces_one_line')
+        Map pickersBefore=pickers()
         ui.markButton.doClick();ui.noteField.text='  drifts in from the left  '
         paint('fiji_traces_form')
         ui.showFrame(17);double moment=ui.plot.moment
@@ -445,6 +449,7 @@ try {
         assert ui.plot.caption=='Cell001 · Did not respond' && ui.plot.noteLines[0].text==ui.plot.caption : ui.plot.caption
         assert ui.removeMark.visible && !ui.markButton.visible && flags().size()==1 : 'a marked cell has one button: Remove mark'
         assert heights()==sizes.Cell001 : 'a mark moves neither the head, the tabs nor the plot: '+heights()+' '+sizes.Cell001
+        assert pickers()==pickersBefore : 'Show keeps its width at a mark, and the Cell box and the arrows their place: '+pickers()+' '+pickersBefore
         assert shownRows()==['call','flags','mark'] && stacked() : 'Remove mark right under the flags: '+shownRows()
         // the calls and counts tabs give the reviewed call beside the automatic one, and % responding after review, on screen
         // only: the saved tables are as they were
@@ -488,6 +493,7 @@ try {
         ui.stimuli.selectedItem='Ionomycin'
         assert !ui.markButton.visible && !ui.removeMark.visible && flags().isEmpty() && (0..<ui.group.itemCount).collect{ui.group.getItemAt(it)}==['All cells (6)','Responded (2)','Did not respond (1)','Excluded or unscorable (3)'] : 'the control window is never reviewed'
         assert strip(ui.cellStatus.text).startsWith('● Cell001: Responded · ') && ui.plot.caption.startsWith('Cell001 · Responded · ') : 'the control window shows its automatic call: '+strip(ui.cellStatus.text)
+        assert pickers()==pickersBefore : 'Show has the same width in the control window: '+pickers()+' '+pickersBefore
         // its saved plots follow no review, and their record says nothing of one
         layOut();ui.exportPlots()
         def onControl=new groovy.json.JsonSlurper().parse(new File(dirB,'plot_provenance.json'))
@@ -528,7 +534,7 @@ try {
         asked.clear();focusOn=ui.removeMark;ui.removeMark.doClick()
         assert !reviewB.exists() && percentB.bytes==percentBefore : 'the review file goes and the percent table is as it was'
         assert ui.responding.value.text==before.tile && ui.responding.caption.text==before.caption : strip(ui.responding.caption.text)
-        assert heights()==sizes.Cell001 : 'the last mark removed moves nothing: '+heights()+' '+sizes.Cell001
+        assert heights()==sizes.Cell001 && pickers()==pickersBefore : 'the last mark removed moves nothing: '+heights()+' '+sizes.Cell001+' '+pickers()+' '+pickersBefore
         assert (0..<ui.group.itemCount).collect{ui.group.getItemAt(it)}==before.groups && ui.cellPicture.calls==before.picture && [ui.heatmap.names,ui.heatmap.calls].transpose()==before.heatmap : 'the Show list, the picture and the heatmap are as before'
         assert ui.cellStatus.text==before.status && ui.cellStatus.toolTipText==before.tip && ui.plot.caption==before.plot && ui.plot.noteLines[0].text==before.plot && ui.cells.selectedItem=='Cell001' : strip(ui.cellStatus.text)
         assert ui.markButton.visible && ui.markButton.text=='Mark as not a responder' && !ui.removeMark.visible : 'the cell can be marked again'
@@ -547,6 +553,10 @@ try {
         // the two responders marked, one after the other: no cell responded
         ['Cell001','Cell005'].each{String c->ui.cells.selectedItem=c;ui.markButton.doClick();ui.reasonBox.selectedItem='Noise';ui.saveMark.doClick()}
         assert ui.plot.allCalls.count{it=='Responded'}==0 && placeOf()==placed : 'marks that leave no responder: '+placed+' '+placeOf()
+        // Show on the responders then lists no cell: the call line says so, and nothing under the plot names a cell
+        ui.showGroup(1);paint('fiji_traces_no_cells')
+        assert ui.group.selectedItem=='Responded after review (0)' && ui.cells.itemCount==0 && ui.cellStatus.text.contains('No cells in this group.') && ui.plot.noteLines*.text==['',''] : ui.plot.noteLines*.text
+        ui.showGroup(0)
         ['Cell005','Cell001'].each{String c->ui.cells.selectedItem=c;ui.removeMark.doClick()}
         assert !reviewB.exists() && placeOf()==placed : 'the marks removed'
 
@@ -648,7 +658,7 @@ try {
     }
     assert appeared.isEmpty() : 'a window appeared on screen: '+appeared
     onUI{assert !ui.visible && !ui.isDisplayable() : 'the window was never shown'}
-    println 'PASS: Step 4 window flags, links to frames, mark controls, reasons chosen from flags, refusals, Enter (once when held, never from the open Reason list) and Esc, focus back to the button, one head height with its rows one under another, tiles and plot kept at a mark, nothing written on the plot or trace.png but its key, the key on screen as before the review controls with the frame where it started, bands and dashed lines named in the key of trace.png, laid across it, the plot in its place from cell to cell and at a mark that empties the group, the rule line with the decimals of the call line and none without a trace, saved figures drawn across their width, reviewed columns on the tabs, a review file for another analysis, marks saved and removed with every view following and Show kept, control window and busy without controls, carried marks, plot record'
+    println 'PASS: Step 4 window flags, links to frames, mark controls, reasons chosen from flags, refusals, Enter (once when held, never from the open Reason list) and Esc, focus back to the button, one head height with its rows one under another, tiles, plot, Show and the Cell box kept at a mark, nothing under the plot when Show lists no cell, nothing written on the plot or trace.png but its key, the key on screen as before the review controls with the frame where it started, bands and dashed lines named in the key of trace.png, laid across it, the plot in its place from cell to cell and at a mark that empties the group, the rule line with the decimals of the call line and none without a trace, saved figures drawn across their width, reviewed columns on the tabs, a review file for another analysis, marks saved and removed with every view following and Show kept, control window and busy without controls, carried marks, plot record'
 } catch(Throwable t){t.printStackTrace();System.exit(1)}
 finally {onUI{ui?.dispose();original?.close();recording?.close()}}
 System.exit(0)

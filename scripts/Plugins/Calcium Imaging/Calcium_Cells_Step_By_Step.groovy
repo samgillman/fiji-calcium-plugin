@@ -3846,6 +3846,9 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         cellPicture.calls=callRows.collectEntries{k,v->[k,callOf(k as String)]}
         Map first=callRows.values().find{true}?:[:];plot.stimulusStart=CalciumCsv.number(first.Start_s);plot.stimulusEnd=CalciumCsv.number(first.Effective_end_s?:first.End_s)
         boolean after=reviewMarks&&callRows.values().any{it.Role!='Control'}   // a control window keeps its automatic call
+        // Show is as wide as its longest entry can be, in both windows and with or without marks, so the Cell box and the
+        // arrows beside it do not move when marks come and go (as on the Step 4 page)
+        group.prototypeDisplayValue='Did not respond after review ('+(measurement.names as List).size()+')'
         listing=true;try{int keep=Math.max(0,group.selectedIndex);group.removeAllItems();CalciumCalls.GROUPS.eachWithIndex{String name,int i->group.addItem(name+(after&&(i==1||i==2)?' after review':'')+' ('+(measurement.names as List<String>).count{callRows.isEmpty()||CalciumCalls.inGroup(callOf(it),i)}+')')}
             if(after)group.addItem('Marked ('+(measurement.names as List<String>).count{listedIn(it,MARKED)}+')')
             group.selectedIndex=callRows.isEmpty()||keep>=group.itemCount?0:keep}finally{listing=false}
@@ -3869,7 +3872,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         plot.markCalls=!marks ? [] : which==0||which==MARKED ? CalciumReview.CALLS : which==1||which==2 ? [CalciumReview.CALLS[which-1]] : []
         previousCell.enabled=shown.size()>1;nextCell.enabled=shown.size()>1
         if(cells.getItemCount()>0)selectCell(cells.getSelectedItem() as String,true)
-        else {plot.cell='';plot.selected=new double[0];plot.responseCall=[:];cellStatus.setText('No cells in this group.');showReview(null);cellPicture.selected=-1;plot.changed();cellPicture.repaint()}
+        else {plot.cell='';plot.selected=new double[0];plot.responseCall=[:];plot.caption='';cellStatus.setText('No cells in this group.');showReview(null);cellPicture.selected=-1;plot.changed();cellPicture.repaint()}
     }
     void showGroup(int which){if(which<group.getItemCount()&&group.getSelectedIndex()!=which)group.setSelectedIndex(which)}
     /** Another cell is selected: the cell kept after its mark leaves the Cell list. */

@@ -177,11 +177,11 @@ and counted by the plugin.
               counts tab adds After review and Calls changed; in the Fiji window these columns are
               on screen only. On the page After review leaves out the cells below zero while the
               switch for them is ticked, as the headline does, and while there are marks the Export
-              of the calls table adds Reviewed_call, Review_reason and Review_note. The engine's
-              counts under the first table of the Responder counts tab, which stay as saved, are
-              headed Before review, and the other tables follow too: in the Whole-recording metrics
-              and Cell quality tables, and in the list of flagged cells of the primary stimulus, the
-              Call column reads Call after review.
+              of the calls table adds Reviewed_call, Review_reason and Review_note. On the page the
+              engine's counts under the first table of the Responder counts tab, which stay as
+              saved, are headed Before review, and in the Whole-recording metrics and Cell quality
+              tables, and in the list of flagged cells of the primary stimulus, the Call column
+              reads Call after review.
               Without marks the calls, the % responding, the tables and their exports are as before;
               the flags of the checks still join the list of flagged cells and Needs quality review.
   Figures     A figure of the primary stimulus saved while there are marks records calls: after
