@@ -231,7 +231,11 @@ try {
         assert ui.flagRow.visible && flags()*.text==['field moved, frames 20 to 22','·','short separate crossings'] : flags()*.text
         assert shownRows()==['call','flags','mark'] && stacked() && ui.flagRow.y==ui.cellStatus.y+ui.cellStatus.height : 'the flags right under the call line, the button right under them: '+ui.cellStatus.bounds+' '+ui.flagRow.bounds+' '+ui.markRow.bounds
         def moved=flags()[0]
-        assert moved.foreground==Theme.BLUE && moved.cursor.type==java.awt.Cursor.HAND_CURSOR && moved.toolTipText.startsWith('<html>Go to frame 18<br>the field moved 3.1 px') : 'a flag with a first frame is a link'
+        assert moved.foreground==Theme.BLUE && moved.cursor.type==java.awt.Cursor.HAND_CURSOR && moved.toolTipText.startsWith('<html>Go to frame 20<br>the field moved 3.1 px') : 'a flag links to the first frame its text names, not the event\'s: '+moved.toolTipText
+        def blips=flags()[2]
+        assert blips.foreground==Theme.BLUE && blips.toolTipText.startsWith('<html>Go to frame 18<br>') : 'a flag whose text names no frame: the first frame of the event, '+blips.toolTipText
+        ui.tabs.selectedIndex=0;ui.showFrame(30);click(moved);assert ui.tabs.selectedIndex==1 && ui.frame==20 : 'the click goes there'
+        click(blips);assert ui.frame==18
         ui.markButton.doClick();assert ui.reasonBox.selectedItem=='Movement' : 'a field that moved: Movement is chosen'
         ui.cancelMark.doClick()
     }
@@ -451,7 +455,7 @@ try {
         Map mark=Review.read(dirB,ui.measurement).marks.Cell001
         assert mark.automatic=='Responded' && mark.reviewed=='Did not respond' && mark.reason=='Passing object' && mark.note=='drifts in from the left' : mark
         def saved=Csv.read(reviewB)
-        assert saved[0]==Review.HEADER && saved.size()==2 && saved[1][0..6]==['Cell001','Responded','Did not respond','Passing object','drifts in from the left',mark.time,B] && saved[1][7]==Installer.digest(new File(dirB,'responder_calls.csv').bytes) : saved
+        assert saved[0]==Review.HEADER_BEFORE && saved.size()==2 && saved[1][0..6]==['Cell001','Responded','Did not respond','Passing object','drifts in from the left',mark.time,B] && saved[1][7]==Installer.digest(new File(dirB,'responder_calls.csv').bytes) : saved
         assert Csv.read(percentB)[0]==Settings.PERCENT_COLUMNS+Settings.REVIEW_COLUMNS : 'the percent table gives the figures after review beside the others'
         assert ui.responding.value.text=='33.3 %' && strip(ui.responding.caption.text)=='Capsaicin: 1 of 3 evaluable cells after review; 2 before review' : ui.responding.caption.text
         assert (0..<ui.group.itemCount).collect{ui.group.getItemAt(it)}==['All cells (6)','Responded after review (1)','Did not respond after review (2)','Excluded or unscorable (3)','Marked (1)'] : (0..<ui.group.itemCount).collect{ui.group.getItemAt(it)}
@@ -833,6 +837,15 @@ try {
             def saved=Csv.read(reviewD)
             assert saved[0]==Review.HEADER && saved.drop(1).collect{[it[0],it[1],it[2],it[3],it[4],it[-1]]}==[['Cell001','Responded','Did not respond','Passing object','','automatic'],['Cell002','Responded','Did not respond','Passing object','','automatic']] : saved
             assert ui.appliedFingerprint.contains('"automatic_marks":true') && ui.appliedNote.text=='Displayed results match the applied settings.' : ui.appliedNote.text
+            // a window opened again on this analysis: its review file holds automatic marks, so the box is ticked and the results
+            // match the settings
+            def again=Window.newInstance(ui.measurement+[rois:(ui.measurement.rois as Roi[]).collect{(Roi)it.clone()} as Roi[]]);again.runtime.home=new File(work,'runtime');again.aroundLater={Closure read->}
+            try{
+                assert !again.automaticBox.selected : 'a new window starts with the box off'
+                again.loadResults(dirD)
+                assert again.automaticBox.selected && again.appliedFingerprint.contains('"automatic_marks":true') && again.appliedNote.text=='Displayed results match the applied settings.' : again.appliedNote.text
+                again.automaticBox.doClick();assert again.appliedNote.text.startsWith('Settings changed') : 'turned off, it asks for a new run'
+            }finally{again.dispose()}
             // the option is a setting: changing it asks for a new run, changing it back does not
             box.doClick();assert ui.appliedNote.text.startsWith('Settings changed') : ui.appliedNote.text
             box.doClick();assert ui.appliedNote.text=='Displayed results match the applied settings.' : ui.appliedNote.text
@@ -859,7 +872,13 @@ try {
             [['Cell response calls','fiji_codes_calls_tab',ui.calls],['Cell quality','fiji_codes_quality_tab',ui.qc]].each{String tab,String name,JTable shown->
                 def scroll=SwingUtilities.getAncestorOfClass(JScrollPane,shown) as JScrollPane;if(scroll.columnHeader?.view==null)scroll.columnHeaderView=shown.tableHeader
                 ui.tabs.selectedIndex=ui.tabs.indexOfTab(tab);layOut();def view=shown.parent as JViewport
-                int x=shown.getCellRect(0,columns(shown).indexOf('QC_flags'),true).x as int;view.viewPosition=new java.awt.Point(Math.max(0,Math.min(x-200,shown.width-view.width)),0);paint(name,false)}
+                int x=shown.getCellRect(0,columns(shown).indexOf('QC_flags'),true).x as int;view.viewPosition=new java.awt.Point(Math.max(0,Math.min(x-200,shown.width-view.width)),0);paint(name,false)
+                // a cell whose text its column cuts shows the whole text as its tooltip; one whose text fits has none; no width changes
+                int c=columns(shown).indexOf('QC_flags'),cellAt=columns(shown).indexOf('Cell'),r=(0..<shown.rowCount).find{shown.getValueAt(it,cellAt)=='Cell001'} as int
+                String whole=shown.getValueAt(r,c) as String;java.awt.Rectangle place=shown.getCellRect(r,c,false)
+                def tipAt={int column->java.awt.Rectangle at=shown.getCellRect(r,column,false);shown.getToolTipText(new java.awt.event.MouseEvent(shown,java.awt.event.MouseEvent.MOUSE_MOVED,0L,0,(at.x as int)+3,(at.y as int)+3,0,false))}
+                assert shown.getFontMetrics(shown.font).stringWidth(whole)>place.width && tipAt(c)==whole : 'cut: '+[whole,place.width,tipAt(c)]
+                assert tipAt(cellAt)==null && (0..<shown.columnCount).every{shown.columnModel.getColumn(it).preferredWidth==160} : tipAt(cellAt)}
         }
         aroundRead()
         onUI {
@@ -871,18 +890,26 @@ try {
             assert java.util.Arrays.equals(data.rise as double[],direct.rise as double[]) && (0..<data.zones.size()).every{int z->java.util.Arrays.equals(data.zones[z].trace as double[],direct.zones[z].trace as double[])} : 'the traces the check used'
             List shown=ui.aroundPlot.lines()
             assert shown.findAll{it[2]!='other ring sectors'}.collect{it[2]}==data.lines*.place && (0..<data.lines.size()).every{int i->shown.findAll{it[2]!='other ring sectors'}[i][3].is(data.zones.find{it.zone==data.lines[i].zone}.trace)} : 'each zone of the flag is drawn from its trace'
-            assert shown.findAll{it[2]=='other ring sectors'}.size()==data.others.size() && shown.findAll{it[2]=='other ring sectors'}.every{it[0]==Around.OTHER && it[1]<1f} : 'the other ring sectors thin and gray'
+            assert shown.findAll{it[2]=='other ring sectors'}.size()==data.others.size() && shown.findAll{it[2]=='other ring sectors'}.every{it[0]==Around.OTHER && it[1]<1f} && Around.OTHER==new java.awt.Color(0xAEB8C2) : 'the other ring sectors thin and gray'
+            // each part in its colour, as on the Step 4 page: before blue, after purple; the band of the flagged frames lilac
+            assert shown.findAll{it[2]!='other ring sectors'}.collect{it[0]}==[new java.awt.Color(0x0072B2),new java.awt.Color(0xAA3377)] && Around.FLAGGED==new java.awt.Color(0xE2D6F3) : shown.collect{it[0]}
             List colours=shown.findAll{it[2]!='other ring sectors'}.collect{it[0]};assert colours.unique(false).size()==colours.size() && !colours.contains(Theme.INK) && !colours.contains(Around.OTHER) : 'each zone of the flag in its own colour, not the cell\'s: '+colours
             assert ui.aroundPlot.entries(shown)*.getAt(2)==['Cell001']+data.lines*.place+['other ring sectors','response window','flagged frames'] : ui.aroundPlot.entries(shown)*.getAt(2)
             assert ui.aroundStatus.text==ui.cellStatus.text && ui.aroundStatus.toolTipText==ui.cellStatus.toolTipText && flagWords(ui.aroundFlags)==flagWords(ui.flagRow) && flagWords(ui.aroundFlags)==['possible passing object, frames 55 to 62'] : 'the call line and the flags of Traces: '+flagWords(ui.aroundFlags)
             def around=ui.aroundFlags.components.find{it instanceof JLabel}
             assert around.foreground==Theme.BLUE && around.cursor.type==java.awt.Cursor.HAND_CURSOR && around.toolTipText.startsWith('<html>Go to frame 55<br>') : 'the flag is a link here too'
+            // a click here stays on this tab and moves its time cursor to the frame
+            ui.showFrame(25);click(around);assert ui.tabs.selectedIndex==aroundTab() && ui.frame==55 && ui.aroundPlot.moment==54d && ui.plot.moment==54d : [ui.tabs.selectedIndex,ui.frame,ui.aroundPlot.moment]
             Map seen=aroundNow()
             assert seen.drawn.every{allowedAround(it)} && seen.drawn.containsAll(['Time (s)','Cell001','ring, left','ring, right','other ring sectors','response window','flagged frames']) : 'drawn on the plot: '+seen.drawn.findAll{!allowedAround(it)}+' of '+seen.drawn
             assert keyLaid(seen) && seen.tall>=250 : 'the key is readable at the usual size and leaves the plot its room: '+seen.tall
             assert bandShare(seen,58.5d,Around.FLAGGED)>0.6d && bandShare(seen,100d,Around.WINDOW)>0.6d && bandShare(seen,20d,Around.FLAGGED)==0d && bandShare(seen,20d,Around.WINDOW)==0d : 'the flagged frames and the response window: '+[bandShare(seen,58.5d,Around.FLAGGED),bandShare(seen,100d,Around.WINDOW)]
             // the band runs half a frame to each side of the frames named
             assert ui.aroundPlot.bands().find{it[3]=='flagged frames'}[0..1]==[54d-0.5d,61d+0.5d] : ui.aroundPlot.bands()
+            // half the median frame step, not the step beside the band: of an even number of steps the upper middle one, as on the page
+            def uneven=Around.newInstance();uneven.data=[why:'',time:[0d,1d,2d,4d,6d,8d,10d] as double[],band:[3,5],zones:[],lines:[],others:[]]
+            assert uneven.bands()==[[1d,7d,Around.FLAGGED,'flagged frames']] : uneven.bands()
+            uneven.data=[why:'',time:[0d,1d,2d,4d,6d] as double[],band:[2,3],zones:[],lines:[],others:[]];assert uneven.bands()*.take(2)==[[0d,3d]] : uneven.bands()
             assert data.lines.every{Map line->colourCount(seen,ui.aroundPlot.lines().find{it[2]==line.place}[0] as java.awt.Color)>20} && colourCount(seen,Theme.INK)>20 : 'each line is drawn in its colour'
             paint('fiji_around_rule_a',false)
             // the time cursor follows the slider and the Traces plot; a click on the plot moves it
@@ -896,7 +923,7 @@ try {
             ui.cells.selectedItem='Cell002';data=ui.aroundPlot.data;seen=aroundNow()
             assert data.rule=='on the edge' && data.lines*.part==['rim','ring','core'] && data.band==[60,90] : data.subMap(['rule','lines','band'])
             assert seen.drawn.every{allowedAround(it)} && ['rim, lower right','ring, lower right','core','flagged frames'].every{seen.drawn.contains(it)} && keyLaid(seen) : seen.drawn
-            colours=ui.aroundPlot.lines().findAll{it[2]!='other ring sectors'}.collect{it[0]};assert colours.unique(false).size()==3 : colours
+            colours=ui.aroundPlot.lines().findAll{it[2]!='other ring sectors'}.collect{it[0]};assert colours==[new java.awt.Color(0x0072B2),new java.awt.Color(0xAA3377),new java.awt.Color(0x009E73)] : 'rim blue, ring purple, core green: '+colours
             assert [top:seen.top,y:ui.aroundPlot.y]==placeA : 'the plot keeps its place from cell to cell: '+seen.top+' '+placeA
             paint('fiji_around_rule_b',false)
             // a responder without a flag: the cell, the core and the eight near-ring sectors, no band
@@ -941,18 +968,21 @@ try {
             ui.aroundOf={Map context,String cell->cell=='Cell001'?crossing:given.call(context,cell)}
             ui.cells.selectedItem='Cell001';seen=aroundNow();shown=ui.aroundPlot.lines()
             assert ui.aroundPlot.entries(shown)*.getAt(2)==['Cell001','ring, left','ring, right','core','other ring sectors','response window','flagged frames'] && seen.drawn.every{allowedAround(it)} : seen.drawn
-            colours=shown.findAll{it[2]!='other ring sectors'}.collect{it[0]};assert colours.unique(false).size()==3 && colours.every{colourCount(seen,it as java.awt.Color)>20} : 'three lines in three colours'
+            colours=shown.findAll{it[2]!='other ring sectors'}.collect{it[0]};assert colours==[new java.awt.Color(0x0072B2),new java.awt.Color(0xAA3377),new java.awt.Color(0x009E73)] && colours.every{colourCount(seen,it as java.awt.Color)>20} : 'before blue, after purple, core green: '+colours
             assert bandShare(seen,58.5d,Around.FLAGGED)>0.6d && ui.aroundPlot.bands().find{it[3]=='flagged frames'}[0..1]==[53d-0.5d,62d+0.5d] && keyLaid(seen) && seen.top==placeA.top : 'its band and key, the plot in its place'
             paint('fiji_around_rule_c',false)
             // a sector that is not usable is left out; a part met twice takes another colour
             crossing.lines=[[zone:0,place:'ring, right',part:'after',frame:null],[zone:16,place:'core',part:'core',frame:null]];ui.showAround('Cell001');shown=ui.aroundPlot.lines()
             assert ui.aroundPlot.entries(shown)*.getAt(2)==['Cell001','ring, right','core','other ring sectors','response window','flagged frames'] : ui.aroundPlot.entries(shown)*.getAt(2)
             crossing.lines=[[zone:4,place:'ring, left',part:'after',frame:null],[zone:0,place:'ring, right',part:'after',frame:null]];ui.showAround('Cell001')
-            colours=ui.aroundPlot.lines().findAll{it[2]!='other ring sectors'}.collect{it[0]};assert colours.unique(false).size()==2 : colours
+            colours=ui.aroundPlot.lines().findAll{it[2]!='other ring sectors'}.collect{it[0]};assert colours==[new java.awt.Color(0xAA3377),new java.awt.Color(0xE69F00)] : colours
+            crossing.lines=[[zone:4,place:'ring, left',part:'before',frame:null],[zone:5,place:'ring, upper left',part:'before',frame:null],[zone:0,place:'ring, right',part:'after',frame:null],[zone:1,place:'ring, lower right',part:'after',frame:null],[zone:2,place:'ring, bottom',part:'after',frame:null]];ui.showAround('Cell001')
+            colours=ui.aroundPlot.lines().findAll{it[2]!='other ring sectors'}.collect{it[0]}
+            assert colours==[0x0072B2,0xE69F00,0xAA3377,0x56B4E9,0xCC79A7].collect{new java.awt.Color(it)} : 'each part met again takes the next spare colour: '+colours
             ui.aroundOf=given
             // a flag of rule C on a responder: its code chooses Passing object in the mark form, as for rule A
             Map was=ui.checks.cells.Cell003
-            ui.checks.cells.Cell003=was+[text:'possible passing object, frames 62 to 70',rule:'crosses the cell',flags:[[text:'possible passing object, frames 62 to 70',rule:'crosses the cell',code:'POSSIBLE_PASSING_OBJECT']],codes:['POSSIBLE_PASSING_OBJECT'],qcFlags:'POSSIBLE_PASSING_OBJECT']
+            ui.checks.cells.Cell003=was+[text:'possible passing object, frames 62 to 70',rule:'crosses the cell',flags:[[text:'possible passing object, frames 62 to 70',rule:'crosses the cell',code:'POSSIBLE_PASSING_OBJECT',frames:[62,70]]],codes:['POSSIBLE_PASSING_OBJECT'],qcFlags:'POSSIBLE_PASSING_OBJECT']
             ui.tabs.selectedIndex=1;ui.cells.selectedItem='Cell002';ui.cells.selectedItem='Cell003'
             assert flagWords(ui.flagRow)==['possible passing object, frames 62 to 70'] && flagWords(ui.aroundFlags)==flagWords(ui.flagRow) : flagWords(ui.flagRow)
             ui.markButton.doClick();assert ui.reasonBox.selectedItem=='Passing object' : 'rule C: '+ui.reasonBox.selectedItem
@@ -989,6 +1019,9 @@ try {
             Map marks=Review.read(dirE,ui.measurement).marks
             assert marks.keySet()==['Cell002'] as Set && marks.Cell002.by=='manual' && marks.Cell002.carriedFrom==D : marks
             assert !ui.appliedFingerprint.contains('automatic_marks') && ui.appliedNote.text=='Displayed results match the applied settings.' : 'the run without the option'
+            // opened again: its review file holds a manual mark only, so the box stays off
+            def againE=Window.newInstance(ui.measurement+[rois:(ui.measurement.rois as Roi[]).collect{(Roi)it.clone()} as Roi[]]);againE.runtime.home=new File(work,'runtime');againE.aroundLater={Closure read->}
+            try{againE.loadResults(dirE);assert !againE.automaticBox.selected && !againE.appliedFingerprint.contains('automatic_marks') && againE.appliedNote.text=='Displayed results match the applied settings.' : againE.appliedNote.text}finally{againE.dispose()}
             box.doClick();assert ui.appliedNote.text.startsWith('Settings changed') : 'the option turned on asks for a new run'
             box.doClick();assert ui.appliedNote.text=='Displayed results match the applied settings.'
             ui.tabs.selectedIndex=1

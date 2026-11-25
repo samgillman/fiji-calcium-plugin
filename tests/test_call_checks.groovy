@@ -249,7 +249,10 @@ assert answer('left').nearSectors==ringsOf.nearUsable(2) && ringsOf.pixels(2,8)<
 // rises of one frame are counted and not flagged; a responder with three rises of two frames is
 assert answer('single').text=='' && answer('single').crossings==3 && answer('single').longestCrossing==1
 assert answer('blips').text=='short separate crossings' && answer('blips').rule=='short separate crossings' && answer('blips').crossings==3 && answer('blips').longestCrossing==2 && answer('blips').detail=='3 crossings, the longest 2 samples'
-assert answer('crossed').flags==[[text:'possible passing object, frames 55 to 62',rule:'passes through',code:'POSSIBLE_PASSING_OBJECT']] && answer('left').flags==[] && answer('blips').flags==[[text:'short separate crossings',rule:'short separate crossings',code:'SHORT_SEPARATE_CROSSINGS']]
+assert answer('crossed').flags==[[text:'possible passing object, frames 55 to 62',rule:'passes through',code:'POSSIBLE_PASSING_OBJECT',frames:[55,62]]] && answer('left').flags==[] && answer('blips').flags==[[text:'short separate crossings',rule:'short separate crossings',code:'SHORT_SEPARATE_CROSSINGS',frames:null]]
+// each flag's frames are the ones its text names, which its link goes to; none for a flag that names none
+assert answer('edge').flags*.frames==[[60,90]] && Checks.framesOf('field moved, frame 7')==[7,7] && Checks.framesOf('rise on the top edge, not in the cell, frames 3 to 9')==[3,9] && Checks.framesOf('short separate crossings')==null && Checks.framesOf('')==null && Checks.framesOf(null)==null
+assert Checks.answer([rows:[[Cell:'a',Flag:'field moved, frames 3 to 5; short separate crossings',Rule:'field moved; short separate crossings']]]).cells.a.flags*.frames==[[3,5],null]
 assert Checks.answer([rows:[[Cell:'a',Flag:'rise on the top edge, not in the cell, frames 3 to 9; short separate crossings',Rule:'on the edge; short separate crossings']]]).cells.a.flags*.rule==['on the edge','short separate crossings'] : 'two flags are given one by one too'
 assert row('blips').Crossings=='3' && row('blips').Longest_crossing_samples=='2' && row('left').Crossings=='1' && (row('left').Longest_crossing_samples as int)>50
 assert results.tally==slurp.parseText(JsonOutput.toJson(Settings.tally(new File(still.folder,'SimpleCa-first'),still))) && results.tally.rows[0].counted==[5,6,6] : 'a flag changes no call and no count'
@@ -533,7 +536,7 @@ assert xAnswer('small').text=='possible passing object, frames '+ownSmall.first+
 assert xAnswer('small').detail=='the rise crossed the cell from the left to the right, '+String.format(Locale.US,'%.2f',ownSmall.ratio)+' x its width' && ownSmall.ratio>=0.5d : [xAnswer('small').detail,ownSmall]
 assert smallCross.flag && [smallCross.first,smallCross.last]==[ownSmall.first,ownSmall.last] && Math.abs(smallCross.ratio-ownSmall.ratio)<1e-9 && (0..1).every{Math.abs(smallCross.start[it]-ownSmall.start[it])<1e-9&&Math.abs(smallCross.end[it]-ownSmall.end[it])<1e-9} : [smallCross,ownSmall]
 assert smallCross.from==4 && smallCross.to==0 && smallCross.start[0]<0d && smallCross.end[0]>0d
-assert xAnswer('small').flags==[[text:xAnswer('small').text,rule:'crosses the cell',code:'POSSIBLE_PASSING_OBJECT']] && xAnswer('small').codes==['POSSIBLE_PASSING_OBJECT'] && xAnswer('small').checked
+assert xAnswer('small').flags==[[text:xAnswer('small').text,rule:'crosses the cell',code:'POSSIBLE_PASSING_OBJECT',frames:[ownSmall.first,ownSmall.last]]] && xAnswer('small').codes==['POSSIBLE_PASSING_OBJECT'] && xAnswer('small').checked
 assert xRow('small').Flag==xAnswer('small').text && xRow('small').Rule=='crosses the cell' && xRow('small').QC_flags=='POSSIBLE_PASSING_OBJECT' && xRow('small').Passing_object_check=='checked'
 // the event stays the half-height event the check has always given; the flag names the rule's own, wider, window
 assert (xRow('small').Event_first_frame as int)>ownSmall.first && (xRow('small').Event_last_frame as int)<ownSmall.last && xAnswer('small').firstFrame==(xRow('small').Event_first_frame as int)
@@ -560,6 +563,26 @@ Map unevenAround=Checks.aroundCell(xAroundContext,xChecks,xCell.uneven)
 assert unevenAround.lines*.part==['core'] && unevenAround.band==null
 println 'PASS: around a cell rule C flags: the ring on the side the rise came from and the side it went to, the core, and the rule\'s window as the flagged frames'
 
+def oldTableAround={->
+// a table of 2026.11.24.1 (no QC_flags, no flag of the rule "crosses the cell", no words for it in Detail): around each cell
+// is shown, re-checked as that version checked, not refused as changed
+File xSaved=new File(cross.folder,'cross_call_checks_SimpleCa-cross.csv');byte[] xNewTable=xSaved.bytes
+List xOld=Csv.read(xSaved).collect{it.dropRight(1)};List xh=xOld[0]
+xOld.drop(1).each{List line->
+    if(line[0]==xCell.small)['Flag','Rule','Detail'].each{line[xh.indexOf(it)]=''}
+    int d=xh.indexOf('Detail');line[d]=line[d].replaceFirst(/; also crosses the cell .*$/,'')}
+Csv.write(xSaved,xOld);assert Csv.read(xSaved)[0]==Checks.HEADER_BEFORE && Checks.savedBefore(dirCross,cross) && !Checks.savedBefore(new File(still.folder,'SimpleCa-first'),still)
+Map oldContext=Checks.aroundContext(dirCross,cross),oldChecks=Checks.answer(Checks.saved(dirCross,cross))
+assert xNames.every{String cell->Checks.aroundCell(oldContext,oldChecks,cell).why==''} : xNames.collect{Checks.aroundCell(oldContext,oldChecks,it).why}
+assert oldContext.before==true && oldChecks.cells[xCell.small].rule=='' && oldChecks.cells[xCell.both].rule=='passes through'
+Map smallOld=Checks.aroundCell(oldContext,oldChecks,xCell.small),bothOld=Checks.aroundCell(oldContext,oldChecks,xCell.both)
+assert smallOld.lines*.part==['core'] && smallOld.band==null && smallOld.codes==[] && bothOld.lines*.part==['before','after'] && bothOld.band==[xAnswer('both').firstFrame,xAnswer('both').lastFrame]
+assert !bothOld.flags[0].text.isEmpty() && bothOld.codes==['POSSIBLE_PASSING_OBJECT']
+xSaved.bytes=xNewTable
+assert Checks.aroundCell(Checks.aroundContext(dirCross,cross),xChecks,xCell.small).lines*.part==['before','after','core'] : 'this build\'s table: rule C again'
+println 'PASS: around the cells of an analysis whose table 2026.11.24.1 wrote: shown, checked again as that version checked'
+};oldTableAround()
+
 // the field moved near the rule's window: said instead, as for rules A and B, on the rule's own frames
 def crossJolt=measureCross('cross_jolt',crossMovie(true))
 assert Csv.read(new File(crossJolt.prefix+'field_movement.csv')).drop(1).findAll{Double.parseDouble(it[1])>=8d}*.getAt(0)==['46','47']
@@ -572,6 +595,35 @@ assert joltWindow-10<=47 && smallJolt.firstFrame-10>47 : [joltWindow,smallJolt.f
 File dirJoltCross=new File(crossJolt.folder,'SimpleCa-jolt')
 Map smallJoltAround=Checks.aroundCell(Checks.aroundContext(dirJoltCross,crossJolt),Checks.answer(Checks.saved(dirJoltCross,crossJolt)),xCell.small)
 assert smallJoltAround.lines*.part==['before','after','core'] && smallJoltAround.band==[46,47] && smallJoltAround.codes==['FIELD_MOVED']
+// rule A flags the cell and the rise crosses it too: that it crosses the cell is said only when the field did not move near
+// the window of crosses the cell, as for that rule alone. Here the field moved far from both windows: said
+assert joltCells[xCell.both].rule=='passes through' && joltCells[xCell.both].detail.contains('; also crosses the cell from the left to the right, ')
+def alsoGuarded={->
+    // a disc crossed left to right by a small object; the field moves 12 px at one frame, near the window of crosses the cell
+    // and not near the event (span 2 frames)
+    int gw=220,gh=120,gn=80,startF=25,endF=40
+    int[] gpx=Steps.pixelsOf(new ij.gui.OvalRoi(100,50,16,16),gw,gh);int[] cover=new int[gw*gh];gpx.each{cover[it]++}
+    int[][] gzones=Rings.zonesOf(gpx,cover,gw,gh,Rings.widths(0.645d,0.645d,'micron'));double[][][] gsh=Passing.shape(gpx,gzones,gw)
+    def grnd=new Random(7)
+    def object={int i,int f->if(f<startF||f>endF)return 0d;double t=(f-startF)/(double)(endF-startF),bx=96+24*t,by=58;int y=i.intdiv(gw),x=i-y*gw;60d*Math.exp(-((x-bx)*(x-bx)+(y-by)*(y-by))/18d)}
+    double[] graw=new double[gn],gbg=new double[gn];float[][] gflat=new float[25][]
+    for(int f=0;f<gn;f++){gbg[f]=100+grnd.nextGaussian()*0.05;double t=0;gpx.each{t+=object(it,f)};graw[f]=gbg[f]+t/gpx.length+grnd.nextGaussian()*0.05}
+    for(int z=0;z<25;z++){gflat[z]=new float[gn];for(int f=0;f<gn;f++){double t=0;gzones[z].each{t+=object(it,f)};gflat[z][f]=gzones[z].length<12?Float.NaN:(float)(Math.rint((100+(gzones[z].length?t/gzones[z].length:0)+grnd.nextGaussian()*0.05)*100)/100)}}
+    int gpeak=(0..<gn).max{graw[it]-gbg[it]}
+    def contextAt={int moveAt->
+        double[][] gshifts=new double[gn][2];if(moveAt>0)gshifts[moveAt-1]=[12d,0d] as double[]
+        [header:['Cell','Role','Status','Peak_s'],byCell:[g:['g','Stimulus','Responded',''+gpeak]],statusAt:2,samples:[],time:(0..<gn).collect{it as double} as double[],frames:gn,traceAt:[:],first:0,last:19,names:['g'],span:2,
+         measured:[raw:[g:graw],background:[g:gbg]],ring:[values:gflat,counts:[(0..<25).collect{gzones[it].length}],area:[gpx.length],near:[8]],shifts:gshifts,unchecked:'',shapes:[cells:[[centre:gsh[0],outline:gsh[1]]]]]}
+    Map still0=[:],row0=Checks.cellRow(contextAt(0),0,'g',still0);Map gcross=still0.event.cross
+    assert row0.Rule=='passes through' && row0.Detail==~/seen outside at the left at frame \d+, .*; also crosses the cell from the left to the right, \d\.\d\d x its width/ && gcross.flag : row0
+    assert [still0.event.first,still0.event.last]==[29,37] && [gcross.first,gcross.last]==[28,39] : [still0.event.first,still0.event.last,gcross.first,gcross.last]
+    Map moved0=[:],rowMoved=Checks.cellRow(contextAt(26),0,'g',moved0)
+    assert rowMoved.Flag==row0.Flag && rowMoved.Rule=='passes through' && rowMoved.QC_flags=='POSSIBLE_PASSING_OBJECT' && moved0.moved==null : rowMoved
+    assert rowMoved.Detail==row0.Detail.substring(0,row0.Detail.indexOf('; also crosses the cell ')) : rowMoved.Detail
+    assert Checks.cellRow(contextAt(25),0,'g').Detail==row0.Detail : 'a movement more than the span before the window: said'
+    assert Checks.cellRow(contextAt(27),0,'g').Rule=='field moved' : 'near the event: field moved, as before'
+}
+alsoGuarded()
 println 'PASS: a field that moved near the window of rule C is named instead of a passing object'
 
 // the outlines do not give the saved zone counts: rule C is not checked on that cell, and says so; rules A and B still are
@@ -609,6 +661,15 @@ assert Passing.check(up,ground,with([(4):(44..47).collectEntries{[it,150f]},(0):
 assert Passing.check(up,ground,with([(4):(44..60).collectEntries{[it,220f]},(0):leaving]),0,19,55,10).rule=='' : 'it must be gone while the cell is up'
 assert Passing.check(up,ground,with([(4):(30..33).collectEntries{[it,220f]},(0):leaving]),0,19,55,10).rule=='' : 'more than the span before the event is not seen'
 assert Passing.check(up,ground,with([(4):entering,(0):leaving]),0,19,55,5).rule=='passes through' && Passing.check(up,ground,with([(4):entering,(0):leaving]),0,19,55,3).rule=='' : 'the span is a number of frames'
+def tieBreak={->
+// two pairs as strong, the weaker side the same: the one whose stronger side is stronger; 2026.11.24.1 took the first in zone
+// order. The flag and its frames are the same either way
+float[][] tied=with([(4):entering,(0):leaving,(1):(63..66).collectEntries{[it,260f]}])
+Map tie=Passing.check(up,ground,tied,0,19,55,10),tieBefore=Passing.check(up,ground,tied,0,19,55,10,null,null,true)
+assert tie.before[0]==4 && tie.after[0]==1 && tie.detail.contains('and at the lower right at frame') : tie.detail
+assert tieBefore.after[0]==0 && tieBefore.detail.contains('and at the right at frame') && [tieBefore.rule,tieBefore.text,tieBefore.first,tieBefore.last]==[tie.rule,tie.text,tie.first,tie.last] : tieBefore.detail
+assert Passing.check(up,ground,with([(4):entering,(0):(63..66).collectEntries{[it,260f]},(1):leaving]),0,19,55,10).after[0]==0 : 'the stronger side wins in either zone order'
+};tieBreak()
 float[][] gone=with([(4):entering,(0):leaving]);gone[4]=null
 assert Passing.check(up,ground,gone,0,19,55,10).rule=='' : 'a sector with too few pixels is not used, and no other sector stands in for it'
 def during=(50..59).collectEntries{[it,200f]}
@@ -703,6 +764,14 @@ assert Passing.crossing(new double[cn],34,new double[cn],crossZones(sides,0d),ce
 double[] blip=new double[cn];blip[34]=1d;assert Passing.crossing(blip,34,new double[cn],crossZones(sides,0d),centres(across),[[-2d,2d],[0d,0d]] as double[][],0,19)==[first:35,last:35,flag:false]
 Map lateOnly=crossOf([(0):(36..40)],across,2d);assert !lateOnly.flag && !lateOnly.containsKey('start') : 'nothing up in the first half: no start'
 assert !crossOf(sides,across+[(4):[11d,-1d,0d]],2d).containsKey('start') && crossOf(sides,across+[(4):[12d,-1d,0d]],2d).start[0]==-1d : 'a zone of fewer than 12 pixels is not used'
+def sameSector={->
+// the start and the end in one sector, an outline crossed near one end: named from the travel, the sector opposite it and the
+// sector it points to, never the right to the right
+Map nearEnd=Passing.crossing(crossTrace,34,new double[cn],crossZones([(0):(29..33),(1):(36..40)],0d),centres([(0):[200d,2d,-0.5d],(1):[300d,2d,0.5d]]),[[0d,0d],[-0.5d,0.5d]] as double[][],0,19)
+assert Rings.sector(nearEnd.start[1],nearEnd.start[0])==0 && Rings.sector(nearEnd.end[1],nearEnd.end[0])==0 && nearEnd.from==6 && nearEnd.to==2 && nearEnd.flag : nearEnd
+Map slanted=Passing.crossing(crossTrace,34,new double[cn],crossZones([(0):(29..33),(1):(36..40)],0d),centres([(0):[200d,2d,0.6d],(1):[300d,2.4d,0.4d]]),[[0d,0d],[-0.5d,0.5d]] as double[][],0,19)
+assert slanted.from==3 && slanted.to==7 : 'travel up and to the right: from the lower left to the upper right, '+slanted
+};sameSector()
 println 'PASS: rule C on plain numbers: its window, start, end and travel, and each of its four tests at its edge'
 
 // ---- the field-movement guard on plain shifts

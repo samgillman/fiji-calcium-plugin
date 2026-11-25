@@ -2965,9 +2965,10 @@ class CalciumAroundPlot extends javax.swing.JPanel {
     double moment=Double.NaN; Closure seek={double t->}
     static final String HINT='Click or drag to move through time'
     static final String WAITING='Run the analysis to see traces'
-    /** The colour of each part a zone of the flag can be; a colour met twice for one cell gives way to a spare one. */
-    static final Map COLOURS=[before:new Color(0xD55E00),after:new Color(0x0072B2),rim:new Color(0xAA3377),ring:new Color(0xD55E00),core:new Color(0x009E73)]
-    static final List SPARE=[new Color(0xCC79A7),new Color(0xE69F00),new Color(0x56B4E9),new Color(0x882255)]
+    /** The colour of each part a zone of the flag can be, as on the Step 4 page: before and rim, after and ring, the core. A part
+     *  met a second time for one cell takes the next spare colour. */
+    static final Map COLOURS=[before:new Color(0x0072B2),rim:new Color(0x0072B2),after:new Color(0xAA3377),ring:new Color(0xAA3377),core:new Color(0x009E73)]
+    static final List SPARE=[new Color(0xE69F00),new Color(0x56B4E9),new Color(0xCC79A7),new Color(0x882255)]
     static final Color OTHER=new Color(0xAEB8C2),WINDOW=new Color(0xFFF0DC),FLAGGED=new Color(0xE2D6F3)
     /** The longest names three zones of a flag can have: the key keeps room for them. */
     static final List WIDEST=['far ring, upper right','far ring, upper right','far ring, upper right']
@@ -2999,22 +3000,24 @@ class CalciumAroundPlot extends javax.swing.JPanel {
     }
     /** Call after changing what is drawn; moving the time cursor needs only repaint(). */
     void changed(){layerKey='';repaint()}
-    /** The time between two frames, as most frames are apart. */
+    /** The time between two frames, as most frames are apart: the median frame step; of an even number of steps the upper of the
+     *  two middle ones, as on the Step 4 page. */
     double step(){double[] x=times();if(x.length<2)return 1d;List d=(1..<x.length).collect{x[it]-x[it-1]}.sort();d[(int)(d.size()/2)] as double}
     /** The lines under the cell, in the order they are drawn, each [colour, width, name, trace]: every other usable near-ring
      *  sector thin and gray, then the zones the flag rests on, each in the colour of its part and named by its place. */
     List lines() {
         if(!drawn())return []
         Map byZone=((data.zones?:[]) as List).collectEntries{[(it.zone as int),it]}
-        List out=[],used=[]
+        List out=[],met=[],spares=[]
         ((data.others?:[]) as List).each{def z->double[] y=byZone[z as int]?.trace as double[];if(y!=null)out<<[OTHER,0.9f,'other ring sectors',y]}
         ((data.lines?:[]) as List).each{Map line->double[] y=byZone[line.zone as int]?.trace as double[];if(y==null)return
-            Color c=COLOURS[line.part] as Color;if(c==null||used.contains(c))c=(SPARE.find{!used.contains(it)}?:CalciumTheme.MUTED) as Color;used<<c
+            Color c=met.contains(line.part)?null:COLOURS[line.part] as Color;met<<line.part
+            if(c==null){c=(SPARE.find{!spares.contains(it)}?:CalciumTheme.MUTED) as Color;spares<<c}
             out<<[c,1.5f,''+(line.place?:CalciumCallChecks.place(line.zone as int)),y]}
         out
     }
     /** The bands, [from, to, colour, name] in seconds: the cell's response window as on Traces, then the frames the flag names,
-     *  from half a frame before the first to half a frame after the last. */
+     *  from the first one's time less half the median frame step to the last one's time plus half of it, as on the page. */
     List bands() {
         double[] x=times();List out=[];if(x.length<2)return out
         if(Double.isFinite(stimulusStart)&&Double.isFinite(stimulusEnd)&&Math.max(stimulusStart,x[0])<Math.min(stimulusEnd,x[-1]))out<<[stimulusStart,stimulusEnd,WINDOW,'response window']
@@ -3501,6 +3504,16 @@ class CalciumResponseProtocol {
     }
     static Map canonical(Object input,boolean page=false) {Map value=parse(input,page);rewritten(value,value.name.toString())}
     static String json(Map payload) {groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(payload))}
+}
+
+/** A cell of a results table: when its column cuts its text, the whole text is its tooltip. */
+class CalciumCutCell extends javax.swing.table.DefaultTableCellRenderer {
+    java.awt.Component getTableCellRendererComponent(javax.swing.JTable table,Object value,boolean selected,boolean focus,int row,int column) {
+        def shown=super.getTableCellRendererComponent(table,value,selected,focus,row,column)
+        String text=value==null?'':''+value;java.awt.Insets room=getInsets()
+        setToolTipText(text&&getFontMetrics(getFont()).stringWidth(text)>table.getCellRect(row,column,false).width-room.left-room.right?text:null)
+        shown
+    }
 }
 
 /** Step 4 binds displayed results to their completed protocol snapshot. */
@@ -4014,7 +4027,8 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         showTable(target,new javax.swing.table.DefaultTableModel(rows.drop(1).collect{it as Object[]} as Object[][],rows[0] as Object[]){boolean isCellEditable(int r,int c){false}})
         rows.drop(1).collect{row->rows[0].withIndex().collectEntries{name,i->[name,row[i]]}}
     }
-    void showTable(javax.swing.JTable target,javax.swing.table.TableModel model){target.model=model;for(int i=0;i<target.columnCount;i++)target.columnModel.getColumn(i).preferredWidth=160}
+    void showTable(javax.swing.JTable target,javax.swing.table.TableModel model){target.model=model;for(int i=0;i<target.columnCount;i++)target.columnModel.getColumn(i).preferredWidth=160
+        if(!(target.getDefaultRenderer(Object) instanceof CalciumCutCell))target.setDefaultRenderer(Object,new CalciumCutCell())}
     /** The Cell response calls and Responder counts tabs, as saved; while review marks apply, with columns on their right as on
      *  the Step 4 page: the reviewed call and the review reason (with its note) on the primary row of each cell whose call a
      *  mark changed, and % responding after review with the calls changed on the stimulus row. On screen only: no table is
@@ -4147,6 +4161,9 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         kept=null;selectWindow();folderButton.enabled=true;savePlots.enabled=true
         int peak=1;double top=Double.NEGATIVE_INFINITY;plot.mean.eachWithIndex{double v,int i->if(Double.isFinite(v)&&v>top){top=v;peak=i+1}}
         showFrame(peak)
+        // an analysis whose review file holds an automatic mark was run with the option on: the box says so, before the settings
+        // it was run with are taken from the window
+        if(((reviewMarks?:[:]) as Map).values().any{(it as Map).by=='automatic'})automaticBox.selected=true
         if(!appliedFingerprint)appliedFingerprint=fingerprint();changed()
         readAround(dir)
     }
@@ -4234,7 +4251,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         showAround(name)
     }
     /** Under the selected cell's call line: the flags of its checks, each in the checks' own words, and its mark controls. A flag
-     *  with the first frame of its event is a link to that frame. A control window keeps its automatic call: it has neither.
+     *  is a link to the first frame it names (fillFlags). A control window keeps its automatic call: it has neither.
      *  The Around the cell tab has the same flags under its call line. */
     void showReview(String name) {
         Map row=name==null?null:callRows[name];boolean primary=row!=null&&row.Role!='Control'
@@ -4252,20 +4269,22 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         markButton.visible=can.can&&!can.marked&&formCell==null;removeMark.visible=can.marked;enterPressed=false;enterTaken=false
         showMarkRow()
     }
-    /** A row of the selected cell's flags, each in the checks' own words; a flag with the first frame of its event is a link to
-     *  that frame. Then, for an evaluable cell that could not be checked in a recording whose surroundings were measured, why
-     *  (else checks.note says it once). Shown while it holds something. */
+    /** A row of the selected cell's flags, each in the checks' own words; a flag is a link to the first frame its text names
+     *  (its frames), else to the first frame of the event. Then, for an evaluable cell that could not be checked in a recording
+     *  whose surroundings were measured, why (else checks.note says it once). Shown while it holds something. */
     void fillFlags(javax.swing.JPanel into,Map cell,boolean evaluable) {
-        def owner=this;into.removeAll()
+        def owner=this;into.removeAll();boolean around=into.is(aroundFlags)
         ((cell?.flags?:[]) as List).each{Map flag->
             if(into.componentCount>0)into.add(CalciumTheme.label('·',CalciumTheme.MUTED))
-            def label=CalciumTheme.label(flag.text as String,cell.firstFrame!=null?CalciumTheme.BLUE:CalciumTheme.MUTED)
+            List named=flag.frames instanceof List&&(flag.frames as List).size()==2&&(flag.frames as List)[0] instanceof Number?flag.frames as List:null
+            Object at=named!=null?named[0]:cell.firstFrame
+            def label=CalciumTheme.label(flag.text as String,at!=null?CalciumTheme.BLUE:CalciumTheme.MUTED)
             String detail=cell.detail?:''
-            if(cell.firstFrame!=null) {
-                int first=cell.firstFrame as int
+            if(at!=null) {
+                int first=at as int
                 label.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR))
                 label.setToolTipText('<html>Go to frame '+first+(detail?'<br>'+CalciumOutlineProgress.escape(detail):'')+'</html>')
-                label.addMouseListener(new java.awt.event.MouseAdapter(){void mouseClicked(java.awt.event.MouseEvent e){if(javax.swing.SwingUtilities.isLeftMouseButton(e))owner.goToFrame(first)}})
+                label.addMouseListener(new java.awt.event.MouseAdapter(){void mouseClicked(java.awt.event.MouseEvent e){if(javax.swing.SwingUtilities.isLeftMouseButton(e))owner.goToFrame(first,around)}})
             } else if(detail)label.setToolTipText(detail)
             into.add(label)
         }
@@ -4287,8 +4306,9 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         boolean can=!busy&&results!=null&&auto in CalciumReview.CALLS&&!reviewProblem
         [can:can,marked:can&&(reviewMarks?.get(name) as Map)?.automatic==auto]
     }
-    /** A flag's link: the Traces tab, the recording rather than the still colour picture, at the first frame of the event. */
-    void goToFrame(int first){tabs.selectedIndex=1;if(movie!=null&&view.selectedIndex==0)view.selectedIndex=2;stopPlaying();showFrame(first)}
+    /** A flag's link: the Traces tab, the recording rather than the still colour picture, at the frame. A flag on the Around the
+     *  cell tab (around) stays on that tab and moves its time cursor there. */
+    void goToFrame(int first,boolean around=false){if(!around){tabs.selectedIndex=1;if(movie!=null&&view.selectedIndex==0)view.selectedIndex=2};stopPlaying();showFrame(first)}
     /** A refusal under the mark controls, as CalciumReview words it; null takes it away. */
     void say(String text,String cell){problemCell=text==null?null:cell;problemSaid=text;markProblem.say(text==null?'&nbsp;':CalciumOutlineProgress.escape(text));markProblem.visible=text!=null;reviewBox.revalidate();reviewBox.repaint()}
     /** The form that sets a mark, in place of the button: the reason (chosen already for a responder with a flag), an optional
@@ -5106,12 +5126,15 @@ class CalciumPassingObject {
      *  @param span frames searched before and after the event
      *  @param centre, outline where the zones and the outline's pixels lie, as shape gives them; null when they are not known,
      *         and then the rule "crosses the cell" is not checked
+     *  @param asBefore true to choose the two sectors of "passes through" as 2026.11.24.1 did: on equal strength the first pair in
+     *         zone order (CalciumCallChecks.aroundCell, for a table of that version)
      *  @return null when the cell does not rise at the peak; else first and last (the event's frames, counted from 1), rule
      *          ('passes through', 'on the edge', 'crosses the cell' or ''), text, detail; traces (what traces gave); where a
      *          passage was seen, before and after ([zone, frame counted from 1] of the sector seen before and after the event);
      *          where the rise is on an edge, edge ([rim sector 0 to 7, the stretch's first frame, its last frame, counted from
-     *          1]); and cross (what crossing gave; null when it was not checked) */
-    static Map<String, Object> check(double[] raw, double[] background, float[][] zone, int firstF0, int lastF0, int peak, int span, double[][] centre = null, double[][] outline = null) {
+     *          1]); cross (what crossing gave; null when it was not checked); and also, when rule A or B flags the cell and the
+     *          rise crosses it too, the words added for that at the end of detail ("also crosses the cell from ...") */
+    static Map<String, Object> check(double[] raw, double[] background, float[][] zone, int firstF0, int lastF0, int peak, int span, double[][] centre = null, double[][] outline = null, boolean asBefore = false) {
         Map<String, Object> t = traces(raw, background, zone, firstF0, lastF0, peak)
         if (t == null) return null
         int n = raw.length, a = (int) t.get('a'), b = (int) t.get('b')
@@ -5136,14 +5159,16 @@ class CalciumPassingObject {
                 (side == 0 ? before : after).add([z, v, top[1]] as double[])
             }
         }
+        // the pair whose weaker side is strongest; on equal strength the one whose stronger side is stronger (asBefore: the
+        // first in zone order, as 2026.11.24.1 chose)
         double[] entering = null, leaving = null
-        double strength = 0d
+        double strength = 0d, other = 0d
         for (double[] x : before) for (double[] y : after) {
             int apart = Math.abs(((int) x[0]) % 8 - ((int) y[0]) % 8)
             apart = Math.min(apart, 8 - apart)
             if (apart < APART) continue
-            double s = Math.min(x[1], y[1]) / rise
-            if (entering == null || s > strength) { entering = x; leaving = y; strength = s }
+            double s = Math.min(x[1], y[1]) / rise, o = Math.max(x[1], y[1]) / rise
+            if (entering == null || s > strength || (!asBefore && s == strength && o > other)) { entering = x; leaving = y; strength = s; other = o }
         }
         if (entering != null) {
             out.put('before', [(int) entering[0], ((int) entering[2]) + 1] as List<Integer>); out.put('after', [(int) leaving[0], ((int) leaving[2]) + 1] as List<Integer>)
@@ -5184,7 +5209,7 @@ class CalciumPassingObject {
                 out.put('rule', 'crosses the cell')
                 out.put('text', 'possible passing object, ' + frames((int) cross.get('first'), (int) cross.get('last')))
                 out.put('detail', 'the rise crossed the cell ' + seen)
-            } else out.put('detail', ((String) out.get('detail')) + '; also crosses the cell ' + seen)
+            } else { String also = 'also crosses the cell ' + seen; out.put('also', also); out.put('detail', ((String) out.get('detail')) + '; ' + also) }
         }
         return out
     }
@@ -5225,7 +5250,8 @@ class CalciumPassingObject {
      *         the values table  @param centre, outline as shape gives them  @param firstF0, lastF0 the F0 frames, counted from 0
      *  @return null when the cell does not rise at the peak; else first and last (the window, counted from 1) and flag; once
      *          the start and end are found also start and end ([x, y], pixels from the outline's centre, y down), from and to
-     *          (their sectors 0 to 7: right, lower right ...), travel (pixels); and with a travel, width (pixels across the
+     *          (their sectors 0 to 7: right, lower right ...; when both are in one sector and there is a travel, the sector
+     *          opposite the travel and the sector of the travel), travel (pixels); and with a travel, width (pixels across the
      *          outline along the travel), ratio (travel / width), steadiness (NaN when it cannot be worked out), noise (pixels),
      *          overNoise (travel / noise), along (where the start and the end lie along the travel, in half widths from the
      *          outline's centre: [start, end]) */
@@ -5266,6 +5292,9 @@ class CalciumPassingObject {
         out.put('from', CalciumRingAndCore.sector(start[1], start[0])); out.put('to', CalciumRingAndCore.sector(end[1], end[0]))
         if (!(travel > 0d) || Double.isInfinite(travel)) return out
         double ux = (end[0] - start[0]) / travel, uy = (end[1] - start[1]) / travel
+        // the start and the end in one sector (an outline crossed near one end): the sides are named from the travel instead,
+        // the sector opposite it and the sector it points to
+        if (out.get('from') == out.get('to')) { out.put('from', CalciumRingAndCore.sector(-uy, -ux)); out.put('to', CalciumRingAndCore.sector(uy, ux)) }
         double lo = Double.POSITIVE_INFINITY, hi = Double.NEGATIVE_INFINITY
         for (int i = 0; i < outline[0].length; i++) { double p = outline[0][i] * ux + outline[1][i] * uy; if (p < lo) lo = p; if (p > hi) hi = p }
         double width = hi - lo
@@ -5565,8 +5594,10 @@ class CalciumCallChecks {
     static double number(List header,List row,String name){int i=header.indexOf(name);i<0||row==null?Double.NaN:CalciumCsv.number(''+row[i])}
     /** What the checks of an analysis are made from, read once for all its cells: its calls, times and F0 frames, the raw and
      *  background tables, and what was measured around the cells. Throws CalciumUnchecked with the reason in plain words.
-     *  @param measure false to read the files beside the tables only, never measure (around), as what is shown around a cell does */
-    static Map context(File dir,Map measurement,File log=null,boolean measure=true) {
+     *  @param measure false to read the files beside the tables only, never measure (around), as what is shown around a cell does
+     *  @param before true to make the checks as 2026.11.24.1 made them, for an analysis whose saved table is one of its
+     *         (HEADER_BEFORE): without the rule "crosses the cell", and the sectors of "passes through" chosen as it chose them */
+    static Map context(File dir,Map measurement,File log=null,boolean measure=true,boolean before=false) {
         def calls=CalciumCsv.read(new File(dir,'responder_calls.csv'));List h=calls[0]
         int cellAt=h.indexOf('Cell'),roleAt=h.indexOf('Role'),statusAt=h.indexOf('Status')
         if(cellAt<0||statusAt<0)throw new CalciumUnchecked('the calls table has no Cell or Status column')
@@ -5587,8 +5618,8 @@ class CalciumCallChecks {
         Map ring=measured.why ? [why:measured.why] : around(measurement,frames,log,measure)
         double[][] shifts=ring.values!=null?movement(new File(measurement.folder as File,measurement.recording+'_').path,frames):null
         String unchecked=ring.values!=null?'':(''+(ring.why?:'ring and core were not measured'))   // why no cell is checked for a passing object
-        Map shapes=ring.values!=null?shapes(measurement,names,ring):null   // where the zones lie, for the rule "crosses the cell"
-        [header:h,byCell:byCell,statusAt:statusAt,samples:samples,time:time,frames:frames,traceAt:traceAt,first:first,last:last,names:names,span:span,measured:measured,ring:ring,shifts:shifts,unchecked:unchecked,shapes:shapes]
+        Map shapes=ring.values!=null&&!before?shapes(measurement,names,ring):null   // where the zones lie, for the rule "crosses the cell"
+        [header:h,byCell:byCell,statusAt:statusAt,samples:samples,time:time,frames:frames,traceAt:traceAt,first:first,last:last,names:names,span:span,measured:measured,ring:ring,shifts:shifts,unchecked:unchecked,shapes:shapes,before:before]
     }
     /** The row of one cell of the table, from what context read. @param c the cell's place in context.names
      *  @param keep when given, what the row was made from is put in it: event (CalciumPassingObject.check, with its traces),
@@ -5617,7 +5648,7 @@ class CalciumCallChecks {
                 int outside=0
                 if(ring.values!=null){zone=new float[CalciumRingAndCore.ZONES][];for(int z=0;z<CalciumRingAndCore.ZONES;z++)if((ring.counts[c][z] as int)>=CalciumRingAndCore.MIN_PIXELS){zone[z]=(ring.values as float[][])[c*CalciumRingAndCore.ZONES+z];if(z<16)outside++}}
                 Map shape=context.shapes==null?null:(context.shapes as Map).why?context.shapes as Map:((context.shapes as Map).cells as List)[c] as Map
-                event=CalciumPassingObject.check(raw,background,zone,first,last,peak,span,shape?.centre as double[][],shape?.outline as double[][])
+                event=CalciumPassingObject.check(raw,background,zone,first,last,peak,span,shape?.centre as double[][],shape?.outline as double[][],context.before==true)
                 if(event!=null){row.Event_first_frame=event.first;row.Event_last_frame=event.last}
                 if(zone==null)why=unchecked
                 else if(event==null)why='no rise at the peak'
@@ -5629,7 +5660,12 @@ class CalciumCallChecks {
                         // the field moved near the frames the flag names: the event, or the window of the rule "crosses the cell"
                         Map frameOf=event.rule=='crosses the cell'?event.cross as Map:event
                         moved=shifts==null?null:CalciumMotion.movedNear(shifts,first+1,last+1,(frameOf.first as int)-span,(frameOf.last as int)+span)
-                        String detail=event.detail+(crossNote?'; '+crossNote:'')
+                        // rule A or B flags the cell and the rise crosses it too: that is said only when the field did not move
+                        // near the window of the rule "crosses the cell", as for that rule alone
+                        String own=event.detail as String,also=event.also as String
+                        Map cross=event.cross as Map
+                        if(also&&shifts!=null&&CalciumMotion.movedNear(shifts,first+1,last+1,(cross.first as int)-span,(cross.last as int)+span)!=null&&own.endsWith('; '+also))own=own.substring(0,own.length()-also.length()-2)
+                        String detail=own+(crossNote?'; '+crossNote:'')
                         if(moved!=null)flags<<['field moved, '+CalciumPassingObject.frames(moved.first as int,moved.last as int),'field moved',movedText(moved)+'; otherwise '+event.text+': '+detail]
                         else flags<<[event.text,event.rule,detail]
                         crossNote=''
@@ -5659,10 +5695,11 @@ class CalciumCallChecks {
      *  "rim, lower right", "core". */
     static String place(int zone){zone==CalciumRingAndCore.CORE?'core':(zone<8?'ring, ':zone<16?'far ring, ':'rim, ')+CalciumRingAndCore.SIDES[zone<16?zone%8:zone-CalciumRingAndCore.CORE-1]}
     /** What is shown around the cells of an analysis is read from: what context reads for the checks, from the files beside the
-     *  tables only (nothing is measured). Read once per analysis; aroundCell takes one cell from it.
+     *  tables only (nothing is measured). Read once per analysis; aroundCell takes one cell from it. For an analysis whose saved
+     *  table is one of 2026.11.24.1 the checks are made again as that version made them (context), so they give its rows.
      *  @return the context, or why: the sentence that says why nothing can be shown for any cell */
     static Map aroundContext(File dir,Map measurement) {
-        try{return context(dir,measurement,null,false)}
+        try{return context(dir,measurement,null,false,savedBefore(dir,measurement))}
         catch(CalciumUnchecked plain){return [why:'The calls were not checked: '+plain.message+'.']}
         catch(Throwable problem){return [why:'The calls were not checked: the saved analysis could not be read.']}
     }
@@ -5736,14 +5773,17 @@ class CalciumCallChecks {
     }
     /** The note for the whole analysis: '' when every evaluable cell could be checked as written. */
     static String note(boolean ring,boolean movement,String unchecked){!ring?'Not checked for a passing object'+(unchecked?': '+unchecked:'')+'.':movement?'':'The movement of the field was not saved, so a moving field is not told from an object.'}
+    /** The frames a flag's text names, [first, last] counted from 1: "frames 75 to 120", "frame 7"; null when it names none. */
+    static List framesOf(String text){def m=(text?:'')=~/\bframes? (\d+)(?: to (\d+))?$/;m.find() ? [m.group(1) as int,(m.group(2)?:m.group(1)) as int] : null}
     /** The checks as the Step 4 page is given them: for every cell the flag's text, its rule and the first frame of the event.
-     *  A cell with two flags has both in text and in rule, joined with "; ", and one by one in flags, each with its code.
+     *  A cell with two flags has both in text and in rule, joined with "; ", and one by one in flags, each with its code and
+     *  frames, the frames its text names (framesOf), which its link goes to; null for a flag that names none.
      *  codes: the cell's codes in the flags' order, qcFlags: them as the table's QC_flags column holds them. labels: each code
      *  as a table on screen names it, join: how codes are joined in a QC_flags column. */
     static Map answer(Map found) {
         if(found==null)return null
         def whole={v->String s=v==null?'':''+v;s==~/-?\d+/?(s as int):null}
-        def each={Map row->String text=''+(row.Flag?:''),rule=''+(row.Rule?:'');text.isEmpty() ? [] : [text.split('; ') as List,rule.split('; ') as List].transpose().collect{[text:it[0],rule:it[1],code:CODES[it[1]]?:'']}}
+        def each={Map row->String text=''+(row.Flag?:''),rule=''+(row.Rule?:'');text.isEmpty() ? [] : [text.split('; ') as List,rule.split('; ') as List].transpose().collect{[text:it[0],rule:it[1],code:CODES[it[1]]?:'',frames:framesOf(it[0] as String)]}}
         // a table of 2026.11.24.1 has no QC_flags: the codes come from its Rule column
         def codes={Map row->String given=row.containsKey('QC_flags')&&row.QC_flags!=null?''+row.QC_flags:codesOf(row.Rule);given.isEmpty() ? [] : (given.split(java.util.regex.Pattern.quote(JOIN)) as List)}
         [file:found.file,ringMeasured:found.ringMeasured==true,note:found.note?:'',labels:LABELS,join:JOIN,cells:((found.rows?:[]) as List).collectEntries{Map row->List mine=codes(row)
@@ -5751,6 +5791,8 @@ class CalciumCallChecks {
                 checked:row.Passing_object_check=='checked',why:''+(row.Not_checked_because?:''),ringMeasured:row.Ring_measured=='yes',movementMeasured:row.Field_movement_measured=='yes',
                 nearSectors:whole(row.Near_ring_sectors_usable),area:whole(row.Area_pixels),crossings:whole(row.Crossings),longestCrossing:whole(row.Longest_crossing_samples)]]}]
     }
+    /** Whether the table saved for an analysis is one written by 2026.11.24.1 (HEADER_BEFORE). */
+    static boolean savedBefore(File dir,Map measurement){try{File source=file(measurement,dir);return source!=null&&source.isFile()&&CalciumCsv.read(source)[0]==HEADER_BEFORE}catch(Throwable ignored){return false}}
     /** The checks saved for an analysis, with the note rebuilt from the table; null when there are none. A table written by
      *  2026.11.24.1 (HEADER_BEFORE) reads too: its rows get the codes of their Rule column. */
     static Map saved(File dir,Map measurement) {
@@ -5777,9 +5819,11 @@ class CalciumCallChecks {
  *  When a new analysis of the same recording finishes, the marks of the most recent earlier analysis made by this version are
  *  carried over for the cells whose automatic call and outline are unchanged (carry); the others are dropped and listed. */
 class CalciumReview {
-    /** The columns of a review file written by 2026.11.24.1. It still reads: every mark in it is manual. */
+    /** The columns of a review file written by 2026.11.24.1, and of one this version writes while every mark is manual. It
+     *  reads: every mark in it is manual. */
     static final List HEADER_BEFORE=['Cell','Automatic_call','Reviewed_call','Reason','Note','Time','Analysis','Responder_calls_sha256','ROI_sha256','Carried_from']
-    /** Marked_by is last: manual, or automatic for a mark made at the end of an analysis (automatic). */
+    /** Marked_by is last: manual, or automatic for a mark made at the end of an analysis (automatic). Written only while at
+     *  least one mark is automatic. */
     static final List HEADER=HEADER_BEFORE+['Marked_by']
     static final List BY=['manual','automatic']
     /** The rules whose flag on a responder gets an automatic mark: a possible passing object (passes through, crosses the
@@ -5845,9 +5889,8 @@ class CalciumReview {
         null
     }
     /** The marks saved for an analysis. A byte order mark at the start and blank lines at the end are left out; an empty file
-     *  holds no marks. A file without Marked_by (HEADER_BEFORE) reads as manual marks, and gets the column when it is next
-     *  written; in a file with it, every row says manual or automatic. An automatic mark is always Responded to Did not respond
-     *  for Passing object.
+     *  holds no marks. A file without Marked_by (HEADER_BEFORE) reads as manual marks; in a file with it, every row says manual
+     *  or automatic. An automatic mark is always Responded to Did not respond for Passing object.
      *  @return file (its name, or null when there is none), marks (cell to automatic, reviewed, reason, note, time, roi,
      *  carriedFrom, by) and problem: '' or why the file is not applied, in which case marks is empty */
     static Map read(File dir,Map measurement) {
@@ -5893,7 +5936,9 @@ class CalciumReview {
         try {
             if(!marks.isEmpty()) {
                 String hash=digest(dir);Map roi=outlines(dir);List cells=scored(dir).keySet() as List
-                CalciumCsv.write(reviewPart,[HEADER]+(marks.keySet() as List).sort{cells.indexOf(it)}.collect{String cell->Map m=marks[cell] as Map;[cell,m.automatic,m.reviewed,m.reason,m.note?:'',m.time,dir.name,hash,roi[cell]?:'',m.carriedFrom?:'',m.by?:'manual']})
+                // Marked_by only while a mark is automatic: a file of manual marks is the one 2026.11.24.1 writes, and reads
+                boolean by=marks.values().any{(it as Map).by=='automatic'}
+                CalciumCsv.write(reviewPart,[by?HEADER:HEADER_BEFORE]+(marks.keySet() as List).sort{cells.indexOf(it)}.collect{String cell->Map m=marks[cell] as Map;[cell,m.automatic,m.reviewed,m.reason,m.note?:'',m.time,dir.name,hash,roi[cell]?:'',m.carriedFrom?:'']+(by ? [m.by?:'manual'] : [])})
             }
             if(tally!=null)CalciumCsv.write(percentPart,CalciumAnalysisSettings.percentTable(tally))
         }catch(Throwable problem){reviewPart.delete();percentPart.delete();throw new IOException('The review could not be saved in '+target.parentFile.name+'.')}
@@ -5935,11 +5980,16 @@ class CalciumReview {
             if(rule)out[''+row.Cell]=(CalciumCallChecks.LABELS[CalciumCallChecks.CODES[rule]] as String).toLowerCase()}
         out
     }
+    /** A reason or a kind of flag as the Methods sentence counts it: "1 passing object", "2 passing objects"; noise stays as it is. */
+    static final Map PLURALS=['movement':'movements','passing object':'passing objects','bad outline':'bad outlines','other':'others','possible passing object':'possible passing objects','rise on the edge':'rises on the edge']
+    static String counted(int n,String what){n+' '+(n>1?(PLURALS[what]?:what):what)}
     /** From the marks that changed a call of all cells; '' when none did. Manual marks only:
      *  "3 of 143 cells were reclassified after manual review: 2 from responder to non-responder (1 noise, 1 passing object) and
      *  1 from non-responder to responder (other)." Automatic marks only: "2 of 143 cells were reclassified automatically from
      *  responder to non-responder (1 possible passing object, 1 rise on the edge)." Both: "5 of 143 cells were reclassified:
-     *  2 automatically from responder to non-responder (2 possible passing object) and 3 after manual review: ..."
+     *  2 automatically from responder to non-responder (2 possible passing objects); 3 after manual review, 2 from responder to
+     *  non-responder (1 noise, 1 passing object) and 1 from non-responder to responder (other)." A count above 1 takes the
+     *  plural (counted).
      *  @param kinds the flag of each automatically marked cell (kinds); without it they are counted as passing object */
     static String methods(Map tally,Map review,Map kinds=null) {
         List changed=(tally?.changed?:[]) as List;if(changed.isEmpty())return ''
@@ -5947,7 +5997,7 @@ class CalciumReview {
         List machine=changed.findAll{((review.marks as Map)[it] as Map)?.by=='automatic'},marks=(changed-machine).collect{(review.marks as Map)[it] as Map}
         def part={List group,String from,String to->
             Map count=group.countBy{it.reason};List reasons=(count.keySet() as List).sort{a,b->(count[b] as int)<=>(count[a] as int)?:REASONS.indexOf(a)<=>REASONS.indexOf(b)}
-            group.size()+' from '+from+' to '+to+' ('+(reasons.size()==1?(reasons[0] as String).toLowerCase():reasons.collect{count[it]+' '+(it as String).toLowerCase()}.join(', '))+')'}
+            group.size()+' from '+from+' to '+to+' ('+(reasons.size()==1?(reasons[0] as String).toLowerCase():reasons.collect{counted(count[it] as int,(it as String).toLowerCase())}.join(', '))+')'}
         List down=marks.findAll{it.automatic=='Responded'},up=marks.findAll{it.automatic!='Responded'},parts=[]
         if(down)parts<<part(down,'responder','non-responder');if(up)parts<<part(up,'non-responder','responder')
         String start=changed.size()+' of '+total+' cells '+(changed.size()==1?'was':'were')+' reclassified'
@@ -5955,15 +6005,16 @@ class CalciumReview {
         List order=AUTOMATIC_RULES.collect{(CalciumCallChecks.LABELS[CalciumCallChecks.CODES[it]] as String).toLowerCase()}
         Map count=machine.countBy{kinds?.get(it)?:AUTOMATIC_REASON.toLowerCase()}
         List named=(count.keySet() as List).sort{a,b->(count[b] as int)<=>(count[a] as int)?:order.indexOf(a)<=>order.indexOf(b)}
-        String which=' from responder to non-responder ('+named.collect{count[it]+' '+it}.join(', ')+')'
+        String which=' from responder to non-responder ('+named.collect{counted(count[it] as int,it as String)}.join(', ')+')'
         if(marks.isEmpty())return start+' automatically'+which+'.'
-        start+': '+machine.size()+' automatically'+which+' and '+marks.size()+' after manual review: '+parts.join(' and ')+'.'
+        start+': '+machine.size()+' automatically'+which+'; '+marks.size()+' after manual review, '+parts.join(' and ')+'.'
     }
     /** At the end of an analysis with the option on (CalciumAnalysisSettings.automaticMarks), after the checks and the carry-over
      *  of marks: every cell of the primary stimulus whose automatic call is Responded, flagged as a possible passing object or
      *  as a rise on the edge (AUTOMATIC_RULES; not a field that moved, not short separate crossings) and without a mark gets
      *  one: Did not respond, reason Passing object, no note, marked automatic. Saved like any mark (write), with its percent
-     *  table or not at all. None while the review file does not match its analysis.
+     *  table or not at all. None while the review file does not match its analysis, and none when the checks were made but
+     *  their table could not be saved: a mark rests on the saved checks.
      *  @param checked what CalciumCallChecks.run gave  @param on whether the option is on
      *  @param said the carry-over's sentence of this run (carry), which the finish message gives after this one: when it
      *         already ends with what to do about a file that cannot be written, that is not said twice
@@ -5972,6 +6023,7 @@ class CalciumReview {
     static Map automatic(File dir,Map measurement,Map checked,boolean on,File log=null,String said=null) {
         if(!on)return null
         String none='No automatic mark was made'
+        if(checked?.rows&&!checked.file)return [folder:dir.name,cells:[],names:[],text:none+': the checks could not be saved.']
         try {
             Map saved=read(dir,measurement)
             if(saved.problem)return [folder:dir.name,cells:[],names:[],text:none+'. '+blocked(saved.problem as String)]

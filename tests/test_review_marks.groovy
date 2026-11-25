@@ -104,7 +104,8 @@ assert reread.review==third[1].review && reread.tally==tally && reread.calls==fi
 assert page.call('api/state')[1].version==third[1].version
 // the review file: one row per mark in the cells' order, with the analysis, the hash of its calls and the outline
 def saved=Csv.read(new File(folder,reviewName(A)))
-assert saved[0]==['Cell','Automatic_call','Reviewed_call','Reason','Note','Time','Analysis','Responder_calls_sha256','ROI_sha256','Carried_from','Marked_by'] && saved.drop(1).every{it[9]==''&&it[10]=='manual'}
+// manual marks only: the columns of 2026.11.24.1, no Marked_by, so that version reads the file as it reads its own
+assert saved[0]==['Cell','Automatic_call','Reviewed_call','Reason','Note','Time','Analysis','Responder_calls_sha256','ROI_sha256','Carried_from'] && saved[0]==Review.HEADER_BEFORE && saved.drop(1).every{it.size()==10&&it[9]==''}
 assert saved.drop(1).collect{it[0..4]+it[6..8]}==[[id(2),'Responded','Did not respond','Noise',''],[id(4),'Did not respond','Responded','Other','slow ramp, seen "by eye"'],[id(5),'Responded','Did not respond','Passing object','']].collect{it+[A,Installer.digest(new File(dirA,'responder_calls.csv').bytes),'roi-of-'+it[0]]}
 assert new File(folder,reviewName(A)).text.contains('"slow ramp, seen ""by eye"""') : 'a note with a comma and quotes is quoted'
 assert snapshot(dirA)==folderA : 'the analysis folder, responder_calls.csv with it, is not written to'
@@ -290,9 +291,9 @@ page.session.busy=false
 println 'PASS: cancel stops the engine only; the checks after it are not cancelled halfway'
 page.server.stop()
 
-// ---- with the option off and no ring files every saved file is the one main writes, apart from the two new last columns:
-// QC_flags in the call checks tables and Marked_by in the review files. tests/fixtures/option-off-main holds what main
-// (2026.11.24.1 with pull request 35) saved for these same steps, the time of each mark blanked, and its messages.
+// ---- with the option off and no ring files every saved file is the one main writes, apart from the new last column
+// QC_flags in the call checks tables; the review files are main's byte for byte. tests/fixtures/option-off-main holds what
+// main (2026.11.24.1 with pull request 35) saved for these same steps, the time of each mark blanked, and its messages.
 folder=new File(root,'off');folder.mkdirs()
 page=open(measurement(names))
 List offSaid=[page.run(analysis('SimpleCa-20261101-100000-aaaaaaaa',cells)).state.message]
@@ -303,19 +304,22 @@ def offCarried=page.run(analysis('SimpleCa-20261101-110000-bbbbbbbb',cells))
 offSaid<<offCarried.state.message<<offCarried.results.review.methods
 page.server.stop()
 File fromMain=new File('tests/fixtures/option-off-main')
-def blankTime={String text->text.replaceAll(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[-+]\d\d:\d\d/,'TIME')}
+def blankTime={String text->text.replaceAll(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(Z|[-+]\d\d:\d\d)/,'TIME')}
+assert blankTime('a,2026-11-25T17:02:00Z,b')=='a,TIME,b' && blankTime('a,2026-11-25T11:02:00-06:00,b')=='a,TIME,b' : 'a time in UTC is blanked too'
 List savedOff=(folder.listFiles().findAll{it.isFile()}*.name).sort()
 assert savedOff==(fromMain.list() as List).findAll{!(it in ['README.md','messages.txt'])}.sort() : savedOff
 savedOff.each{String name->
     String main=new File(fromMain,name).getText('UTF-8')
     def added={String header,String field->main.readLines().withIndex().collect{String line,int i->line+(i==0?header:field)}.join('\n')+'\n'}
-    String wanted=name.contains('_call_checks_')?added(',QC_flags',','):name.contains('_reviewed_calls_')?added(',Marked_by',',manual'):main
+    String wanted=name.contains('_call_checks_')?added(',QC_flags',','):main
     assert blankTime(new File(folder,name).getText('UTF-8'))==wanted : name
+    if(name.contains('_reviewed_calls_'))assert new File(folder,name).text.readLines()[0]==Review.HEADER_BEFORE.join(',') && new File(folder,name).text.readLines().size()==3 : 'the review file is main\'s: '+name
 }
 assert offSaid.join('\n')+'\n'==new File(fromMain,'messages.txt').getText('UTF-8') : offSaid
-println 'PASS: with the option off and no ring files every saved file and message is what main gives, apart from QC_flags and Marked_by'
+println 'PASS: with the option off and no ring files every saved file and message is what main gives, apart from QC_flags; the review files are main\'s byte for byte'
 
-// ---- marks of 2026.11.24.1: a review file without Marked_by reads as manual marks and gets the column when next written
+// ---- marks of 2026.11.24.1: a review file without Marked_by reads as manual marks, and stays without the column while every
+// mark is manual
 def Checks=loader.loadClass('CalciumCallChecks')
 folder=new File(root,'auto');folder.mkdirs()
 Map autoCells=[1:['Responded',0.20,true],2:['Responded',0.50,true],3:['Responded',0.20,true],4:['Responded',0.40,false],5:['Responded',0.10,false],6:['Excluded','',true],7:['Unscorable','',false],8:['Did not respond',0.25,false]]
@@ -326,25 +330,33 @@ new File(folder,reviewName(O)).text=Review.HEADER_BEFORE.join(',')+'\n'+id(1)+',
 Map oldMarks=Review.read(dirO,autoMeasurement)
 assert oldMarks.problem=='' && oldMarks.marks[id(1)].by=='manual' && Review.state(dirO,autoMeasurement,oldMarks,Settings.tally(dirO,autoMeasurement,null,oldMarks)).marks[id(1)].markedBy=='manual'
 Review.change(dirO,autoMeasurement,[cell:id(3),call:'Did not respond',reason:'Movement'])
-assert Csv.read(new File(folder,reviewName(O))).collect{it[-1]}==['Marked_by','manual','manual'] && Csv.read(new File(folder,reviewName(O)))[0]==Review.HEADER : 'written again with the column'
+List rewritten=Csv.read(new File(folder,reviewName(O)))
+assert rewritten[0]==Review.HEADER_BEFORE && rewritten.size()==3 && rewritten.drop(1).every{it.size()==10} && rewritten[1][0]==id(1) && rewritten[2][0..3]==[id(3),'Responded','Did not respond','Movement'] : 'written again without the column'
+assert new File(folder,reviewName(O)).text.startsWith(Review.HEADER_BEFORE.join(',')+'\n'+id(1)+',Responded,Did not respond,Noise,,2026-11-24T10:00:00-06:00,'+O+','+hashO+',roi-of-'+id(1)+',\n') : 'the mark read is written back as it was'
+// a file with the column and manual marks only, as an earlier build of this version wrote it: read, and written again without it
+String written=Review.HEADER.join(',')+'\n'+rewritten.drop(1).collect{it.collect{Csv.encode(it)}.join(',')+',manual'}.join('\n')+'\n'
+new File(folder,reviewName(O)).text=written
+assert Review.read(dirO,autoMeasurement).problem=='' && Review.read(dirO,autoMeasurement).marks.values()*.by==['manual','manual']
+Review.change(dirO,autoMeasurement,[cell:id(3),call:'Did not respond',reason:'Noise'])
+assert Csv.read(new File(folder,reviewName(O)))[0]==Review.HEADER_BEFORE && Csv.read(new File(folder,reviewName(O)))[2][3]=='Noise'
 // a Marked_by the plugin does not write, or an automatic mark that is not one the plugin makes, does not match
-String written=new File(folder,reviewName(O)).text
 [written.replaceFirst(',manual\n',',robot\n'),written.replaceFirst(',manual\n',',\n'),written.replaceFirst(',Noise,(.*),manual\n',',Noise,$1,automatic\n')].each{String text->new File(folder,reviewName(O)).text=text
     assert Review.read(dirO,autoMeasurement).problem=='The review file '+reviewName(O)+' does not match the calls of this analysis, so its marks are not used.' : text}
 // a row without its last field: the file cannot be read, as any file whose rows are not all as long as its header
 new File(folder,reviewName(O)).text=written.replaceFirst(',manual\n','\n')
 assert Review.read(dirO,autoMeasurement).problem=='The review file '+reviewName(O)+' cannot be read, so its marks are not used.'
 new File(folder,reviewName(O)).delete()
-println 'PASS: a review file without Marked_by reads as manual marks and gains the column when it is written again; a Marked_by the plugin does not write is not applied'
+println 'PASS: a review file without Marked_by reads as manual marks and is written again without the column while every mark is manual; a Marked_by the plugin does not write is not applied'
 
 // ---- automatic marks: the option, the marks made at the end of a run, the finish message, the Methods sentence
 // The fixture has no ring files: the checks of each run are given flags here as a run with them would give them, and the
 // table is written as the checks write it.
-def realRun=Checks.getMethod('run',File,Map,File);Map flagsFor=[:]
+def realRun=Checks.getMethod('run',File,Map,File);Map flagsFor=[:];boolean unsaved=false   // unsaved: the table is given as not saved
 Checks.metaClass.static.run={File dir,Map m,File log->
     Map found=realRun.invoke(null,dir,m,log) as Map
     found.rows.each{Map row->String rule=flagsFor[row.Cell];if(rule){row.Flag=rule.split('; ').collect{it=='passes through'?'possible passing object, frames 5 to 7':it=='on the edge'?'rise on the left edge, not in the cell, frames 5 to 8':it=='field moved'?'field moved, frames 4 to 5':it=='crosses the cell'?'possible passing object, frames 4 to 9':it}.join('; ');row.Rule=rule;row.QC_flags=Checks.codesOf(rule);row.Passing_object_check='checked'}}
     Csv.write(Checks.file(m,dir),[Checks.HEADER]+found.rows.collect{Map row->Checks.HEADER.collect{row[it]}})
+    if(unsaved)found.file=null
     found}
 flagsFor[id(1)]='passes through; short separate crossings';flagsFor[id(2)]='on the edge';flagsFor[id(3)]='field moved';flagsFor[id(4)]='short separate crossings';flagsFor[id(6)]='passes through';flagsFor[id(8)]='passes through'
 page=open(autoMeasurement)
@@ -393,10 +405,24 @@ def byHand=page.call('api/review',[cell:id(1),call:'Did not respond',reason:'Pas
 assert byHand[1].review.marks[id(1)].markedBy=='manual' && byHand[1].review.marks[id(2)].markedBy=='automatic'
 assert page.call('api/review',[cell:id(8),call:'Responded',reason:'Other',note:'slow'])[0]==200
 def both=page.call('api/results')[1].review
-assert both.methods=='3 of 6 cells were reclassified: 1 automatically from responder to non-responder (1 rise on the edge) and 2 after manual review: 1 from responder to non-responder (passing object) and 1 from non-responder to responder (other).' : both.methods
+assert both.methods=='3 of 6 cells were reclassified: 1 automatically from responder to non-responder (1 rise on the edge); 2 after manual review, 1 from responder to non-responder (passing object) and 1 from non-responder to responder (other).' : both.methods
 assert Csv.read(new File(folder,reviewName(Q))).drop(1).collect{[it[0],it[-1]]}==[[id(1),'manual'],[id(2),'automatic'],[id(8),'manual']]
 assert Review.methods([changed:[id(1),id(2),id(3)],rows:[[key:'all',counted:[5,6,8]]]],[marks:[(id(1)):[automatic:'Responded',reason:'Passing object',by:'automatic'],(id(2)):[automatic:'Responded',reason:'Passing object',by:'automatic'],(id(3)):[automatic:'Responded',reason:'Noise',by:'manual']]],[(id(1)):'possible passing object',(id(2)):'possible passing object'])==
-    '3 of 6 cells were reclassified: 2 automatically from responder to non-responder (2 possible passing object) and 1 after manual review: 1 from responder to non-responder (noise).'
+    '3 of 6 cells were reclassified: 2 automatically from responder to non-responder (2 possible passing objects); 1 after manual review, 1 from responder to non-responder (noise).'
+// every form of the sentence, with the plurals: one cell, two of one kind, a mix, automatic and manual, manual only
+def sentence={List made->Map marks=[:],kinds=[:];made.eachWithIndex{List m,int i->String cell='c'+i;marks[cell]=[automatic:m[0],reason:m[1],by:m[2]];if(m[2]=='automatic')kinds[cell]=m[1]}
+    Review.methods([changed:marks.keySet() as List,rows:[[key:'all',counted:[40,143,150]]]],[marks:marks],kinds)}
+def auto={String kind->['Responded',kind,'automatic']},hand={String from,String reason->[from,reason,'manual']}
+assert sentence([auto('rise on the edge')])=='1 of 143 cells was reclassified automatically from responder to non-responder (1 rise on the edge).'
+assert sentence([auto('possible passing object')]*2)=='2 of 143 cells were reclassified automatically from responder to non-responder (2 possible passing objects).'
+assert sentence([auto('rise on the edge')]*2)=='2 of 143 cells were reclassified automatically from responder to non-responder (2 rises on the edge).'
+assert sentence([auto('rise on the edge'),auto('possible passing object')])=='2 of 143 cells were reclassified automatically from responder to non-responder (1 possible passing object, 1 rise on the edge).'
+List manualThree=[hand('Responded','Noise'),hand('Responded','Passing object'),hand('Did not respond','Other')]
+assert sentence([auto('possible passing object')]*2+manualThree)=='5 of 143 cells were reclassified: 2 automatically from responder to non-responder (2 possible passing objects); 3 after manual review, 2 from responder to non-responder (1 noise, 1 passing object) and 1 from non-responder to responder (other).'
+assert sentence(manualThree)=='3 of 143 cells were reclassified after manual review: 2 from responder to non-responder (1 noise, 1 passing object) and 1 from non-responder to responder (other).'
+assert sentence(Review.REASONS.collect{hand('Responded',it)}*2)=='10 of 143 cells were reclassified after manual review: 10 from responder to non-responder (2 noise, 2 movements, 2 passing objects, 2 bad outlines, 2 others).'
+assert sentence(Review.REASONS.collect{hand('Responded',it)})=='5 of 143 cells were reclassified after manual review: 5 from responder to non-responder (1 noise, 1 movement, 1 passing object, 1 bad outline, 1 other).'
+assert sentence([hand('Responded','Passing object')]*2)=='2 of 143 cells were reclassified after manual review: 2 from responder to non-responder (passing object).' : 'one reason: named once, without a count'
 assert Review.listed((1..7).collect{'Cell '+it})=='Cell 1, Cell 2, Cell 3, Cell 4, Cell 5 and 2 more' && Review.listed(['Cell 16','Cell 97'])=='Cell 16, Cell 97'
 assert Review.listed((1..5).collect{'Cell '+it})=='Cell 1, Cell 2, Cell 3, Cell 4, Cell 5' && Review.listed((1..6).collect{'Cell '+it})=='Cell 1, Cell 2, Cell 3, Cell 4, Cell 5 and 1 more' : 'five names are all given'
 println 'PASS: with the option off nothing changes; on, flagged responders without a mark are marked automatically, saved with the percent table, named in the finish message and counted apart in the Methods sentence; a mark removed or made by hand is manual'
@@ -411,6 +437,7 @@ assert nextRun.state.message.contains(' Marked automatically: Cell 2.') && nextR
 String S='SimpleCa-20261102-130000-ssssssss';File dirS=analysis(S,autoCells)
 def offAgain=runWith(dirS,false)
 assert offAgain.results.review.carried.kept==2 && offAgain.results.review.marks.keySet()==[id(1),id(8)] as Set && offAgain.results.review.marks.values()*.markedBy==['manual','manual'] && !offAgain.state.message.contains('automatically')
+assert Csv.read(new File(folder,reviewName(S)))[0]==Review.HEADER_BEFORE && Csv.read(new File(folder,reviewName(Q)))[0]==Review.HEADER : 'Marked_by only in a file that holds an automatic mark'
 // an analysis whose only marks are automatic carries nothing, and the marks of an older one do not come back
 String T='SimpleCa-20261102-140000-tttttttt',U='SimpleCa-20261102-150000-uuuuuuuu'
 [id(1),id(8)].each{assert page.call('api/review',[cell:it,remove:true])[0]==200}
@@ -467,5 +494,18 @@ assert Review.kinds(dirCC,autoMeasurement)==[(id(2)):'rise on the edge',(id(5)):
 assert crossRun.results.review.methods=='2 of 6 cells were reclassified automatically from responder to non-responder (1 possible passing object, 1 rise on the edge).' : crossRun.results.review.methods
 assert crossRun.state.message.contains(' Marked automatically: Cell 2, Cell 5.') : crossRun.state.message
 println 'PASS: a responder flagged by the rule "crosses the cell" is marked automatically and counted as a possible passing object'
+
+// ---- the checks were made but their table could not be saved: no automatic mark, as a mark rests on the saved checks
+String NS='SimpleCa-20261102-210000-nnnnnnnn';File dirNS=analysis(NS,autoCells)
+unsaved=true
+def unsavedRun
+try{unsavedRun=runWith(dirNS,true)}finally{unsaved=false}
+assert unsavedRun.state.message.contains(' No automatic mark was made: the checks could not be saved.') && !new File(folder,reviewName(NS)).exists() && unsavedRun.results.review.marks==[:] : unsavedRun.state.message
+assert !unsavedRun.state.message.contains('Marked automatically') && new File(folder,percentName(NS)).readLines('UTF-8')[1]=='All cells,8,6,5,83.3,1,5,4,80.0' : 'nothing marked, the percent table without the columns after review'
+Map checkedNS=Checks.saved(dirNS,autoMeasurement)
+assert Review.automatic(dirNS,autoMeasurement,checkedNS+[file:null],true)==[folder:NS,cells:[],names:[],text:'No automatic mark was made: the checks could not be saved.'] && !new File(folder,reviewName(NS)).exists()
+assert Review.automatic(dirNS,autoMeasurement,[rows:[],ringMeasured:false,note:'The calls were not checked: the calls table has no Cell or Status column.'],true).text=='' : 'calls not checked at all: no mark, and the checks say why'
+assert Review.automatic(dirNS,autoMeasurement,checkedNS,true).cells==[id(2),id(5)] : 'with the table saved, the same checks mark'
+println 'PASS: no automatic mark is made when the checks could not be saved, and the finish message says so'
 page.server.stop()
 System.exit(0)
