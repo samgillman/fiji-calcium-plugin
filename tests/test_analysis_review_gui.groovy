@@ -8,10 +8,12 @@
 // staying where it is; the head over the picture and the plot one height for every cell, on a control window, with a refusal
 // of two lines and with the longest note, with the call line, its flags, the mark controls and a refusal directly under one
 // another; the tiles, the tabs and the plot not moving at a mark; nothing written on the plot or the saved trace.png but its
-// axes and key, which names its bands and dashed lines in the Step 4 page's words, and the plot keeping its place from cell
-// to cell, for a cell without a trace too, and at a mark that empties the group shown or leaves no cell of a call, also as
-// narrow as beside a real recording's picture; under the plot the caption and the rule line, which names the required rise as
-// the key does; trace.png and heatmap.png drawn across their whole width; no mark controls on
+// axes and key; on screen the key holds the cell, the mean and the traces behind it, so the plot starts where it did before
+// the review controls, and a band is named by pointing at it; trace.png's key also names its bands and dashed lines in the
+// Step 4 page's words; the plot keeping its place from cell to cell, for a cell without a trace too, and at a mark that
+// empties the group shown or leaves no cell of a call, also as narrow as beside a real recording's picture; under the plot
+// the caption and the rule line, which gives the required rise with the call line's decimals, and no rule line for a cell
+// without a trace; trace.png and heatmap.png drawn across their whole width; no mark controls on
 // excluded or unscorable cells, on a control window, while an analysis runs or while the review file is for another
 // analysis; a mark carried over to the next analysis run here.
 // The window is built and never shown (with -Dapple.awt.UIElement=true no Dock icon appears on a Mac); a window that opens all
@@ -96,24 +98,47 @@ def shownRows={->[call:ui.cellStatus,flags:ui.flagRow,mark:ui.markRow,refusal:ui
 // a table on its tab: its column names, and a row by the values of two of its columns
 def columns={JTable t->(0..<t.model.columnCount).collect{t.model.getColumnName(it)}}
 def rowOf={JTable t,Map where->List heads=columns(t);int r=(0..<t.model.rowCount).find{int i->where.every{k,v->t.model.getValueAt(i,heads.indexOf(k))==v}} as int;(0..<heads.size()).collect{t.model.getValueAt(r,it)}}
-// the strings the plot draws on itself and so into a saved trace.png: only tick labels, the axis title and the key may be there
+// the strings the plot draws on itself: only tick labels, the axis title and the key may be there
 def drawnOnPlot={->def image=new java.awt.image.BufferedImage(Math.max(1,ui.plot.width),Math.max(1,ui.plot.height),java.awt.image.BufferedImage.TYPE_INT_RGB)
     def spy=new TextSpy(real:image.createGraphics());try{ui.plot.still(spy)}finally{spy.real.dispose()};spy.drawn}
-// the swatch beside an entry of the key, as the plot draws it on white: the colour of each pixel of the row it is centred on,
-// from its left end, and the colour 3 px above its middle (a box is 10 px tall, a line is not)
-def swatch={String name->def image=new java.awt.image.BufferedImage(Math.max(1,ui.plot.width),Math.max(1,ui.plot.height),java.awt.image.BufferedImage.TYPE_INT_RGB)
+// the plot as Save plots draws it into trace.png: at the width saved, with the key of a saved figure; then as on screen again
+def asSaved={Closure c->java.awt.Dimension was=ui.plot.size;ui.plot.setSize(Math.max(650,was.width as int),was.height as int);ui.plot.figure=true
+    try{c()}finally{ui.plot.figure=false;ui.plot.setSize(was);ui.plot.changed()}}
+def drawnInFigure={->asSaved{drawnOnPlot()}}
+// trace.png as the plot of the cell shown would be saved now, on white
+def savedPicture={int width,int height->def image=new java.awt.image.BufferedImage(width,height,java.awt.image.BufferedImage.TYPE_INT_RGB);def g=image.createGraphics()
+    java.awt.Dimension was=ui.plot.size;ui.plot.setSize(width,height);ui.plot.figure=true
+    try{g.color=java.awt.Color.white;g.fillRect(0,0,width,height);ui.plot.still(g)}finally{g.dispose();ui.plot.figure=false;ui.plot.setSize(was);ui.plot.changed()};image}
+// the swatch beside an entry of trace.png's key, as the plot draws it on white: the colour of each pixel of the row it is
+// centred on, from its left end, and the colour 3 px above its middle (a box is 10 px tall, a line is not)
+def swatch={String name->asSaved{def image=new java.awt.image.BufferedImage(Math.max(1,ui.plot.width),Math.max(1,ui.plot.height),java.awt.image.BufferedImage.TYPE_INT_RGB)
     def spy=new TextSpy(real:image.createGraphics());try{spy.real.color=java.awt.Color.white;spy.real.fillRect(0,0,image.width,image.height);ui.plot.still(spy)}finally{spy.real.dispose()}
     def text=spy.at.find{it[0]==name};assert text!=null : 'no entry '+name+' in '+spy.drawn
     int x=(text[1] as int)-21,y=(text[2] as int)-4
-    [row:(0..16).collect{image.getRGB(x+it,y)&0xFFFFFF},above:image.getRGB(x+8,y-3)&0xFFFFFF]}
+    [row:(0..16).collect{image.getRGB(x+it,y)&0xFFFFFF},above:image.getRGB(x+8,y-3)&0xFFFFFF]}}
+// the names of the dashed lines and the bands, in trace.png's key only
 List keyWords=['required rise','noise threshold','minimum rise','baseline mean','F₀ frames','baseline','response window','response']
-def allowedOnPlot={String s->s in ['Time (s)','mean ± SEM',ui.plot.cell]+keyWords || s==~/(responded|did not respond|no call|all cells|marked|responded after review) \(\d+\)/ || s==~/-?\d+(\.\d+)?/}
+def counted={String s->s==~/(responded|did not respond|no call|all cells|marked|responded after review) \(\d+\)/}
+def allowedOnScreen={String s->s in ['Time (s)','mean ± SEM',ui.plot.cell] || counted(s) || s==~/-?\d+(\.\d+)?/}
+def allowedInFigure={String s->allowedOnScreen(s) || s in keyWords}
 // the plot's frame: where it starts under the key
 def frameTop={->layOut();drawnOnPlot();ui.plot.@t}
 // and at the width the plot has beside the picture of a real recording (245 px beside 1388 x 1040), where most entries of
 // the key take a line of their own
 def narrowTop={->layOut();ui.plot.setSize(245,ui.plot.height);drawnOnPlot();int top=ui.plot.@t;layOut();top}
-def placeOf={->[frameTop(),narrowTop()]}
+// and in trace.png, whose key also names the dashed lines and the bands
+def savedTop={->layOut();int top=asSaved{drawnOnPlot();ui.plot.@t};layOut();top}
+def placeOf={->[frameTop(),narrowTop(),savedTop()]}
+// where the frame of the plot as it is now started at a width before the review controls: the key held the mean, the cell
+// and the traces behind them by call, laid from the frame's left edge across the frame's width (the panel's less 80 px), a
+// line more for each entry that did not fit, and the frame started 16 px under its last line
+def mainTop={int width->def g=new java.awt.image.BufferedImage(1,1,java.awt.image.BufferedImage.TYPE_INT_RGB).createGraphics();def fm
+    try{Theme.smooth(g);g.font=Theme.font(java.awt.Font.PLAIN,-1f);fm=g.fontMetrics}finally{g.dispose()}
+    def p=ui.plot;int yes=p.allCalls.count{it=='Responded'},no=p.allCalls.count{it=='Did not respond'},other=p.all.length-yes-no
+    List words=['mean ± SEM',p.cell];if(p.showAll&&p.all.length>0){if(yes)words<<'responded ('+yes+')';if(no)words<<'did not respond ('+no+')';if(other)words<<(yes+no>0?'no call':p.allLabel)+' ('+other+')'}
+    int across=Math.max(1,width-62-18),line=0,run=0
+    words.each{String s->int need=21+fm.stringWidth(s)+14;if(run>0&&run+need>across){line++;run=0};run+=need}
+    30+16*(line+1)}
 // the time of a mark as the Step 4 page shows it, to the minute
 def minute={String time->assert time==~/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d.*/ : time;time.substring(0,16).replace('T',' ')}
 // where the window asks for the keyboard focus, and which component has it (a window never shown has no focus of its own)
@@ -204,21 +229,31 @@ try {
         assert columns(ui.calls)==Csv.read(new File(dirB,'responder_calls.csv'))[0] && columns(ui.counts)==Csv.read(new File(dirB,'responder_counts.csv'))[0] : 'the tabs as saved'
         assert ui.calls.model.is(ui.callsSaved) && ui.counts.model.is(ui.countsSaved) : 'without marks the tabs show the models the tables were loaded into'
         before.callColumns=columns(ui.calls);before.countColumns=columns(ui.counts)
-        // the caption and the rule line are under the plot, not on it, and the rule line gives the green dashed line's value in
-        // the key's name for it; nothing but the axes and the key is drawn on the plot, so a saved trace.png has nothing else;
-        // a band is named in the tooltip over it
-        assert ui.plot.noteLines*.text==[before.plot,ui.plot.ruleLine()] && ui.plot.ruleLine().startsWith('Required rise 0.1 (Floor) · ') : ui.plot.noteLines*.text
+        // the caption and the rule line are under the plot, not on it, and the rule line gives the required rise with the
+        // decimals of the call line ("needed 0.10"), and leaves out the span and the samples the table does not hold; nothing
+        // but the axes and the key is drawn on the plot
+        assert ui.plot.noteLines*.text==[before.plot,'Required rise 0.10 (Floor)'] && ui.plot.ruleLine()=='Required rise 0.10 (Floor)' : ui.plot.noteLines*.text
         layOut();List drawn=drawnOnPlot()
         assert ui.plot.notes.parent.is(ui.plot.parent) && ui.plot.notes.y>=ui.plot.y+ui.plot.height && ui.plot.notes.height>=2*ui.plot.noteLines[0].preferredSize.height : 'the two lines are under the plot: '+ui.plot.notes.bounds
-        assert drawn.contains('Time (s)') && drawn.contains('mean ± SEM') && drawn.every{allowedOnPlot(it)} : 'drawn on the plot: '+drawn.findAll{!allowedOnPlot(it)}
+        // on screen the key holds what it held before the review controls: the cell, the mean and the traces behind it; no band
+        // or dashed line is named there, and the frame of the plot starts where it did, at the window's width and as narrow as
+        // beside a real recording's picture
+        assert drawn.contains('Time (s)') && drawn.contains('mean ± SEM') && drawn.every{allowedOnScreen(it)} : 'drawn on the plot on screen: '+drawn.findAll{!allowedOnScreen(it)}
+        assert drawn.findAll{it in ['Cell001','mean ± SEM'] || counted(it)}==['Cell001','mean ± SEM','responded (2)','did not respond (1)','no call (1)'] : 'the key on screen: '+drawn
+        int top=frameTop(),wide=ui.plot.width;assert top==mainTop(wide) : 'the frame starts where it did before the review controls: '+top+' '+mainTop(wide)
+        top=narrowTop();assert top==mainTop(245) : 'and as narrow as beside a real recording\'s picture: '+top+' '+mainTop(245)
+        // pointing at a band names it, in the words of trace.png's key
+        layOut();drawnOnPlot()
         def over=new java.awt.event.MouseEvent(ui.plot,java.awt.event.MouseEvent.MOUSE_MOVED,0L,0,ui.plot.X(ui.plot.stimulusEnd)-2,ui.plot.height-100,0,false)
         assert ui.plot.getToolTipText(over)=='<html>response window<br>'+ui.plot.HINT+'</html>' : 'the band is named in the words of the key: '+ui.plot.getToolTipText(over)
-        // the key names the bands and the dashed lines in the words of the Step 4 page's legend: here the required rise, and the
-        // noise threshold at the baseline mean (the minimum rise is the required rise, under it)
-        assert ['required rise','noise threshold','F₀ frames','baseline','response window','response'].every{drawn.contains(it)} && !drawn.contains('minimum rise') && !drawn.contains('baseline mean') : 'the key: '+drawn
+        // trace.png's key names the bands and the dashed lines in the words of the Step 4 page's legend: here the required rise,
+        // and the noise threshold at the baseline mean (the minimum rise is the required rise, under it)
+        List figured=drawnInFigure()
+        assert figured.every{allowedInFigure(it)} && ['required rise','noise threshold','F₀ frames','baseline','response window','response'].every{figured.contains(it)} && !figured.contains('minimum rise') && !figured.contains('baseline mean') : 'trace.png\'s key: '+figured
         // in the order of the page's legend: the cell, the mean, the traces behind it, the dashed lines, then the bands
-        List keyed=drawn.findAll{it in ['Cell001','mean ± SEM']+keyWords || it==~/(responded|did not respond|no call) \(\d+\)/}
-        assert keyed==['Cell001','mean ± SEM','responded (2)','did not respond (1)','no call (1)','required rise','noise threshold','F₀ frames','baseline','response window','response'] : 'the order of the key: '+keyed
+        List keyed=figured.findAll{it in ['Cell001','mean ± SEM']+keyWords || counted(it)}
+        assert keyed==['Cell001','mean ± SEM','responded (2)','did not respond (1)','no call (1)','required rise','noise threshold','F₀ frames','baseline','response window','response'] : 'the order of trace.png\'s key: '+keyed
+        assert !ui.plot.figure && drawnOnPlot().every{allowedOnScreen(it)} : 'the plot on screen keeps its own key'
         // a band has a filled box of its colour; a dashed line a dashed line (its colour, then a gap); the mean an unbroken line
         def box=swatch('response window'),dash=swatch('required rise'),solid=swatch('mean ± SEM')
         assert box.row[2..14].every{it==0xFFF0DC} && box.above==0xFFF0DC : 'the response window: a filled box '+box
@@ -253,31 +288,54 @@ try {
         assert sizes.values().toList().unique().size()==1 : 'one height for every cell: '+sizes
         ui.cells.selectedItem='Cell003';paint('fiji_cells_in_a_row_1')
         ui.cells.selectedItem='Cell005';paint('fiji_cells_in_a_row_2')
-        // a cell without a trace: nothing is written on the plot for it; why is said under the plot
+        // a cell without a trace: nothing is written on the plot for it; why is said under the plot, and there is no rule line
         ui.cells.selectedItem='Cell003';layOut()
-        assert drawnOnPlot().every{allowedOnPlot(it)} : 'drawn on the plot for an excluded cell: '+drawnOnPlot().findAll{!allowedOnPlot(it)}
-        assert ui.plot.noteLines[0].text=='Cell003 · unavailable: inspect Cell quality for the exclusion reason' : ui.plot.noteLines[0].text
-        // the key keeps its room on a cell without a trace or without a run: the plot keeps its place from cell to cell, and
-        // a band of the window is named on every cell
+        assert drawnOnPlot().every{allowedOnScreen(it)} : 'drawn on the plot for an excluded cell: '+drawnOnPlot().findAll{!allowedOnScreen(it)}
+        assert ui.plot.noteLines*.text==['Cell003 · unavailable: inspect Cell quality for the exclusion reason',''] : ui.plot.noteLines*.text
+        ui.cells.selectedItem='Cell004';assert ui.plot.noteLines[1].text=='' : 'no rule line for an excluded cell: '+ui.plot.noteLines[1].text
+        Map rowWas=ui.plot.responseCall;ui.plot.responseCall=[Threshold_increase:'0.2',Threshold_source:'Floor',Run_duration_s:'1',Run_samples:'2'];ui.plot.changed()
+        assert ui.plot.selected.length==0 && ui.plot.noteLines[1].text=='' : 'a cell without a trace has no rule line, whatever its row holds: '+ui.plot.noteLines[1].text
+        ui.plot.responseCall=rowWas;ui.plot.changed()
+        // an unscorable cell with a trace but no required rise has none either; a cell that did not respond has its required rise
+        ui.cells.selectedItem='Cell006';assert ui.plot.selected.length>0 && ui.plot.noteLines[1].text=='' : 'no rule line without a required rise: '+ui.plot.noteLines[1].text
+        ui.cells.selectedItem='Cell002';assert ui.plot.noteLines[1].text=='Required rise 0.10 (Floor)' : ui.plot.noteLines[1].text
+        // the key keeps its room on a cell without a trace or without a run: the plot keeps its place from cell to cell, on
+        // screen and in trace.png, and in trace.png a band of the window is named on every cell
         Map tops=names.collectEntries{ui.cells.selectedItem=it;[it,placeOf()]}
         assert (tops.values() as Set).size()==1 : 'the plot keeps its place: '+tops
-        ui.cells.selectedItem='Cell002';layOut();assert drawnOnPlot().containsAll(['response','required rise','Cell002']) : 'a cell without a run: the band is named all the same: '+drawnOnPlot()
-        ui.cells.selectedItem='Cell003';layOut();List bare=drawnOnPlot()
+        // trace.png is saved at the width of the plot on screen (650 px at least), and its key wraps at that width: at every
+        // width the frame of each cell starts where it does for the others, with room for the dashed lines of every cell
+        def figureTopAt={int width->java.awt.Dimension was=ui.plot.size;ui.plot.setSize(width,was.height as int);ui.plot.figure=true
+            try{drawnOnPlot();ui.plot.@t}finally{ui.plot.figure=false;ui.plot.setSize(was);ui.plot.changed()}}
+        List savedWidths=(650..1300).step(5)
+        Map figureTops=names.collectEntries{ui.cells.selectedItem=it;layOut();[it,savedWidths.collect{figureTopAt(it as int)}]}
+        assert (figureTops.values() as Set).size()==1 : 'the plot keeps its place in trace.png at every width saved: '+savedWidths.withIndex().findAll{w,int i->(figureTops.values()*.getAt(i) as Set).size()>1}.collect{w,int i->[w,figureTops.collectEntries{k,v->[k,v[i]]}]}.take(3)
+        assert (figureTops.values()[0] as Set).size()>1 : 'the key of trace.png takes more lines at some widths saved than at others: '+(figureTops.values()[0] as Set)
+        ui.cells.selectedItem='Cell002';layOut();assert drawnInFigure().containsAll(['response','required rise','Cell002']) : 'a cell without a run: the band is named all the same: '+drawnInFigure()
+        ui.cells.selectedItem='Cell003';layOut();List bare=drawnInFigure()
         assert bare.containsAll(['F₀ frames','baseline','response window','response']) && !bare.contains('Cell003') && !bare.contains('required rise') : 'a cell without a trace: '+bare
-        // the key runs across the whole panel, over the axis names too: as narrow as beside a real recording's picture, each
-        // line of it starts 8 px in and goes on to the next only when the next entry would not fit before 8 px from the right;
-        // a name longer than that is cut short
-        def keyAt={->layOut();ui.plot.setSize(245,ui.plot.height);def image=new java.awt.image.BufferedImage(245,ui.plot.height,java.awt.image.BufferedImage.TYPE_INT_RGB)
-            def spy=new TextSpy(real:image.createGraphics()),fm;try{ui.plot.still(spy);fm=spy.real.fontMetrics}finally{spy.real.dispose()}
-            def found=spy.at.findAll{it[0] in ['mean ± SEM',ui.plot.cell]+keyWords || it[0]==~/(responded|did not respond|no call) \(\d+\)/ || it[0].startsWith('Cell_')}.collect{it+[fm.stringWidth(it[0])]}
-            layOut();found}
-        ui.cells.selectedItem='Cell001';List entries=keyAt()
-        List keyLines=entries.groupBy{it[2]}.sort{it.key}.values().collect{it.sort{a,b->a[1]<=>b[1]}}
-        assert keyLines.size()>1 && keyLines.every{it[0][1]==29} && entries.every{(it[1] as int)+(it[3] as int)<=245-8} : 'each line of the key starts 8 px in, and nothing runs past 8 px from the right: '+entries
-        assert (1..<keyLines.size()).every{int i->def last=keyLines[i-1][-1],next=keyLines[i][0];((last[1] as int)-29)+21+(last[3] as int)+14+21+(next[3] as int)+14>245-16} : 'a line of the key goes on to the next only when the next entry would not fit: '+keyLines.collect{it*.getAt(0)}
+        assert drawnOnPlot().every{allowedOnScreen(it)} && !drawnOnPlot().contains('Cell003') : 'on screen no band is named for it either: '+drawnOnPlot()
+        // on screen the key is laid as before the review controls, from the frame's left edge (62 px) across the frame's width
+        // (to 18 px from the right), here as narrow as beside a real recording's picture; trace.png's runs across the whole
+        // picture from 8 px in. Each line goes on to the next only when the next entry would not fit; a name longer than the
+        // key's width is cut short
+        def keyAt={boolean saved->layOut();if(!saved)ui.plot.setSize(245,ui.plot.height)
+            def look={->def image=new java.awt.image.BufferedImage(ui.plot.width,ui.plot.height,java.awt.image.BufferedImage.TYPE_INT_RGB)
+                def spy=new TextSpy(real:image.createGraphics()),fm;try{ui.plot.still(spy);fm=spy.real.fontMetrics}finally{spy.real.dispose()}
+                [ui.plot.width,spy.at.findAll{it[0] in ['mean ± SEM',ui.plot.cell]+keyWords || counted(it[0]) || it[0].startsWith('Cell_')}.collect{it+[fm.stringWidth(it[0])]}]}
+            def found=saved?asSaved(look):look();layOut();found}
+        def keyLinesOf={boolean saved->def found=keyAt(saved);int width=found[0];List entries=found[1]
+            int start=saved?8+21:62+21,right=saved?width-8:width-18,across=saved?width-16:width-80
+            List keyLines=entries.groupBy{it[2]}.sort{it.key}.values().collect{it.sort{a,b->a[1]<=>b[1]}}
+            String where=saved?'trace.png':'on screen'
+            assert keyLines.every{it[0][1]==start} && entries.every{(it[1] as int)+(it[3] as int)<=right} : where+': each line of the key starts at '+start+' px, and nothing runs past '+right+' px: '+entries
+            assert (1..<keyLines.size()).every{int i->def last=keyLines[i-1][-1],next=keyLines[i][0];((last[1] as int)-start)+21+(last[3] as int)+14+21+(next[3] as int)+14>across} : where+': a line of the key goes on to the next only when the next entry would not fit: '+keyLines.collect{it*.getAt(0)}
+            [keyLines,start,right]}
+        ui.cells.selectedItem='Cell001'
+        assert keyLinesOf(false)[0].size()>1 && keyLinesOf(true)[0].size()>1 : 'the key takes more than one line on screen and in trace.png'
         String shortName=ui.plot.cell;ui.plot.cell='Cell_ac975e8b6d7dd113b515892b56003127';ui.plot.changed()
-        def cut=keyAt().find{it[0].startsWith('Cell_')}
-        assert cut!=null && cut[0].endsWith('…') && cut[1]==29 && (cut[1] as int)+(cut[3] as int)<=245-8 : 'a long cell name is cut short in the key: '+cut
+        def (List cutLines,int cutStart,int cutRight)=keyLinesOf(false);def cut=cutLines.collectMany{it}.find{it[0].startsWith('Cell_')}
+        assert cut!=null && cut[0].endsWith('…') && cut[1]==cutStart && (cut[1] as int)+(cut[3] as int)<=cutRight : 'a long cell name is cut short in the key: '+cut
         ui.plot.cell=shortName;ui.plot.changed();layOut()
         // a refusal of two lines, as one naming the percent table of a recording with a usual name, takes the room kept for it
         ui.cells.selectedItem='Cell001'
@@ -437,6 +495,7 @@ try {
         ui.stimuli.selectedItem='Capsaicin';ui.cells.selectedItem='Cell001';assert ui.removeMark.visible : 'back on the stimulus, the mark can be removed'
         // saved plots say their groups follow the review marks, and which file the marks are in
         layOut();ui.exportPlots()
+        assert !ui.plot.figure && drawnOnPlot().every{allowedOnScreen(it)} : 'after Save plots the key on screen is as before: '+drawnOnPlot().findAll{!allowedOnScreen(it)}
         def record=new groovy.json.JsonSlurper().parse(new File(dirB,'plot_provenance.json'))
         assert record.calls=='after review' && record.review_file==reviewB.name && record.review_sha256==Installer.digest(reviewB.bytes) : ui.status.text
         // the saved trace.png has no caption, rule line, time cursor or anything else written on it: with other words under
@@ -453,9 +512,13 @@ try {
         int onScreen=ui.plot.width
         assert ((onScreen-15)..<645).any{int x->(0..<first.height).count{int y->(first.getRGB(x,y)&0xFFFFFF)!=0xFFFFFF}>100} : 'the plot is drawn at the width saved'
         assert heatPicture.width>=650 && blackColumn(heatPicture)==null : 'heatmap.png is drawn to its right edge: '+blackColumn(heatPicture)
+        // trace.png is the plot with trace.png's key, which names its bands and dashed lines, pixel for pixel
+        def asKeyed=savedPicture(first.width,first.height)
+        assert (0..<first.width).every{int x->(0..<first.height).every{int y->first.getRGB(x,y)==asKeyed.getRGB(x,y)}} : 'trace.png has the key of a saved figure'
         layOut();int plotWidth=ui.plot.width;ui.exportPlots();assert ui.plot.width==plotWidth : 'the plot keeps its size on screen'
-        Map call=ui.plot.responseCall;ui.plot.responseCall=call+[Run_samples:'99',Run_duration_s:'99'];ui.plot.caption='Cell001 · other words';ui.plot.changed();ui.showFrame(3)
-        assert ui.plot.noteLines[0].text=='Cell001 · other words' && ui.plot.noteLines[1].text.endsWith(' · span 99 s · 99 samples') && Double.isFinite(ui.plot.moment) : ui.plot.noteLines*.text
+        // the rule line under the plot gives the span and the samples with the call line's decimals, not as the table holds them
+        Map call=ui.plot.responseCall;ui.plot.responseCall=call+[Run_samples:'8',Run_duration_s:'7.00007009506226'];ui.plot.caption='Cell001 · other words';ui.plot.changed();ui.showFrame(3)
+        assert ui.plot.noteLines[0].text=='Cell001 · other words' && ui.plot.noteLines[1].text=='Required rise 0.10 (Floor) · span 7 s · 8 samples' && Double.isFinite(ui.plot.moment) : ui.plot.noteLines*.text
         ui.exportPlots();def again=javax.imageio.ImageIO.read(traceB)
         assert first.width==again.width && first.height==again.height && (0..<first.width).every{int x->(0..<first.height).every{int y->first.getRGB(x,y)==again.getRGB(x,y)}} : 'nothing but the plot is saved'
         ui.cells.selectedItem='Cell005';ui.cells.selectedItem='Cell001';ui.showFrame(17)
@@ -585,7 +648,7 @@ try {
     }
     assert appeared.isEmpty() : 'a window appeared on screen: '+appeared
     onUI{assert !ui.visible && !ui.isDisplayable() : 'the window was never shown'}
-    println 'PASS: Step 4 window flags, links to frames, mark controls, reasons chosen from flags, refusals, Enter (once when held, never from the open Reason list) and Esc, focus back to the button, one head height with its rows one under another, tiles and plot kept at a mark, nothing written on the plot or trace.png but its key, bands and dashed lines named, the key across the panel, the plot in its place from cell to cell and at a mark that empties the group, the required rise named one way, saved figures drawn across their width, reviewed columns on the tabs, a review file for another analysis, marks saved and removed with every view following and Show kept, control window and busy without controls, carried marks, plot record'
+    println 'PASS: Step 4 window flags, links to frames, mark controls, reasons chosen from flags, refusals, Enter (once when held, never from the open Reason list) and Esc, focus back to the button, one head height with its rows one under another, tiles and plot kept at a mark, nothing written on the plot or trace.png but its key, the key on screen as before the review controls with the frame where it started, bands and dashed lines named in the key of trace.png, laid across it, the plot in its place from cell to cell and at a mark that empties the group, the rule line with the decimals of the call line and none without a trace, saved figures drawn across their width, reviewed columns on the tabs, a review file for another analysis, marks saved and removed with every view following and Show kept, control window and busy without controls, carried marks, plot record'
 } catch(Throwable t){t.printStackTrace();System.exit(1)}
 finally {onUI{ui?.dispose();original?.close();recording?.close()}}
 System.exit(0)

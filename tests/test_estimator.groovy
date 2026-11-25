@@ -206,9 +206,17 @@ def Calls = loader.loadClass('CalciumCalls')
  ['Baseline noise', null, 'Baseline noise'], ['Floor', null, 'Floor'], ['', '', ''], [null, null, '']].each { String term, String estimate, String expected ->
     Map call = [Threshold_source: term]; if (estimate != null) call.Noise_source = estimate
     assert Calls.thresholdSetBy(call) == expected : call }
+// The line under a cell's plot: the required rise with the decimals of the call line above the plot ("needed 0.46"), what set
+// it, and the run that met it, its span in whole seconds or to a tenth; a value the table does not hold is left out with its
+// words, as in the call line, and without a required rise there is no line. A table on the baseline SD without Noise_source
+// names the noise term.
 def plot = loader.loadClass('CalciumAnalysisPlot').newInstance()
-plot.responseCall = [Threshold_increase: '0.405', Threshold_source: 'Baseline noise', Noise_source: 'Whole-trace noise', Run_duration_s: '', Run_samples: '0']
-assert plot.ruleLine() == 'Required rise 0.405 (Whole-trace noise) · span unavailable s · 0 samples' : plot.ruleLine()
-plot.responseCall = [Threshold_increase: '0.3034', Threshold_source: 'Baseline noise', Run_duration_s: '1', Run_samples: '2']
-assert plot.ruleLine() == 'Required rise 0.3034 (Baseline noise) · span 1 s · 2 samples' : 'a table on the baseline SD without Noise_source names the noise term: '+plot.ruleLine()
-println 'PASS: the Fiji window names the estimate that set a threshold: whole-trace noise is not called baseline noise'
+[[[Threshold_increase: '0.464028384529484', Threshold_source: 'Baseline noise', Noise_source: 'Whole-trace noise', Run_duration_s: '7.00007009506226', Run_samples: '8'], 'Required rise 0.46 (Whole-trace noise) · span 7 s · 8 samples'],
+ [[Threshold_increase: '0.3034', Threshold_source: 'Baseline noise', Run_duration_s: '1', Run_samples: '2'], 'Required rise 0.30 (Baseline noise) · span 1 s · 2 samples'],
+ [[Threshold_increase: '0.1', Threshold_source: 'Floor', Noise_source: 'Whole-trace noise', Run_duration_s: '3.5', Run_samples: '8'], 'Required rise 0.10 (Floor) · span 3.5 s · 8 samples'],
+ [[Threshold_increase: '0.132937021873992', Threshold_source: 'Baseline noise', Noise_source: 'Baseline SD', Run_duration_s: '', Run_samples: ''], 'Required rise 0.13 (Baseline SD)'],
+ [[Threshold_increase: '0.2', Threshold_source: ''], 'Required rise 0.20'],
+ [[Threshold_increase: '', Threshold_source: '', Run_duration_s: '', Run_samples: ''], ''], [[:], '']].each { Map call, String expected ->
+    plot.responseCall = call
+    assert plot.ruleLine() == expected : call + ': ' + plot.ruleLine() }
+println 'PASS: the Fiji window names the estimate that set a threshold: whole-trace noise is not called baseline noise; the line under the plot gives the required rise with the call line\'s decimals'

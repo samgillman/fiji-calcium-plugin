@@ -2740,14 +2740,29 @@ class CalciumAnalysisPlot extends javax.swing.JPanel {
     double[][] all=[]; List<String> allCalls=[]; boolean showAll=true; String allLabel='all cells'
     double moment=Double.NaN; Closure seek={double t->}
     Map responseCall=[:]
-    /** Under the plot: the selected cell's threshold, what set it, and the run that met it. */
-    String ruleLine(){'Required rise '+(responseCall.Threshold_increase?:'unavailable')+' ('+CalciumCalls.thresholdSetBy(responseCall)+') · span '+(responseCall.Run_duration_s?:'unavailable')+' s · '+(responseCall.Run_samples?:'')+' samples'}
+    /** Under the plot: the selected cell's required rise, what set it, and the run that met it, with the decimals of the call
+     *  line above the plot (a span in whole seconds, or to a tenth when it is not whole). As in the call line, a value the
+     *  table does not hold is left out with its words; without a required rise there is no line. */
+    String ruleLine(){
+        def number={String key->CalciumCsv.number(responseCall[key]?.toString())}
+        double need=number('Threshold_increase'),span=number('Run_duration_s'),samples=number('Run_samples')
+        if(!Double.isFinite(need))return ''
+        String setBy=CalciumCalls.thresholdSetBy(responseCall)
+        List parts=['Required rise '+String.format(Locale.US,'%.2f',need)+(setBy?' ('+setBy+')':'')]
+        if(Double.isFinite(span))parts<<'span '+new java.text.DecimalFormat('0.#',java.text.DecimalFormatSymbols.getInstance(Locale.US)).format(span)+' s'
+        if(Double.isFinite(samples))parts<<String.format(Locale.US,'%.0f',samples)+' samples'
+        parts.join(' · ')
+    }
     /** Under the plot on screen, and never in a saved figure (nothing but the axes and the key is drawn on the plot): the
      *  caption and the rule line, one line each, so they take the same room for every cell. */
     final List<CalciumLine> noteLines=[new CalciumLine(CalciumTheme.MUTED),new CalciumLine(CalciumTheme.MUTED)]
     final javax.swing.JPanel notes=new javax.swing.JPanel()
-    /** The response calls of every cell of the window shown: the key names the bands the window has for every cell, and keeps
-     *  the room of the cell whose entries take the most lines, so the plot keeps its place from cell to cell. */
+    /** True only while Save plots paints trace.png: its key then names the dashed lines and the bands too. On screen the key
+     *  holds the cell, the mean and the traces behind it, so the plot keeps its height beside a large picture, and pointing at
+     *  a band names it. */
+    boolean figure=false
+    /** The response calls of every cell of the window shown: trace.png's key names the bands the window has for every cell,
+     *  and the key keeps the room of the cell whose entries take the most lines, so the plot keeps its place from cell to cell. */
     List<Map> windowCalls=[]
     /** The calls a mark can give the cells of the group shown (a mark moves a cell of the primary stimulus from one call to the
      *  other; the window says which): the key keeps room for a count of each, so a mark never moves the plot. */
@@ -2777,7 +2792,9 @@ class CalciumAnalysisPlot extends javax.swing.JPanel {
     }
     /** Call after changing what is drawn (traces, selection, bands); moving the time cursor needs only repaint(). */
     void changed(){layerKey='';showNotes();repaint()}
-    void showNotes(){List words=time.length<2 ? ['',''] : [caption,ruleLine()];noteLines.eachWithIndex{line,i->line.setText(words[i] as String)}}
+    /** The caption, and the rule line of a cell with a trace: a cell without one (excluded, or unscorable without a trace) has
+     *  only the caption, which says why. */
+    void showNotes(){List words=time.length<2 ? ['',''] : [caption,selected.length>0?ruleLine():''];noteLines.eachWithIndex{line,i->line.setText(words[i] as String)}}
     Map referenceValues(Map call=responseCall) {
         double base=CalciumCsv.number(call.Baseline_mean?.toString())
         def values=[baseline:base]
@@ -2844,8 +2861,9 @@ class CalciumAnalysisPlot extends javax.swing.JPanel {
         CalciumTheme.smooth(g); g.setFont(CalciumTheme.font(java.awt.Font.PLAIN,-1f)); def fm=g.getFontMetrics()
         l=62;w=Math.max(1,getWidth()-l-18)
         boolean many=showAll&&all.length>0
-        // the key above the plot: the cell, the mean, the traces behind them by call, the dashed lines and the bands, each
-        // named once and in the order of the Step 4 page's legend; it takes as many lines as it needs, and the plot starts below it
+        // the key above the plot: the cell, the mean and the traces behind them by call, and in trace.png (figure) the dashed
+        // lines and the bands too, each named once and in the order of the Step 4 page's legend; on screen pointing at a band
+        // names it. The key takes as many lines as it needs, and the plot starts below it
         def countsOf={int yes,int no,int other->List list=[]
             if(yes>0)list<<[CalciumCalls.RESPONDED,1.4f,'responded ('+yes+')']
             if(no>0)list<<[CalciumCalls.NOT,1.4f,'did not respond ('+no+')']
@@ -2856,18 +2874,20 @@ class CalciumAnalysisPlot extends javax.swing.JPanel {
         // one of the two calls (a mark changes no other count)
         int most=Math.max(yes+no,windowCalls.count{it.Status=='Responded'||it.Status=='Did not respond'} as int)
         List countRoom=!showAll||!markCalls ? counts : countsOf(yes>0||'Responded' in markCalls?most:0,no>0||'Did not respond' in markCalls?most:0,other)
-        // a band is named whenever the window has it, for a cell without a run too
+        // in trace.png a band is named whenever the window has it, for a cell without a run too
         List calls=windowCalls+[responseCall],bands=bandsOf(responseCall,stimulusStart,stimulusEnd)
-        List named=bands.withIndex().findAll{band,int i->i==0?shown(band):calls.any{Map call->double[] span=windowOf(call);shown(bandsOf(call,span[0],span[1])[i] as List)}}.collect{band,int i->[band[2],0f,band[3],'box']}
-        def keyOf={boolean traced,List levels,List countsShown->List key=[];if(traced)key<<[CalciumTheme.INK,1.7f,cell];key<<[CalciumTheme.BLUE,2.4f,'mean ± SEM'];key+countsShown+levels+named}
+        List named=!figure ? [] : bands.withIndex().findAll{band,int i->i==0?shown(band):calls.any{Map call->double[] span=windowOf(call);shown(bandsOf(call,span[0],span[1])[i] as List)}}.collect{band,int i->[band[2],0f,band[3],'box']}
+        def keyOf={boolean traced,List levels,List countsShown->List key=[];if(traced)key<<[CalciumTheme.INK,1.7f,cell];key<<[CalciumTheme.BLUE,2.4f,'mean ± SEM'];key+countsShown+(figure?levels+named:[])}
         def entries=keyOf(cell&&selected.length>0,levelsOf(responseCall,stimulusStart,stimulusEnd),counts)   // a cell without a trace has no entry: why is said under the plot
-        // the key runs across the whole panel, so a narrow plot beside a large picture keeps more of its height
-        int across=Math.max(1,getWidth()-16)
+        // on screen the key is laid from the frame's left edge across the frame's width, as before the review controls, so the
+        // frame starts where it did; trace.png's longer key runs across the whole picture from 8 px in
+        int from=figure?8:l,across=figure?Math.max(1,getWidth()-16):w
         def laid={List list->int line=0,run=0;def places=[];list.each{entry->int need=21+fm.stringWidth(entry[2] as String)+14;if(run>0&&run+need>across){line++;run=0};places<<[run,line];run+=need};[places,line]}
         def (places,lines)=laid(entries)
-        // the key keeps the room of the cell of this window whose entries take the most lines (its own trace and dashed lines),
-        // with the counts a mark can bring, so the plot does not move from cell to cell or at a mark
-        if(cell)calls.collect{Map call->double[] span=windowOf(call);levelsOf(call,span[0],span[1])}.unique{List levels->levels.collect{it[2]}.join(' | ')}.each{List levels->lines=Math.max(lines as int,laid(keyOf(true,levels,countRoom))[1] as int)}
+        // the key keeps the room of the cell of this window whose entries take the most lines (its own trace, and in trace.png
+        // its dashed lines), with the counts a mark can bring, so the plot does not move from cell to cell or at a mark
+        List levelSets=!figure ? [[]] : calls.collect{Map call->double[] span=windowOf(call);levelsOf(call,span[0],span[1])}.unique{List levels->levels.collect{it[2]}.join(' | ')}
+        if(cell)levelSets.each{List levels->lines=Math.max(lines as int,laid(keyOf(true,levels,countRoom))[1] as int)}
         t=30+16*((lines as int)+1);h=Math.max(1,getHeight()-t-46)
         def values=[]; mean.eachWithIndex {v,i->if(Double.isFinite(v)) {values<<v;if(i<sem.length&&Double.isFinite(sem[i])) {values<<v-sem[i];values<<v+sem[i]}}}
         selected.each {if(Double.isFinite(it)) values<<it}; values<<0d
@@ -2918,8 +2938,8 @@ class CalciumAnalysisPlot extends javax.swing.JPanel {
             g.drawLine(X(stimulusStart),Y(value as double),X(stimulusEnd),Y(value as double))}}
         g.setClip(clip);g.setStroke(new java.awt.BasicStroke(1f))
         // the key, then the axis names
-        // a line for a line, dashed as it is drawn; a filled box for a band; a name longer than the panel is cut short with …
-        entries.eachWithIndex{entry,int i->int kx=8+(places[i][0] as int),ky=20+16*(places[i][1] as int);String text=CalciumTheme.fit(entry[2] as String,fm,across-21),kind=entry.size()>3?entry[3]:'line'
+        // a line for a line, dashed as it is drawn; a filled box for a band; a name longer than the key's width is cut short with …
+        entries.eachWithIndex{entry,int i->int kx=from+(places[i][0] as int),ky=20+16*(places[i][1] as int);String text=CalciumTheme.fit(entry[2] as String,fm,across-21),kind=entry.size()>3?entry[3]:'line'
             g.setColor(entry[0] as Color)
             if(kind=='box'){g.fillRect(kx,ky-5,16,10);g.setColor(new Color(0xC5CED8));g.setStroke(new java.awt.BasicStroke(1f));g.drawRect(kx,ky-5,16,10)}
             else{g.setStroke(kind=='dash'?new java.awt.BasicStroke(entry[1] as float,java.awt.BasicStroke.CAP_BUTT,java.awt.BasicStroke.JOIN_MITER,10f,[5f,4f] as float[],0f):new java.awt.BasicStroke(entry[1] as float));g.drawLine(kx,ky,kx+16,ky)}
@@ -4038,14 +4058,17 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
     void exportPlots(){
         if(results==null)return
         changed()
-        // the saved trace has no time cursor or its reading: only the axes, the traces and the key
+        // the saved trace has no time cursor or its reading: only the axes, the traces and the key, which names the dashed
+        // lines and the bands too (on screen pointing at a band names it)
         double at=plot.moment;plot.moment=Double.NaN
         try{
             // each drawn across the whole picture, on white, at the size saved (the heatmap with every row), then given its size back
             ['trace':plot,'heatmap':heatmap].each{name,panel->
                 int w=Math.max(650,panel.width),h=Math.max(260,Math.max(panel.height,panel.is(heatmap)?(int)panel.preferredSize.height:0))
                 java.awt.Dimension was=panel.size;def image=new java.awt.image.BufferedImage(w,h,java.awt.image.BufferedImage.TYPE_INT_RGB);def g=image.createGraphics()
-                try{g.setColor(Color.white);g.fillRect(0,0,w,h);panel.setSize(w,h);panel.paint(g)}finally{g.dispose();panel.setSize(was)}
+                boolean trace=panel.is(plot)
+                try{g.setColor(Color.white);g.fillRect(0,0,w,h);panel.setSize(w,h);if(trace){plot.figure=true;plot.changed()};panel.paint(g)}
+                finally{g.dispose();panel.setSize(was);if(trace){plot.figure=false;plot.changed()}}
                 javax.imageio.ImageIO.write(image,'png',new File(results,name+'.png'))}
             Map provenance=[result_folder:results.name,cell:cells.selectedItem,stimulus:stimuli.selectedItem,protocol_hash:appliedManifest.protocol_hash,manifest_sha256:CalciumInstaller.digest(new File(results,'analysis_manifest.csv').bytes),settings_pending:fingerprint()!=appliedFingerprint,source:'Completed analysis snapshot; display is unsmoothed']
             // the groups, colours and order follow the review marks on the primary stimulus: say so, and which file they come

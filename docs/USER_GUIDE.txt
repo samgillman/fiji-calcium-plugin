@@ -138,9 +138,10 @@ and counted by the plugin.
               object for a possible passing object or a rise on the edge, Movement for a field that
               moved, Noise for short separate crossings. Tab moves through the form, Enter saves, and
               Esc closes it and keeps the cell. After Save, Cancel or Esc the button has the focus
-              again. A key held down opens the form, saves or removes a mark once. A mark that is
-              refused says why in the form. There is no button on excluded or unscorable cells, in
-              the control window, while an analysis runs or while the review file does not match its
+              again. Enter acts once however long it is held: on the page when it is pressed, in the
+              Fiji window when it is let go. Esc acts when it is pressed. A mark that is refused
+              says why in the form. There is no button on excluded or unscorable cells, in the
+              control window, while an analysis runs or while the review file does not match its
               analysis.
   Show        A mark or its removal leaves Show on its group, in both views. The cell stays
               selected and stays in the Cell list until you choose another cell, but it is not
@@ -187,13 +188,16 @@ and counted by the plugin.
               review, the review file and its SHA-256, from the page and from the Fiji window. On
               the page the Exports of the calls table and of the metric summary record the same.
               Figures of the control window and the other tables' Exports record no review.
-              The Fiji window's trace plot carries no sentences, with or without marks: the cell
-              and its call, its local threshold and what the green dashed line is are under the plot
-              on screen. Its legend names the bands and dashed lines in the page's words, on screen
-              and in the saved trace.png: F₀ frames, baseline, response window, response and
-              required rise, and noise threshold, minimum rise and baseline mean when they are drawn.
-              Pointing at a band names it. trace.png has no time cursor, and trace.png and
-              heatmap.png are drawn across their whole width.
+              The Fiji window's trace plot carries no sentences, with or without marks. Under the
+              plot on screen are the cell and its call, and its required rise, for example
+              "Required rise 0.46 (Whole-trace noise) · span 7 s · 8 samples". A cell without a
+              trace has only the first line, which says why. The legend on screen names the cell,
+              the mean ± SEM and the traces by call, and pointing at a band names it. The legend of
+              the saved trace.png also names its bands and dashed lines in the page's words: F₀
+              frames, baseline, response window, response and required rise, the green dashed
+              line, and noise threshold, minimum rise and baseline mean when they are drawn.
+              trace.png has no time cursor, and trace.png and heatmap.png are drawn across their
+              whole width.
   Saved       A mark is saved together with the percent table, or not at all. If the percent table
               is open in another program, close it and set the mark again.
   Methods     A sentence from the marks, for example "3 of 143 cells were reclassified after
