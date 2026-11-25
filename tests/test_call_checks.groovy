@@ -297,8 +297,12 @@ at.keySet().each{String cell->
 Map crossedAround=aroundOf('crossed'),edgeAround=aroundOf('edge')
 assert crossedAround.lines*.part==['before','after'] && crossedAround.lines[0].place in ['ring, left','far ring, left'] && crossedAround.lines[1].place in ['ring, right','far ring, right'] : crossedAround.lines
 assert answer('crossed').detail.startsWith('seen outside at the left at frame '+crossedAround.lines[0].frame+',') && answer('crossed').detail.contains('at the right at frame '+crossedAround.lines[1].frame+',') && crossedAround.band==[55,62]
-assert edgeAround.lines.collect{[it.zone,it.place,it.part,it.frame]}==[[18,'rim, lower right','rim',null],[1,'ring, lower right','ring',null],[16,'core','core',null]] && edgeAround.band==[60,90] : edgeAround.lines
-['left','right','single','blips'].each{assert aroundOf(it).lines.collect{[it.zone,it.place,it.part]}==[[16,'core','core']] && aroundOf(it).band==null : 'no flag of rule A or B: the cell, the core and the ring sectors, no band'}
+assert edgeAround.lines.collect{[it.zone,it.place,it.part,it.frame]}==[[18,'rim, lower right','rim',null],[1,'ring, lower right','ring',null],[16,'core','core',null]] : edgeAround.lines
+// the flagged frames are the event's frames, for every cell with a flag (a stretch on the edge wider than the event: below)
+assert [edgeAround.eventFirst,edgeAround.eventLast]==[60,90] && edgeAround.band==[60,90] : [edgeAround.eventFirst,edgeAround.eventLast,edgeAround.band]
+['left','right','single','blips'].each{assert aroundOf(it).lines.collect{[it.zone,it.place,it.part]}==[[16,'core','core']] : 'no flag of rule A or B: the cell, the core and the ring sectors'}
+['left','right','single'].each{assert aroundOf(it).band==null : 'no flag, no band'}
+Map blipsAround=aroundOf('blips');assert blipsAround.band==[blipsAround.eventFirst,blipsAround.eventLast] && blipsAround.codes==['SHORT_SEPARATE_CROSSINGS'] : 'short separate crossings is a flag: the event is the band'
 assert Checks.place(4)=='ring, left' && Checks.place(13)=='far ring, upper left' && Checks.place(18)=='rim, lower right' && Checks.place(16)=='core'
 // when there is nothing to show, why, in the plugin's words
 assert Checks.aroundCell(context,null,cellOf.crossed).why=='This analysis was made before the calls were checked.' && Checks.AROUND_CONTROL=='Checks are made for the primary stimulus.'
@@ -402,6 +406,13 @@ assert noPeak.Not_checked_because=='no peak time' && noPeak.Passing_object_check
 log.delete()
 def calls8=Csv.read(new File(dir6,'responder_calls.csv'));Csv.write(new File(dir7,'responder_calls.csv'),calls8.collect{it.withIndex().findAll{v,int i->i!=calls8[0].indexOf('Status')}*.getAt(0)})
 assert Checks.run(dir7,still,log).note=='The calls were not checked: the calls table has no Cell or Status column.'
+// around the cell then gives that reason too: from the run's checks as the session holds them, and from the analysis opened
+// again, which has no checks table
+File dir9=new File(still.folder,'SimpleCa-ninth');dir9.mkdirs();dir7.listFiles().each{new File(dir9,it.name).bytes=it.bytes}
+Map noStatus=Checks.run(dir9,still,log);Map context9=Checks.aroundContext(dir9,still)
+assert noStatus.rows==[] && Checks.saved(dir9,still)==null && Checks.answer(Checks.saved(dir9,still))==null
+assert Checks.aroundCell(context9,Checks.answer(noStatus),cellOf.crossed).why=='The calls were not checked: the calls table has no Cell or Status column.' : 'the run\'s note, not "there is no cell"'
+assert Checks.aroundCell(context9,null,cellOf.crossed).why=='The calls were not checked: the calls table has no Cell or Status column.' : 'opened again: the reason, not "made before the calls were checked"'
 new File(dir7,'responder_calls.csv').bytes=new File(dir6,'responder_calls.csv').bytes
 new File(dir7,'analysis_manifest.csv').text=new File(dir6,'analysis_manifest.csv').text.replace('baseline_end,40','baseline_end,NaN')
 assert Checks.run(dir7,still,log).note=='The calls were not checked: the saved baseline frames do not match the recording.' : 'a baseline that is not a number is refused, not taken as frames'
@@ -410,6 +421,7 @@ new File(dir7,'normalized_traces.csv').text='Time,a\n0\n'
 Map unread=Checks.run(dir7,still,log)
 assert unread.note=='The calls were not checked: the saved analysis could not be read.' && unread.rows==[] && log.text.startsWith('Checks on the calls, the saved analysis: java.io.IOException') : log.text
 assert Checks.aroundContext(dir7,still).why=='The calls were not checked: the saved analysis could not be read.'
+assert [Checks.answer(unread),null].every{Checks.aroundCell(Checks.aroundContext(dir7,still),it,cellOf.crossed).why=='The calls were not checked: the saved analysis could not be read.'}
 List traceLines=new File(dir6,'normalized_traces.csv').readLines('UTF-8')
 new File(dir7,'normalized_traces.csv').text=traceLines.take(3).join('\n')+'\n'
 assert Checks.run(dir7,still,log).note=='The calls were not checked: the analysis has fewer than 3 frames.'
@@ -429,9 +441,9 @@ assert joltRows.findAll{Double.parseDouble(it[1])>=8d}*.getAt(0)==['46','47'] : 
 def shaken=checked(jolt,'SimpleCa-jolt').checks.cells
 assert shaken[cellOf.crossed].text=='field moved, frames 46 to 47' && shaken[cellOf.crossed].rule=='field moved' && shaken[cellOf.crossed].firstFrame==55 : shaken[cellOf.crossed]
 assert shaken[cellOf.crossed].codes==['FIELD_MOVED'] && Csv.read(new File(jolt.folder,'jolt_call_checks_SimpleCa-jolt.csv')).find{it[0]==cellOf.crossed}[-1]=='FIELD_MOVED'
-// around a cell where the field moved: the zones of the rule it stands in for, and the frames the flag names
+// around a cell where the field moved: the zones of the rule it stands in for, and the event's frames, not the moved ones
 File dirJolt=new File(jolt.folder,'SimpleCa-jolt');Map joltAround=Checks.aroundCell(Checks.aroundContext(dirJolt,jolt),Checks.answer(Checks.saved(dirJolt,jolt)),cellOf.crossed)
-assert joltAround.why=='' && joltAround.lines*.part==['before','after'] && joltAround.band==[46,47] && joltAround.codes==['FIELD_MOVED'] : joltAround.findAll{!(it.key in ['zones','rise','time'])}
+assert joltAround.why=='' && joltAround.lines*.part==['before','after'] && joltAround.band==[55,62] && [joltAround.eventFirst,joltAround.eventLast]==[55,62] && joltAround.codes==['FIELD_MOVED'] : joltAround.findAll{!(it.key in ['zones','rise','time'])}
 assert shaken[cellOf.crossed].detail==~/the field was up to 1\d\.\d px from where it was over the F0 frames, at frames 46 to 47; otherwise possible passing object, frames 55 to 62: seen outside at the left .*/ : shaken[cellOf.crossed].detail
 assert shaken[cellOf.edge].text=='rise on the lower right edge, not in the cell, frames 60 to 90' : 'a movement more than the span before the event leaves the flag: '+shaken[cellOf.edge]
 assert shaken[cellOf.left].text=='' && shaken[cellOf.blips].text=='short separate crossings'
@@ -459,12 +471,12 @@ assert Passing.check(up,ground,gone,0,19,55,10).rule=='' : 'a sector with too fe
 def during=(50..59).collectEntries{[it,200f]}
 float[][] onEdge=with([(17+1):during,(1):(50..59).collectEntries{[it,260f]}])
 assert Passing.check(up,ground,onEdge,0,19,55,10).text=='rise on the lower right edge, not in the cell, frames 51 to 60'
-// the flagged frames shown around a cell are the frames its flag names: on an edge the stretch, wider than the event here
+// the flagged frames shown around a cell are the event's frames, for any flag: on an edge not the wider stretch its text names
 Map wide=Passing.check(up,ground,with([(17+1):during,(1):(46..63).collectEntries{[it,260f]}]),0,19,55,10)
 assert wide.rule=='on the edge' && [wide.first,wide.last]==[51,60] && wide.edge==[1,47,64] && wide.text.endsWith('frames 47 to 64') : wide.findAll{it.key!='traces'}
-assert Checks.band(wide,['on the edge'],null)==[47,64] && Checks.band(wide,['on the edge','short separate crossings'],null)==[47,64] && Checks.band(wide,['field moved'],[first:40,last:41])==[40,41]
-assert Checks.band(wide,['short separate crossings'],null)==null && Checks.band(wide,[],null)==null && Checks.band(null,['on the edge'],null)==null
-Map passage=Passing.check(up,ground,with([(4):entering,(0):leaving]),0,19,55,10);assert Checks.band(passage,['passes through'],null)==[51,60] && Checks.band(passage,['field moved'],null)==[51,60]
+assert Checks.band(wide,['on the edge'])==[51,60] && Checks.band(wide,['on the edge','short separate crossings'])==[51,60] && Checks.band(wide,['field moved'])==[51,60] && Checks.band(wide,['short separate crossings'])==[51,60]
+assert Checks.band(wide,[])==null && Checks.band(null,['on the edge'])==null
+Map passage=Passing.check(up,ground,with([(4):entering,(0):leaving]),0,19,55,10);assert Checks.band(passage,['passes through'])==[51,60] && Checks.band(passage,['field moved'])==[51,60]
 float[][] inCell=with([(17+1):during,(1):(50..59).collectEntries{[it,260f]},(16):during]);assert Passing.check(up,ground,inCell,0,19,55,10).rule=='' : 'the core rises with the cell: the rise is in the cell'
 float[][] lowRing=with([(17+1):during,(1):(50..59).collectEntries{[it,150f]}]);assert Passing.check(up,ground,lowRing,0,19,55,10).rule=='' : 'the ring must rise at least as much as the rim'
 float[][] noCore=with([(17+1):during,(1):(50..59).collectEntries{[it,260f]}]);noCore[16]=null;assert Passing.check(up,ground,noCore,0,19,55,10).rule=='' : 'no core, no edge rule'

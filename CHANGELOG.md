@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+Issue 29, the parts behind the screen so far: the flags as codes, what the check used around a cell, and automatic marks. Nothing new is shown on screen yet, and no call, count or percentage changes. With the new option off, every saved file is as in 2026.11.24.1, apart from a new last column in two files: `QC_flags` in the call checks table and `Marked_by` in the review file.
+
+- **The flags as codes.** `<recording>_call_checks_<analysis>.csv` gains a last column, `QC_flags`, in every analysis, so every other column keeps its place. It holds the codes of the row's flags, `POSSIBLE_PASSING_OBJECT`, `RISE_ON_EDGE`, `FIELD_MOVED` and `SHORT_SEPARATE_CROSSINGS`, joined with "; " as in the engine's `responder_calls.csv`, and is empty without a flag. A table written by 2026.11.24.1 still reads: its codes come from its Rule column. No file of the engine is rewritten.
+- **Who made a mark.** `<recording>_reviewed_calls_<analysis>.csv` gains a last column, `Marked_by`: `manual` for a mark set by hand, `automatic` for one made by the option below. A review file written by 2026.11.24.1 reads as manual marks and gets the column when it is next written. In a file with the column, a row whose `Marked_by` is empty or anything else makes the file not match, and its marks are not used.
+- **Earlier versions cannot read these two files.** 2026.11.24.1 and earlier read neither a call checks table with `QC_flags` nor a review file with `Marked_by`. There an analysis made with this build shows no flags, its review marks are not used and cannot be changed, and a new analysis does not carry them over. Review it with this build or a later one.
+- **Automatic marks, without a control yet.** An option of the analysis, off by default and kept with the recording's other settings, marks every responder of the primary stimulus flagged as a possible passing object or as a rise on the edge and not marked yet as Did not respond, reason Passing object, at the end of each analysis. The engine never sees the option. The marks are saved like any mark, with the percent table or not at all, and the finish message names the cells after the figures: "Marked automatically: Cell 16, Cell 97." They are never carried over: with the option on, each new analysis makes them again from its own flags, so an automatic mark that was removed comes back at the next analysis. The Methods sentence counts them apart: "2 of 143 cells were reclassified automatically from responder to non-responder (1 possible passing object, 1 rise on the edge)." The page and the Fiji window have no control for the option yet.
+- **Around the cell, without a plot yet.** For one cell at a time the page can ask what the passing-object check used: the cell's rise and the trace of each zone, in gray levels, the event's frames and the zones the flag rests on, or why there is nothing to show. They come from the check's own code.
+- When the carry-over and the automatic marks both cannot write the same file, the finish message says what to do once, at its end.
+
 ## 2026.11.24.1
 
 **New analyses change results.** A cell's noise is now the larger of its baseline SD and its whole-trace noise. That includes a recording analysed before and opened again. Saved analyses and protocol files keep the rule they were saved with.

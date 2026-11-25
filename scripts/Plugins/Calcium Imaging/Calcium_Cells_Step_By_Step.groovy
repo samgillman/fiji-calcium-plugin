@@ -5217,16 +5217,18 @@ class CalciumCallChecks {
      *          zone, key, place, usable, trace in gray levels, null when not usable), eventFirst and eventLast (frames, counted
      *          from 1), rule, text, flags and codes (as answer gives them), lines (the zones the flag rests on, each with zone,
      *          place, part: before, after, rim, ring or core, and frame where the sector was seen, else null; for a cell
-     *          without a flag of rule A or B, the core), others (every other usable near-ring sector), band (the frames the
-     *          flag names, [first, last]; null without them) */
+     *          without a flag of rule A or B, the core), others (every other usable near-ring sector), band (the event's
+     *          frames, [first, last], for a cell with a flag; null without one) */
     static Map aroundCell(Map context,Map checks,String cell) {
         List names=(context?.names?:[]) as List
         Map out=[cell:cell,name:CalciumReview.shown(names,cell),why:'']
         def refuse={String why->out.why=why;out}
-        if(checks==null)return refuse(AROUND_BEFORE)
+        // no checks saved: made before the checks, or the run could not check the calls, and then the analysis says why
+        if(checks==null)return refuse((context?.why?:AROUND_BEFORE) as String)
+        // nothing in this analysis was checked for a passing object: the checks' own note says why, for every cell
+        if(checks.ringMeasured!=true)return refuse((checks.note?:'Not checked for a passing object.') as String)
         Map saved=(checks.cells as Map)?.get(cell) as Map
         if(saved==null)return refuse('There is no cell '+cell+' in this analysis.')
-        if(checks.ringMeasured!=true)return refuse((checks.note?:'Not checked for a passing object.') as String)
         if(!saved.checked)return refuse('Passing object not checked: '+saved.why+'.')
         if(context.why)return refuse(context.why as String)
         int c=names.indexOf(cell)
@@ -5251,19 +5253,13 @@ class CalciumCallChecks {
         out.lines=lines
         Set named=lines.collect{it.zone} as Set
         out.others=(0..<8).findAll{int z->trace[z]!=null&&!named.contains(z)}
-        out.band=band(event,rules,keep.moved as Map)
+        out.band=band(event,rules)
         out
     }
-    /** The frames shown as "flagged frames" around a cell: the frames its flag names. A passage: the event. A rise on the
-     *  edge: the stretch on the edge, which can be wider than the event. A field that moved: the frames it moved.
+    /** The frames shown as "flagged frames" around a cell: the event's frames, for a cell with any flag.
      *  @param event what CalciumPassingObject.check gave  @param rules the rules of the cell's flags
-     *  @param moved CalciumMotion.movedNear, or null  @return [first, last], counted from 1; null without a flag of rule A or B */
-    static List band(Map event,List rules,Map moved) {
-        if(event==null||!rules.any{it in ['passes through','on the edge','field moved']})return null
-        if(rules.contains('field moved')&&moved!=null)return [moved.first,moved.last]
-        List edge=event.edge as List
-        event.before==null&&edge!=null ? [edge[1],edge[2]] : [event.first,event.last]
-    }
+     *  @return [first, last], counted from 1; null without a flag */
+    static List band(Map event,List rules){event==null||!rules?null:[event.first,event.last]}
     /** The note for the whole analysis: '' when every evaluable cell could be checked as written. */
     static String note(boolean ring,boolean movement,String unchecked){!ring?'Not checked for a passing object'+(unchecked?': '+unchecked:'')+'.':movement?'':'The movement of the field was not saved, so a moving field is not told from an object.'}
     /** The checks as the Step 4 page is given them: for every cell the flag's text, its rule and the first frame of the event.
@@ -5375,7 +5371,8 @@ class CalciumReview {
     }
     /** The marks saved for an analysis. A byte order mark at the start and blank lines at the end are left out; an empty file
      *  holds no marks. A file without Marked_by (HEADER_BEFORE) reads as manual marks, and gets the column when it is next
-     *  written. An automatic mark is always Responded to Did not respond for Passing object.
+     *  written; in a file with it, every row says manual or automatic. An automatic mark is always Responded to Did not respond
+     *  for Passing object.
      *  @return file (its name, or null when there is none), marks (cell to automatic, reviewed, reason, note, time, roi,
      *  carriedFrom, by) and problem: '' or why the file is not applied, in which case marks is empty */
     static Map read(File dir,Map measurement) {
@@ -5392,7 +5389,8 @@ class CalciumReview {
             Map calls=scored(dir);String hash=digest(dir);Map marks=new LinkedHashMap()
             for(List line in rows.drop(1)) {
                 Map row=[columns,line].transpose().collectEntries{it}
-                String by=row.Marked_by?row.Marked_by as String:'manual'
+                // only a file without the column reads as manual: in one with it, an empty or missing Marked_by does not match
+                String by=columns==HEADER_BEFORE?'manual':''+row.Marked_by
                 if(row.Analysis!=dir.name)return none+[file:source.name,problem:unused+' is for another analysis, so its marks are not used.']
                 if(row.Responder_calls_sha256!=hash||marks.containsKey(row.Cell)||row.Automatic_call!=calls[row.Cell]||refused(row.Cell as String,row.Reviewed_call,row.Reason,row.Note,calls,row.Cell as String)!=null||
                    !(by in BY)||(by=='automatic'&&!(row.Automatic_call=='Responded'&&row.Reason==AUTOMATIC_REASON)))
@@ -5492,9 +5490,11 @@ class CalciumReview {
      *  one: Did not respond, reason Passing object, no note, marked automatic. Saved like any mark (write), with its percent
      *  table or not at all. None while the review file does not match its analysis.
      *  @param checked what CalciumCallChecks.run gave  @param on whether the option is on
+     *  @param said the carry-over's sentence of this run (carry), which the finish message gives after this one: when it
+     *         already ends with what to do about a file that cannot be written, that is not said twice
      *  @return null when the option is off; else folder (the analysis), cells (the cells marked), names (as the page shows
      *          them) and text, the sentence for the finish message: '' when no cell was marked */
-    static Map automatic(File dir,Map measurement,Map checked,boolean on,File log=null) {
+    static Map automatic(File dir,Map measurement,Map checked,boolean on,File log=null,String said=null) {
         if(!on)return null
         String none='No automatic mark was made'
         try {
@@ -5514,7 +5514,7 @@ class CalciumReview {
         }catch(Throwable problem){
             CalciumCallChecks.logProblem(log,'the automatic marks',problem)
             boolean locked=problem instanceof IOException&&problem.message?.startsWith('Close ')
-            return [folder:dir.name,cells:[],names:[],text:none+(locked?'. '+problem.message:': the marks could not be saved for this analysis.')]
+            return [folder:dir.name,cells:[],names:[],text:none+(locked?(said?.endsWith(problem.message)?'.':'. '+problem.message):': the marks could not be saved for this analysis.')]
         }
     }
     /** What follows the engine at the end of every analysis, on the Step 4 page and in the Fiji window alike: the checks on the
@@ -5524,7 +5524,7 @@ class CalciumReview {
     static Map afterAnalysis(File dir,Map withRecording,Map measurement,boolean automaticMarks,File log=null) {
         Map checked=CalciumCallChecks.run(dir,withRecording,log)
         Map carried=carry(dir,measurement,log)
-        Map marked=automatic(dir,measurement,checked,automaticMarks,log)
+        Map marked=automatic(dir,measurement,checked,automaticMarks,log,carried?.text as String)
         [checked:checked,carried:carried,marked:marked]
     }
     /** The finish message's part about the automatic marks: '' when none was made and nothing was refused. */

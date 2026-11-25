@@ -93,8 +93,11 @@ has no such files: measure it again to have it checked. Without the field moveme
 is made, and the message says that a moving field is not told from an object.
 
 A cell that is not checked says why in the column Not_checked_because, for example "no peak time"
-or "no ring around the cell". Once the engine has finished, the analysis can no longer be
-cancelled: the checks run to the end. On the page Cancel is then grayed out.
+or "no ring around the cell". The last column, QC_flags, holds the codes of the row's flags,
+POSSIBLE_PASSING_OBJECT, RISE_ON_EDGE, FIELD_MOVED and SHORT_SEPARATE_CROSSINGS, joined with "; ",
+and is empty without a flag. A table saved by 2026.11.24.1 has no such column and still reads.
+Once the engine has finished, the analysis can no longer be cancelled: the checks run to the end.
+On the page Cancel is then grayed out.
 
 What the check cannot see:
   - It looks only at the largest rise of each cell. An object that makes the call while the
@@ -157,9 +160,13 @@ and counted by the plugin.
 
   Where       ..._reviewed_calls_<analysis>.csv beside the percent table, one row per mark: the
               cell, the automatic call, the reviewed call, the reason, the note, the time to the
-              second and, for a mark carried over, the analysis it was made in. The file is there
-              only while there is at least one mark. The engine's responder_calls.csv and the
-              analysis folder are never changed.
+              second, for a mark carried over the analysis it was made in, and last Marked_by,
+              manual for a mark set by hand. The file is there only while there is at least one
+              mark. The engine's responder_calls.csv and the analysis folder are never changed.
+              A review file saved by 2026.11.24.1 has no Marked_by and reads as marks set by hand.
+  Versions    2026.11.24.1 and earlier cannot read the checks table or the review file of an
+              analysis made with this version: there it shows no flags, and its marks are not
+              used and cannot be changed. Review it with this version or a later one.
   Counted     % responding is given before and after review, for all cells, the cells chosen
               blind, those added later, those carried over and the quiet cells, with and without
               the cells below zero.

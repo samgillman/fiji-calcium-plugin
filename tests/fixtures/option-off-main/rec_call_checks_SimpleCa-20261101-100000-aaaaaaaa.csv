@@ -1,0 +1,9 @@
+Cell,Call,Flag,Rule,Event_first_frame,Event_last_frame,Detail,Near_ring_sectors_usable,Area_pixels,Ring_measured,Field_movement_measured,Passing_object_check,Not_checked_because,Crossings,Longest_crossing_samples
+Cell_00000000000000000000000000000001,Responded,,,,,,,,no,no,not checked,no peak time,,
+Cell_00000000000000000000000000000002,Responded,,,,,,,,no,no,not checked,no peak time,,
+Cell_00000000000000000000000000000003,Did not respond,,,,,,,,no,no,not checked,no peak time,,
+Cell_00000000000000000000000000000004,Did not respond,,,,,,,,no,no,not checked,no peak time,,
+Cell_00000000000000000000000000000005,Responded,,,,,,,,no,no,not checked,no peak time,,
+Cell_00000000000000000000000000000006,Excluded,,,,,,,,no,no,not checked,no call,,
+Cell_00000000000000000000000000000007,Unscorable,,,,,,,,no,no,not checked,no call,,
+Cell_00000000000000000000000000000008,Did not respond,,,,,,,,no,no,not checked,no peak time,,

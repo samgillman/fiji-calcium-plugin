@@ -290,6 +290,31 @@ page.session.busy=false
 println 'PASS: cancel stops the engine only; the checks after it are not cancelled halfway'
 page.server.stop()
 
+// ---- with the option off and no ring files every saved file is the one main writes, apart from the two new last columns:
+// QC_flags in the call checks tables and Marked_by in the review files. tests/fixtures/option-off-main holds what main
+// (2026.11.24.1 with pull request 35) saved for these same steps, the time of each mark blanked, and its messages.
+folder=new File(root,'off');folder.mkdirs()
+page=open(measurement(names))
+List offSaid=[page.run(analysis('SimpleCa-20261101-100000-aaaaaaaa',cells)).state.message]
+assert page.call('api/review',[cell:id(2),call:'Did not respond',reason:'Noise'])[0]==200
+assert page.call('api/review',[cell:id(4),call:'Responded',reason:'Other',note:'slow'])[0]==200
+offSaid<<page.call('api/state')[1].message<<page.call('api/results')[1].review.methods
+def offCarried=page.run(analysis('SimpleCa-20261101-110000-bbbbbbbb',cells))
+offSaid<<offCarried.state.message<<offCarried.results.review.methods
+page.server.stop()
+File fromMain=new File('tests/fixtures/option-off-main')
+def blankTime={String text->text.replaceAll(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[-+]\d\d:\d\d/,'TIME')}
+List savedOff=(folder.listFiles().findAll{it.isFile()}*.name).sort()
+assert savedOff==(fromMain.list() as List).findAll{!(it in ['README.md','messages.txt'])}.sort() : savedOff
+savedOff.each{String name->
+    String main=new File(fromMain,name).getText('UTF-8')
+    def added={String header,String field->main.readLines().withIndex().collect{String line,int i->line+(i==0?header:field)}.join('\n')+'\n'}
+    String wanted=name.contains('_call_checks_')?added(',QC_flags',','):name.contains('_reviewed_calls_')?added(',Marked_by',',manual'):main
+    assert blankTime(new File(folder,name).getText('UTF-8'))==wanted : name
+}
+assert offSaid.join('\n')+'\n'==new File(fromMain,'messages.txt').getText('UTF-8') : offSaid
+println 'PASS: with the option off and no ring files every saved file and message is what main gives, apart from QC_flags and Marked_by'
+
 // ---- marks of 2026.11.24.1: a review file without Marked_by reads as manual marks and gets the column when next written
 def Checks=loader.loadClass('CalciumCallChecks')
 folder=new File(root,'auto');folder.mkdirs()
@@ -304,8 +329,11 @@ Review.change(dirO,autoMeasurement,[cell:id(3),call:'Did not respond',reason:'Mo
 assert Csv.read(new File(folder,reviewName(O))).collect{it[-1]}==['Marked_by','manual','manual'] && Csv.read(new File(folder,reviewName(O)))[0]==Review.HEADER : 'written again with the column'
 // a Marked_by the plugin does not write, or an automatic mark that is not one the plugin makes, does not match
 String written=new File(folder,reviewName(O)).text
-[written.replaceFirst(',manual\n',',robot\n'),written.replaceFirst(',Noise,(.*),manual\n',',Noise,$1,automatic\n')].each{String text->new File(folder,reviewName(O)).text=text
+[written.replaceFirst(',manual\n',',robot\n'),written.replaceFirst(',manual\n',',\n'),written.replaceFirst(',Noise,(.*),manual\n',',Noise,$1,automatic\n')].each{String text->new File(folder,reviewName(O)).text=text
     assert Review.read(dirO,autoMeasurement).problem=='The review file '+reviewName(O)+' does not match the calls of this analysis, so its marks are not used.' : text}
+// a row without its last field: the file cannot be read, as any file whose rows are not all as long as its header
+new File(folder,reviewName(O)).text=written.replaceFirst(',manual\n','\n')
+assert Review.read(dirO,autoMeasurement).problem=='The review file '+reviewName(O)+' cannot be read, so its marks are not used.'
 new File(folder,reviewName(O)).delete()
 println 'PASS: a review file without Marked_by reads as manual marks and gains the column when it is written again; a Marked_by the plugin does not write is not applied'
 
@@ -321,9 +349,9 @@ Checks.metaClass.static.run={File dir,Map m,File log->
 flagsFor[id(1)]='passes through; short separate crossings';flagsFor[id(2)]='on the edge';flagsFor[id(3)]='field moved';flagsFor[id(4)]='short separate crossings';flagsFor[id(6)]='passes through';flagsFor[id(8)]='passes through'
 page=open(autoMeasurement)
 List sent=[]
-def runWith={File made,Boolean on->
+def runWith={File made,Boolean on,Closure edit=null->
     page.session.performAnalysis={rt,input,settings,out,task->sent<<settings.draft_sha256;made}
-    Map draft=page.call('api/session')[1].draft;if(on!=null)draft.values.automatic_marks=on
+    Map draft=page.call('api/session')[1].draft;if(on!=null)draft.values.automatic_marks=on;if(edit!=null)edit(draft)
     def started=page.call('api/analyze',[draft:draft,confirmed:true]);assert started[0]==200 : started
     long end=System.nanoTime()+60000000000L;while(page.session.busy&&System.nanoTime()<end)Thread.sleep(20)
     def state=page.call('api/state')[1];assert !state.busy && state.tone=='good' : state.message
@@ -370,6 +398,7 @@ assert Csv.read(new File(folder,reviewName(Q))).drop(1).collect{[it[0],it[-1]]}=
 assert Review.methods([changed:[id(1),id(2),id(3)],rows:[[key:'all',counted:[5,6,8]]]],[marks:[(id(1)):[automatic:'Responded',reason:'Passing object',by:'automatic'],(id(2)):[automatic:'Responded',reason:'Passing object',by:'automatic'],(id(3)):[automatic:'Responded',reason:'Noise',by:'manual']]],[(id(1)):'possible passing object',(id(2)):'possible passing object'])==
     '3 of 6 cells were reclassified: 2 automatically from responder to non-responder (2 possible passing object) and 1 after manual review: 1 from responder to non-responder (noise).'
 assert Review.listed((1..7).collect{'Cell '+it})=='Cell 1, Cell 2, Cell 3, Cell 4, Cell 5 and 2 more' && Review.listed(['Cell 16','Cell 97'])=='Cell 16, Cell 97'
+assert Review.listed((1..5).collect{'Cell '+it})=='Cell 1, Cell 2, Cell 3, Cell 4, Cell 5' && Review.listed((1..6).collect{'Cell '+it})=='Cell 1, Cell 2, Cell 3, Cell 4, Cell 5 and 1 more' : 'five names are all given'
 println 'PASS: with the option off nothing changes; on, flagged responders without a mark are marked automatically, saved with the percent table, named in the finish message and counted apart in the Methods sentence; a mark removed or made by hand is manual'
 
 // ---- carried over: manual marks only; the automatic marks are made again from the new analysis's flags, and a carried
@@ -409,5 +438,21 @@ def blockedRun=runWith(dirW,true)
 assert blockedRun.state.message.contains(' No automatic mark was made. The review file '+reviewName(W)+' is for another analysis, so its marks are not used. Move it out of the folder to review this analysis again.') && reviewW.text==reviewV.text : blockedRun.state.message
 assert Review.automatic(dirV,autoMeasurement,checkedV,false)==null : 'the option off: nothing is looked at'
 println 'PASS: no automatic mark is made when the percent table cannot be written or the review file does not match, and the finish message says why in the plugin\'s words'
+
+// ---- the finish message: the automatic part right after the figures, before the noise note and the carry-over sentence;
+// when both cannot write the same file, what to do about it is said once, at the end
+def baselineSd={Map draft->draft.protocol.sd_estimator='sample_sd'}   // a protocol on the baseline SD: the message notes its noise
+String X='SimpleCa-20261102-180000-xxxxxxxx'
+def noisy=runWith(analysis(X,autoCells),true,baselineSd)
+assert noisy.state.message.endsWith(' '+figures+' Marked automatically: Cell 1, Cell 2. Noise: baseline SD, as saved. The review marks of '+W+' were not carried over: its review file does not match that analysis.') : noisy.state.message
+assert page.call('api/review',[cell:id(8),call:'Responded',reason:'Other',note:'slow'])[0]==200
+String Y='SimpleCa-20261102-190000-yyyyyyyy';File dirY=analysis(Y,autoCells);File percentY=new File(folder,percentName(Y))
+percentY.text='locked\n';assert percentY.setWritable(false)
+def twice
+try{twice=runWith(dirY,true,baselineSd)}finally{percentY.setWritable(true)}
+String close='Close '+percentName(Y)+' if it is open in another program, then try again.'
+assert twice.state.message.endsWith(' No automatic mark was made. Noise: baseline SD, as saved. The review marks of '+X+' were not carried over. '+close) : twice.state.message
+assert twice.state.message.indexOf(close)==twice.state.message.lastIndexOf(close) && !new File(folder,reviewName(Y)).exists() && twice.results.review.marks==[:]
+println 'PASS: the automatic part of the finish message comes after the figures and before the noise note and the carry-over; a file that cannot be written is named once'
 page.server.stop()
 System.exit(0)
