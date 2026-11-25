@@ -2948,6 +2948,181 @@ class CalciumAnalysisPlot extends javax.swing.JPanel {
         def turned=(java.awt.Graphics2D)g.create();try{turned.rotate(-Math.PI/2);String yl='Global ΔF/F₀';turned.drawString(yl,-(t+(int)((h+fm.stringWidth(yl))/2)),14)}finally{turned.dispose()}
     }
 }
+/** The plot of the Around the cell tab: the cell and the zones around it as the passing-object check used them
+ *  (CalciumCallChecks.aroundCell), in gray levels. Each zone the flag rests on has a colour of its own and is named in the key
+ *  by its place; every other usable near-ring sector is thin and gray under one entry. The cell's response window is a band,
+ *  as on Traces, and the frames the flag names are another. Nothing else is drawn on it; the key is the same on screen and in
+ *  around_the_cell.png. Without data the sentence that says why is shown where the plot would be. */
+class CalciumAroundPlot extends javax.swing.JPanel {
+    /** What aroundCell gave for the cell shown: why is '' when there is something to draw. null: no analysis is shown. */
+    Map data
+    /** The cell as the key on Traces names it. */
+    String cell=''
+    /** The cells of the window: the key keeps the room of the widest name, so the plot keeps its place from cell to cell. */
+    List<String> names=[]
+    /** The cell's response window, as Traces draws it: from Start_s to Effective_end_s of its call. */
+    double stimulusStart=Double.NaN,stimulusEnd=Double.NaN
+    double moment=Double.NaN; Closure seek={double t->}
+    static final String HINT='Click or drag to move through time'
+    static final String WAITING='Run the analysis to see traces'
+    /** The colour of each part a zone of the flag can be; a colour met twice for one cell gives way to a spare one. */
+    static final Map COLOURS=[before:new Color(0xD55E00),after:new Color(0x0072B2),rim:new Color(0xAA3377),ring:new Color(0xD55E00),core:new Color(0x009E73)]
+    static final List SPARE=[new Color(0xCC79A7),new Color(0xE69F00),new Color(0x56B4E9),new Color(0x882255)]
+    static final Color OTHER=new Color(0xAEB8C2),WINDOW=new Color(0xFFF0DC),FLAGGED=new Color(0xE2D6F3)
+    /** The longest names three zones of a flag can have: the key keeps room for them. */
+    static final List WIDEST=['far ring, upper right','far ring, upper right','far ring, upper right']
+    /** The bands drawn: [left, right, name], for the tooltip that names the band under the pointer. */
+    private List bandPlaces=[]
+    private java.awt.image.BufferedImage layer; private String layerKey=''
+    private int l=62,t=40,w=1,h=1; private double lo=0,hi=1
+    CalciumAroundPlot() {
+        setPreferredSize(new java.awt.Dimension(520,320)); setMinimumSize(new java.awt.Dimension(240,180)); setBackground(Color.white)
+        def mouse=new java.awt.event.MouseAdapter(){
+            void mousePressed(java.awt.event.MouseEvent e){move(e)}
+            void mouseDragged(java.awt.event.MouseEvent e){move(e)}
+            void move(java.awt.event.MouseEvent e){double[] x=times();if(x.length>1&&w>1&&javax.swing.SwingUtilities.isLeftMouseButton(e))seek.call(x[0]+Math.max(0d,Math.min(1d,(e.x-l)/(double)w))*(x[-1]-x[0]))}
+        }
+        addMouseListener(mouse);addMouseMotionListener(mouse)
+        setToolTipText(HINT)
+    }
+    /** Whether there is a plot to draw: data with times and no why. */
+    boolean drawn(){data!=null&&!data.why&&data.time instanceof double[]&&(data.time as double[]).length>1}
+    double[] times(){drawn()?data.time as double[]:new double[0]}
+    /** What is shown in place of the plot: why, or the sentence before an analysis. */
+    String sentence(){data==null?WAITING:(''+(data.why?:''))}
+    /** The band under the pointer by name, then how to move through time. */
+    String getToolTipText(java.awt.event.MouseEvent e){
+        if(!drawn())return null
+        boolean inside=e!=null&&(e.y>=t)&&(e.y<=t+h)
+        List found=inside?bandPlaces.findAll{(e.x>=(it[0] as int))&&(e.x<(it[1] as int))}.collect{it[2]}:[]
+        found?'<html>'+found.join(' · ')+'<br>'+HINT+'</html>':HINT
+    }
+    /** Call after changing what is drawn; moving the time cursor needs only repaint(). */
+    void changed(){layerKey='';repaint()}
+    /** The time between two frames, as most frames are apart. */
+    double step(){double[] x=times();if(x.length<2)return 1d;List d=(1..<x.length).collect{x[it]-x[it-1]}.sort();d[(int)(d.size()/2)] as double}
+    /** The lines under the cell, in the order they are drawn, each [colour, width, name, trace]: every other usable near-ring
+     *  sector thin and gray, then the zones the flag rests on, each in the colour of its part and named by its place. */
+    List lines() {
+        if(!drawn())return []
+        Map byZone=((data.zones?:[]) as List).collectEntries{[(it.zone as int),it]}
+        List out=[],used=[]
+        ((data.others?:[]) as List).each{def z->double[] y=byZone[z as int]?.trace as double[];if(y!=null)out<<[OTHER,0.9f,'other ring sectors',y]}
+        ((data.lines?:[]) as List).each{Map line->double[] y=byZone[line.zone as int]?.trace as double[];if(y==null)return
+            Color c=COLOURS[line.part] as Color;if(c==null||used.contains(c))c=(SPARE.find{!used.contains(it)}?:CalciumTheme.MUTED) as Color;used<<c
+            out<<[c,1.5f,''+(line.place?:CalciumCallChecks.place(line.zone as int)),y]}
+        out
+    }
+    /** The bands, [from, to, colour, name] in seconds: the cell's response window as on Traces, then the frames the flag names,
+     *  from half a frame before the first to half a frame after the last. */
+    List bands() {
+        double[] x=times();List out=[];if(x.length<2)return out
+        if(Double.isFinite(stimulusStart)&&Double.isFinite(stimulusEnd)&&Math.max(stimulusStart,x[0])<Math.min(stimulusEnd,x[-1]))out<<[stimulusStart,stimulusEnd,WINDOW,'response window']
+        List band=data.band instanceof List?data.band as List:null
+        if(band!=null&&band.size()==2&&band.every{it instanceof Number}){int a=band[0] as int,b=band[1] as int;double half=step()/2d
+            if(a>=1&&b>=a&&b<=x.length)out<<[x[a-1]-half,x[b-1]+half,FLAGGED,'flagged frames']}
+        out
+    }
+    /** The key, in the order it is drawn: the cell, the zones of the flag, the other ring sectors, then the bands. */
+    List entries(List shown) {
+        List key=[[CalciumTheme.INK,1.7f,cell,'line']]
+        shown.findAll{it[2]!='other ring sectors'}.each{key<<[it[0],it[1],it[2],'line']}
+        if(shown.any{it[2]=='other ring sectors'})key<<[OTHER,0.9f,'other ring sectors','line']
+        bands().each{key<<[it[2],0f,it[3],'box']}
+        key
+    }
+    int X(double v){double[] x=times();l+(int)Math.round((v-x[0])/(x[-1]-x[0])*w)}
+    int Y(double v){t+(int)Math.round((hi-v)/(hi-lo)*h)}
+    protected void paintComponent(java.awt.Graphics graphics) {
+        super.paintComponent(graphics)
+        def g=(java.awt.Graphics2D)graphics.create()
+        try {
+            if(!drawn()){still(g);return}
+            // everything but the time cursor is drawn once into a picture and reused, so dragging through time stays smooth
+            double scale=Math.max(1d,g.getTransform().getScaleX())
+            String key=getWidth()+'x'+getHeight()+'@'+scale
+            if(layer==null||layerKey!=key) {
+                layer=new java.awt.image.BufferedImage((int)Math.ceil(getWidth()*scale),(int)Math.ceil(getHeight()*scale),java.awt.image.BufferedImage.TYPE_INT_RGB)
+                def lg=layer.createGraphics();try{lg.scale(scale,scale);lg.setColor(Color.white);lg.fillRect(0,0,getWidth(),getHeight());still(lg)}finally{lg.dispose()}
+                layerKey=key
+            }
+            g.drawImage(layer,0,0,getWidth(),getHeight(),null)
+            double[] x=times()
+            if(Double.isFinite(moment)&&moment>=x[0]&&moment<=x[-1]) {
+                CalciumTheme.smooth(g);g.setFont(CalciumTheme.font(java.awt.Font.PLAIN,-1f));def fm=g.getFontMetrics()
+                int cx=X(moment);g.setColor(new Color(31,41,51,200));g.setStroke(new java.awt.BasicStroke(1.2f));g.drawLine(cx,t,cx,t+h)
+                int i=0;double best=Double.MAX_VALUE;for(int k=0;k<x.length;k++){double d=Math.abs(x[k]-moment);if(d<best){best=d;i=k}}
+                String s=String.format(Locale.US,'%.1f s',x[i]);double[] rise=data.rise instanceof double[]?data.rise as double[]:new double[0]
+                if(i<rise.length&&Double.isFinite(rise[i])){int y=Math.max(t,Math.min(t+h,Y(rise[i])));g.setColor(Color.white);g.fillOval(cx-5,y-5,10,10);g.setColor(CalciumTheme.INK);g.fillOval(cx-3,y-3,7,7)
+                    s+=String.format(Locale.US,' · %s %.1f',cell,rise[i])}
+                int sw=fm.stringWidth(s)+10,sx=Math.max(l,Math.min(l+w-sw,cx-(int)(sw/2)))
+                g.setColor(CalciumTheme.INK);g.fillRoundRect(sx,t+h-fm.getHeight()-6,sw,fm.getHeight()+4,8,8);g.setColor(Color.white);g.drawString(s,sx+5,t+h-8)
+            }
+        } finally {g.dispose()}
+    }
+    /** Words in lines that fit a width. */
+    static List wrapped(String text,java.awt.FontMetrics fm,int width) {
+        List out=[];String line=''
+        (text?:'').split(' ').each{String word->String next=line?line+' '+word:word;if(line&&fm.stringWidth(next)>width){out<<line;line=word}else line=next}
+        if(line)out<<line;out
+    }
+    /** Bands, grid, the other ring sectors, the zones of the flag, the cell, the key and the axis names; without data, why. */
+    void still(java.awt.Graphics2D g) {
+        CalciumTheme.smooth(g); g.setFont(CalciumTheme.font(java.awt.Font.PLAIN,-1f)); def fm=g.getFontMetrics()
+        if(!drawn()) {
+            bandPlaces=[];g.setColor(CalciumTheme.MUTED)
+            List said=wrapped(sentence(),fm,Math.max(40,getWidth()-48));int top=(int)((getHeight()-said.size()*fm.getHeight())/2)+fm.getAscent()
+            said.eachWithIndex{String s,int i->g.drawString(s,(int)((getWidth()-fm.stringWidth(s))/2),top+i*fm.getHeight())}
+            return
+        }
+        double[] x=times(),rise=data.rise instanceof double[]?data.rise as double[]:new double[0]
+        l=62;w=Math.max(1,getWidth()-l-18)
+        List shown=lines(),entries=entries(shown)
+        // the key above the plot, laid from the frame's left edge across its width; it keeps the room of the most it can hold
+        // (the widest cell name, three zones with the longest names, the other ring sectors and both bands), so the plot keeps
+        // its place from cell to cell
+        def laid={List list->int line=0,run=0;def places=[];list.each{entry->int need=21+fm.stringWidth(entry[2] as String)+14;if(run>0&&run+need>w){line++;run=0};places<<[run,line];run+=need};[places,line]}
+        def (places,lines)=laid(entries)
+        String widest=((names?:[])+[cell]).max{fm.stringWidth((it?:'') as String)}?:''
+        int most=laid([[null,0f,widest]]+WIDEST.collect{[null,0f,it]}+[[null,0f,'other ring sectors'],[null,0f,'response window'],[null,0f,'flagged frames']])[1] as int
+        t=30+16*(Math.max(lines as int,most)+1);h=Math.max(1,getHeight()-t-46)
+        List values=[0d];([rise]+shown.collect{it[3]}).each{double[] y->for(double v:y)if(Double.isFinite(v))values<<v}
+        lo=values.min() as double;hi=values.max() as double
+        if(hi-lo<0.001)hi=lo+1
+        double pad=(hi-lo)*0.08;lo-=pad;hi+=pad
+        double t0=x[0],t1=x[-1]
+        // the bands are named in the key, not on the plot; the tooltip names the one under the pointer in the same words
+        List drawnBands=[]
+        bands().each{band->int x0=Math.max(l,X(band[0] as double)),x1=Math.min(l+w,X(band[1] as double))
+            if(x1>x0){g.setColor(band[2] as Color);g.fillRect(x0,t,x1-x0,h);drawnBands<<[x0,x1,band[3]]}}
+        bandPlaces=drawnBands
+        def yTicks=CalciumTheme.ticks(lo,hi,5); double yStep=yTicks.size()>1?yTicks[1]-yTicks[0]:1d
+        yTicks.each { double v -> int y=Y(v);g.setColor(v==0d?new Color(0xAEB8C2):CalciumTheme.LINE);g.drawLine(l,y,l+w,y)
+            String s=CalciumTheme.tick(v,yStep);g.setColor(CalciumTheme.MUTED);g.drawString(s,l-8-fm.stringWidth(s),y+(int)(fm.getAscent()/2)-1) }
+        def xTicks=CalciumTheme.ticks(t0,t1,Math.max(2,(int)(w/90))); double xStep=xTicks.size()>1?xTicks[1]-xTicks[0]:1d
+        xTicks.each { double v -> int px=X(v);g.setColor(CalciumTheme.LINE);g.drawLine(px,t+h,px,t+h+4)
+            String s=CalciumTheme.tick(v,xStep);g.setColor(CalciumTheme.MUTED);g.drawString(s,px-(int)(fm.stringWidth(s)/2),t+h+6+fm.getAscent()) }
+        g.setColor(new Color(0xC5CED8));g.drawRect(l,t,w,h)
+        def clip=g.getClip();g.clipRect(l,t,w+1,h+1)
+        // a line breaks where the frames are further apart than one and a half times as most are
+        double gap=1.5d*step()
+        def path={double[] y->def p=new java.awt.geom.Path2D.Double();boolean pen=false
+            for(int i=0;i<Math.min(x.length,y.length);i++){if(i>0&&x[i]-x[i-1]>gap)pen=false;if(Double.isFinite(y[i])){double px=l+(x[i]-t0)/(t1-t0)*w,py=t+(hi-y[i])/(hi-lo)*h;if(pen)p.lineTo(px,py) else p.moveTo(px,py);pen=true} else pen=false};p}
+        def round={float width->new java.awt.BasicStroke(width,java.awt.BasicStroke.CAP_ROUND,java.awt.BasicStroke.JOIN_ROUND)}
+        shown.findAll{it[2]=='other ring sectors'}.each{g.setColor(it[0] as Color);g.setStroke(round(it[1] as float));g.draw(path(it[3] as double[]))}
+        shown.findAll{it[2]!='other ring sectors'}.each{g.setColor(Color.white);g.setStroke(round(3.2f));g.draw(path(it[3] as double[]));g.setColor(it[0] as Color);g.setStroke(round(it[1] as float));g.draw(path(it[3] as double[]))}
+        if(rise.length>0){g.setColor(Color.white);g.setStroke(round(3.6f));g.draw(path(rise));g.setColor(CalciumTheme.INK);g.setStroke(round(1.7f));g.draw(path(rise))}
+        g.setClip(clip);g.setStroke(new java.awt.BasicStroke(1f))
+        // the key: a line for a line, a filled box for a band; a name longer than the key's width is cut short with …
+        entries.eachWithIndex{entry,int i->int kx=l+(places[i][0] as int),ky=20+16*(places[i][1] as int);String text=CalciumTheme.fit(entry[2] as String,fm,w-21)
+            g.setColor(entry[0] as Color)
+            if(entry[3]=='box'){g.fillRect(kx,ky-5,16,10);g.setColor(new Color(0xC5CED8));g.drawRect(kx,ky-5,16,10)}
+            else{g.setStroke(new java.awt.BasicStroke(entry[1] as float));g.drawLine(kx,ky,kx+16,ky)}
+            g.setStroke(new java.awt.BasicStroke(1f));g.setColor(CalciumTheme.INK);g.drawString(text,kx+21,ky+4)}
+        g.setColor(CalciumTheme.MUTED);String xl='Time (s)';g.drawString(xl,l+(int)((w-fm.stringWidth(xl))/2),getHeight()-8)
+        def turned=(java.awt.Graphics2D)g.create();try{turned.rotate(-Math.PI/2);String yl='ΔF (gray levels)';turned.drawString(yl,-(t+(int)((h+fm.stringWidth(yl))/2)),14)}finally{turned.dispose()}
+    }
+}
 class CalciumAnalysisHeatmap extends javax.swing.JPanel {
     static final int TOP=46, BOTTOM=26, LEFT=78, ROW=15
     double[][] traces=[]; List<String> names=[]; Closure choose={int i->}; double[] time=[]
@@ -3375,12 +3550,33 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
     def progress=new javax.swing.JProgressBar(0,100)
     def confirmed=new javax.swing.JCheckBox('I checked the timing, baseline windows and cell selection',false)
     def kcl=new javax.swing.JCheckBox('Include a positive control',false)
+    /** At the end of each analysis, a flagged responder is marked as not responding (CalciumReview.automatic). Not part of the
+     *  protocol: the engine never sees it. */
+    def automaticBox=new javax.swing.JCheckBox('Mark possible passing objects as not responders',false)
+    static final String AUTOMATIC_TIP='After each analysis, a responder flagged as a possible passing object or as a rise on the edge is marked Did not respond, with the reason Passing object. A mark can be removed.'
     def cells=new javax.swing.JComboBox<String>()
     def stimuli=new javax.swing.JComboBox<String>()
     def group=new javax.swing.JComboBox<String>(['All cells'] as String[])
     def allTraces=new javax.swing.JCheckBox('Every trace',true)
     /** The selected cell's call line; it wraps at the width of the Traces tab, so a marked cell's line is read whole. */
     def cellStatus=new CalciumText(' ',CalciumTheme.MUTED).with{lines=1;it}
+    /** The Around the cell tab: the call line and the flags of the cell selected on Traces (showCall, fillFlags), and under them
+     *  the plot of what the passing-object check used around it. */
+    def aroundStatus=new CalciumText(' ',CalciumTheme.MUTED).with{lines=1;it}
+    def aroundFlags=CalciumTheme.row(),aroundBox=new javax.swing.JPanel()
+    def aroundPlot=new CalciumAroundPlot()
+    /** Under the call line and the flags of the Around the cell tab: what they leave of the room kept for them (aroundKept), so
+     *  the plot keeps its place from cell to cell. */
+    def aroundRoom=new CalciumRoom({->results==null?0:aroundKept()-([aroundStatus,aroundFlags].findAll{it.visible}.collect{(int)it.preferredSize.height}.sum(0) as int)})
+    /** What is shown around the cells of the analysis shown (CalciumCallChecks.aroundContext), read once for it, off the event
+     *  thread; aroundFolder is the analysis it was read for. null while it is read. */
+    volatile Map aroundContext; volatile String aroundFolder
+    /** The reads asked for: one that ends after another was asked for is not used. */
+    int aroundAsked=0
+    /** Runs a read of aroundContext, off the event thread (a test can run it at once). */
+    Closure aroundLater={Closure read->Thread.startDaemon('Around the cell'){read.call()}}
+    /** What is shown around one cell (CalciumCallChecks.aroundCell), with the window's own checks. */
+    Closure aroundOf={Map context,String cell->CalciumCallChecks.aroundCell(context,checks,cell)}
     def heatmapOrder=new javax.swing.JComboBox<String>(['Responders first, strongest on top','As measured (original ROI order)'] as String[])
     def plot=new CalciumAnalysisPlot()
     def heatmap=new CalciumAnalysisHeatmap()
@@ -3410,6 +3606,9 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
     /** What the checks of the calls gave for the last analysis run here: folder and found (CalciumCallChecks.run). Kept, as the
      *  Step 4 page keeps it, because a run that could not check the calls saves no table and its note would be lost. */
     volatile Map checkedRun
+    /** The automatic marks the last analysis run here made (CalciumReview.automatic): folder, cells, names and the finish
+     *  message's part; null when the option was off. */
+    volatile Map markedRun
     /** The checks of the analysis shown, as the Step 4 page is given them (CalciumCallChecks.answer); null when there are none. */
     Map checks
     /** The automatic call of every cell for the primary stimulus (CalciumReview.scored). */
@@ -3438,8 +3637,10 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
     boolean enterTaken=false
     /** Whether the Reason list is open; a window that is never shown (in a test) can say it is. */
     Closure listOpen={->reasonBox.popupVisible}
-    /** The reason already chosen when the form opens on a flagged responder, by the rule of its flag. */
-    static final Map REASON_OF_RULE=['passes through':'Passing object','on the edge':'Passing object','field moved':'Movement','short separate crossings':'Noise']
+    /** The reason already chosen when the form opens on a flagged responder, by the code of its flag. */
+    static final Map REASON_OF_CODE=[POSSIBLE_PASSING_OBJECT:'Passing object',RISE_ON_EDGE:'Passing object',FIELD_MOVED:'Movement',SHORT_SEPARATE_CROSSINGS:'Noise']
+    /** How the engine joins the codes in QC_flags of Cell quality and of the whole-recording metrics. */
+    static final String QUALITY_JOIN=';'
     /** The last entry of the Show list while the primary stimulus has marks: the cells with a mark. */
     static final int MARKED=4
     // the movie beside the traces
@@ -3527,9 +3728,11 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         metadata.body.add(row(CalciumTheme.label('Condition / group'),condition,CalciumTheme.label('Biological unit'),unit))
         metadata.body.add(CalciumTheme.label('A biological unit is an independent culture, animal or preparation; cells and fields are not replicates.',CalciumTheme.MUTED))
         metadata.body.add(timingNote);config.add(metadata);config.add(javax.swing.Box.createVerticalStrut(8))
+        def marksCard=new CalciumCard('','Review marks',false);automaticBox.toolTipText=AUTOMATIC_TIP
+        marksCard.body.add(row(automaticBox));config.add(marksCard);config.add(javax.swing.Box.createVerticalStrut(8))
         def diagnosticCard=new CalciumCard('','Optional diagnostics',true)
         diagnosticCard.body.add(row(sensitivityButton,diagnosticButton));diagnosticCard.body.add(row(clearDiagnosticsButton,templateButton));diagnosticCard.body.add(diagnosticNote);config.add(diagnosticCard)
-        [confirmed,kcl].each{CalciumTheme.plain(it)};confirmed.text='<html>I checked the timing and baselines<br>and reviewed cell selection</html>'
+        [confirmed,kcl,automaticBox].each{CalciumTheme.plain(it)};confirmed.text='<html>I checked the timing and baselines<br>and reviewed cell selection</html>'
         [status,appliedNote].each{it.editable=false;it.lineWrap=true;it.wrapStyleWord=true;it.opaque=false;it.focusable=false;it.border=null;it.font=CalciumTheme.font();it.foreground=CalciumTheme.INK;it.alignmentX=0f;it.maximumSize=new java.awt.Dimension(Integer.MAX_VALUE,(int)it.preferredSize.height)}
         progress.setStringPainted(true);progress.alignmentX=0f;progress.maximumSize=new java.awt.Dimension(Integer.MAX_VALUE,24)
         def side=new javax.swing.JPanel();side.layout=new javax.swing.BoxLayout(side,javax.swing.BoxLayout.Y_AXIS);side.opaque=false;side.preferredSize=new java.awt.Dimension(305,640)
@@ -3581,11 +3784,17 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         timeLabel.setPreferredSize(new java.awt.Dimension(170,(int)timeLabel.getPreferredSize().height))
         timeRow.add(playButton,java.awt.BorderLayout.WEST);timeRow.add(slider);timeRow.add(timeLabel,java.awt.BorderLayout.EAST)
         tracePanel.add(timeRow,java.awt.BorderLayout.SOUTH)
+        // the Around the cell tab: the call line and the flags of the cell selected on Traces, the room kept for them under
+        // them, and the plot of what the passing-object check used around the cell
+        aroundBox.setLayout(new javax.swing.BoxLayout(aroundBox,javax.swing.BoxLayout.Y_AXIS));white(aroundBox);aroundBox.setBorder(javax.swing.BorderFactory.createEmptyBorder(8,8,6,8))
+        [aroundStatus,aroundFlags,aroundRoom].each{aroundBox.add(it)}
+        def aroundPanel=new javax.swing.JPanel(new java.awt.BorderLayout());aroundPanel.setBackground(Color.white);aroundPanel.add(aroundBox,java.awt.BorderLayout.NORTH);aroundPanel.add(aroundPlot)
+        aroundPlot.names=((measurement.names?:[]) as List).collect{''+it}
         tabs.setFont(CalciumTheme.font())
         def heatmapPanel=new javax.swing.JPanel(new java.awt.BorderLayout());heatmapPanel.setBackground(Color.white)
         heatmapPanel.add(white(row(CalciumTheme.label('Order'),heatmapOrder,CalciumTheme.label('strip on the left: response call · click a row to see that cell',CalciumTheme.MUTED,java.awt.Font.PLAIN,-1f))),java.awt.BorderLayout.NORTH)
         def heatmapScroll=new javax.swing.JScrollPane(heatmap);heatmapScroll.setBorder(null);heatmapScroll.getVerticalScrollBar().setUnitIncrement(CalciumAnalysisHeatmap.ROW*3);heatmapPanel.add(heatmapScroll)
-        tabs.addTab('Protocol',new javax.swing.JScrollPane(config));tabs.addTab('Traces',tracePanel);tabs.addTab('Heatmap',heatmapPanel)
+        tabs.addTab('Protocol',new javax.swing.JScrollPane(config));tabs.addTab('Traces',tracePanel);tabs.addTab('Around the cell',aroundPanel);tabs.addTab('Heatmap',heatmapPanel)
         def tables=['Whole-recording metrics':metrics,'Cell quality':qc,'ROI registry':registry,'Cell response calls':calls,'Responder counts':counts,'Stimulus-window metrics':windowMetrics,'Biological-unit summaries':replicates,'Sensitivity (diagnostic)':sensitivity,'Negative controls (diagnostic)':diagnostics]
         tables.each{title,table->table.autoResizeMode=javax.swing.JTable.AUTO_RESIZE_OFF;table.autoCreateRowSorter=true;table.selectionMode=javax.swing.ListSelectionModel.SINGLE_SELECTION;table.font=CalciumTheme.font(java.awt.Font.PLAIN,-1f);table.rowHeight=22;table.gridColor=CalciumTheme.LINE;table.tableHeader.font=CalciumTheme.font(java.awt.Font.BOLD,-1f);tabs.addTab(title,new javax.swing.JScrollPane(table))}
         def main=new javax.swing.JPanel(new java.awt.BorderLayout(0,10));main.opaque=false;main.add(stats,java.awt.BorderLayout.NORTH);main.add(tabs);main.add(row(folderButton,savePlots,settingsButton,CalciumTheme.label('Cell N is not biological replicate N.',CalciumTheme.MUTED,java.awt.Font.PLAIN,-1f)),java.awt.BorderLayout.SOUTH);root.add(main)
@@ -3609,6 +3818,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         clearOverridesButton.addActionListener({fieldOverrides=[];updateOverrideNote();changed()} as java.awt.event.ActionListener)
         templateButton.addActionListener({saveDiagnosticTemplates()} as java.awt.event.ActionListener)
         preset.addActionListener({applyPreset()} as java.awt.event.ActionListener);validation.addActionListener({changed()} as java.awt.event.ActionListener)
+        automaticBox.addActionListener({changed()} as java.awt.event.ActionListener)
         kcl.addActionListener({if(!loading){if(kcl.selected&&windowModel.rowCount==1){Map primary=windowRows()[0];double baseEnd=(primary.End_s as double)+(primary.Baseline_end_s as double)-(primary.Baseline_start_s as double)+1d;Map control=CalciumResponseProtocol.window('Control','KCl',primary.End_s as double,baseEnd,baseEnd+10d);if(preset.selectedIndex==2)control.Duration_mode='samples';addWindow(control)};if(!kcl.selected&&windowModel.rowCount>1)windowModel.removeRow(1);changed()}} as java.awt.event.ActionListener)
         fields.values().each{field->field.document.addDocumentListener([insertUpdate:{e->changed()},removeUpdate:{e->changed()},changedUpdate:{e->changed()}] as javax.swing.event.DocumentListener)}
         windowModel.addTableModelListener({e->if(!loading&&!busy){if(preset.selectedIndex==2&&e.column==CalciumResponseProtocol.COLUMNS.indexOf('Start_s')&&e.firstRow>=0){loading=true;def start=windowModel.getValueAt(e.firstRow,e.column);windowModel.setValueAt(start,e.firstRow,3);windowModel.setValueAt(start,e.firstRow,4);loading=false};if(preset.selectedIndex==0){loading=true;preset.selectedIndex=1;validation.selectedItem='user_defined';loading=false};windowTable.repaint();changed()}} as javax.swing.event.TableModelListener)
@@ -3634,6 +3844,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         } as javax.swing.event.ListSelectionListener)}
         // time: the slider, the plot and the Play button all move the same time cursor
         plot.seek={double t->stopPlaying();if(plot.time.length>1){int best=0;double gap=Double.MAX_VALUE;plot.time.eachWithIndex{double v,int i->double d=Math.abs(v-t);if(d<gap){gap=d;best=i}};showFrame(best+1)}}
+        aroundPlot.seek={double t->plot.seek.call(t)}
         slider.addChangeListener({e->if(slider.getValue()!=frame){stopPlaying();showFrame(slider.getValue())}} as javax.swing.event.ChangeListener)
         player=new javax.swing.Timer(50,{e->if(frame>=slider.getMaximum())stopPlaying() else showFrame(frame+1)} as java.awt.event.ActionListener)
         playButton.toolTipText='Display playback at 20 frames/s; cursor positions use the recording timestamps.'
@@ -3665,7 +3876,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
             if(owner instanceof javax.swing.AbstractButton&&owner.parent==markRow)(owner as javax.swing.AbstractButton).doClick() else if(formCell!=null&&saveMark.enabled)saveReviewMark()} as java.awt.event.ActionListener,
             javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ENTER,0,true),javax.swing.JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
         markRow.registerKeyboardAction({e->if(formCell!=null)closeForm()} as java.awt.event.ActionListener,javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE,0),javax.swing.JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
-        flagRow.visible=false;markRow.visible=false;closeForm()
+        flagRow.visible=false;aroundFlags.visible=false;markRow.visible=false;closeForm()
         clock=new javax.swing.Timer(500,{e->if(busy)status.text=stage+' · '+(long)((System.currentTimeMillis()-started)/1000)+' s elapsed'} as java.awt.event.ActionListener)
         addWindowListener(new java.awt.event.WindowAdapter(){void windowClosed(java.awt.event.WindowEvent e){closed=true;job?.cancel();clock.stop();player?.stop();inputWatch?.stop();(measurement.picture as ImagePlus)?.close()}})
         inputWatch=new javax.swing.Timer(1500,{e->if(!busy&&!closed&&results!=null&&(timestampsFile||sensitivityFile||diagnosticFile))changed()} as java.awt.event.ActionListener);inputWatch.start()
@@ -3691,7 +3902,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         frame=Math.max(1,Math.min(slider.getMaximum(),wanted))
         if(slider.getValue()!=frame)slider.setValue(frame)
         double t=frame<=plot.time.length?plot.time[frame-1]:Double.NaN
-        plot.moment=t;plot.repaint()
+        plot.moment=t;plot.repaint();aroundPlot.moment=t;aroundPlot.repaint()
         timeLabel.setText((Double.isFinite(t)?String.format(Locale.US,'%.1f s · ',t):'')+'frame '+frame+' of '+slider.getMaximum())
         int mode=view.getSelectedIndex()
         // The recording's window was closed in Fiji: its frames are gone. The same recording opened again is taken instead.
@@ -3726,7 +3937,11 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
     void stopEditing(){if(windowTable.isEditing()&&!windowTable.cellEditor.stopCellEditing())throw new IllegalArgumentException('Finish the window setting edit first.')}
     Map protocol(){stopEditing();CalciumResponseProtocol.payload(windowRows(),preset.selectedIndex==2?1:2,fields.protocol_name.text.trim(),validation.selectedItem as String,fieldOverrides,estimator)}
     Map fileSignature(File file,String loaded){if(file==null)return null;String current;try{current=file.isFile()?CalciumInstaller.digest(file.bytes):'missing'}catch(Throwable ignored){current='unreadable'};[path:file.absolutePath,loaded_sha256:loaded,current_sha256:current]}
-    String fingerprint(){groovy.json.JsonOutput.toJson([fields:fields.collectEntries{k,v->[k,v.text]},windows:windowRows(),preset:preset.selectedIndex,validation:validation.selectedItem,estimator:estimator,overrides:fieldOverrides,timestamps:fileSignature(timestampsFile,timestampsHash),sensitivity:fileSignature(sensitivityFile,sensitivityHash),diagnostic:fileSignature(diagnosticFile,diagnosticHash)])}
+    /** The settings as they are now, to tell whether they changed since the analysis shown. The automatic marks are in it only
+     *  when they are on, so it is as before while they are off. */
+    String fingerprint(){Map now=[fields:fields.collectEntries{k,v->[k,v.text]},windows:windowRows(),preset:preset.selectedIndex,validation:validation.selectedItem,estimator:estimator,overrides:fieldOverrides,timestamps:fileSignature(timestampsFile,timestampsHash),sensitivity:fileSignature(sensitivityFile,sensitivityHash),diagnostic:fileSignature(diagnosticFile,diagnosticHash)]
+        if(automaticBox.selected)now[CalciumAnalysisSettings.AUTOMATIC_MARKS]=true
+        groovy.json.JsonOutput.toJson(now)}
     void changed(){if(loading||busy)return;if(results==null){updatePreviewTiming();return};if(results!=null){boolean dirty=fingerprint()!=appliedFingerprint;appliedNote.text=dirty?'Settings changed — rerun to apply. Display and plot export still show the completed run.':'Displayed results match the applied settings.';appliedNote.foreground=dirty?new Color(155,75,0):new Color(20,95,45)}}
     void applyPreset(){if(loading)return;loading=true
         boolean legacy=preset.selectedIndex==2
@@ -3754,7 +3969,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         busy=true;started=System.currentTimeMillis();stage=installing?'Preparing R setup':'Preparing analysis'
         setup.enabled=false;runButton.enabled=false;cancelButton.enabled=true;progress.value=0;progress.indeterminate=installing
         closeForm();showReview(cells.selectedItem as String)   // no mark is set or removed while an analysis runs
-        fields.values().each{it.enabled=false};windowTable.enabled=false;[confirmed,kcl,preset,validation,loadProtocolButton,saveProtocolButton,loadTimesButton,clearTimesButton,sensitivityButton,diagnosticButton,clearDiagnosticsButton,templateButton,overrideButton,clearOverridesButton].each{it.enabled=false};savePlots.enabled=false
+        fields.values().each{it.enabled=false};windowTable.enabled=false;[confirmed,kcl,automaticBox,preset,validation,loadProtocolButton,saveProtocolButton,loadTimesButton,clearTimesButton,sensitivityButton,diagnosticButton,clearDiagnosticsButton,templateButton,overrideButton,clearOverridesButton].each{it.enabled=false};savePlots.enabled=false
         job=new CalciumLocalJob(logFile:new File(runtime.home,installing?'setup.log':'analysis.log'))
         job.progress={int p,String message->javax.swing.SwingUtilities.invokeLater{if(!closed){progress.value=p;progress.setString(p+'% · '+message);stage=message;logButton.enabled=job.logFile.isFile()}}}
         clock.start()
@@ -3766,7 +3981,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
                 busy=false;clock.stop();if(closed)return
                 showReview(cells.selectedItem as String)
                 progress.indeterminate=false;cancelButton.enabled=false;setup.enabled=true;runButton.enabled=true;fields.values().each{it.enabled=true};fields.sampling_hz.enabled=timestampsFile==null;windowTable.enabled=true
-                [confirmed,kcl,preset,validation,loadProtocolButton,saveProtocolButton,loadTimesButton,clearTimesButton,sensitivityButton,diagnosticButton,clearDiagnosticsButton,templateButton,overrideButton,clearOverridesButton].each{it.enabled=true};logButton.enabled=job.logFile.isFile();savePlots.enabled=results!=null;updateDiagnosticAvailability()
+                [confirmed,kcl,automaticBox,preset,validation,loadProtocolButton,saveProtocolButton,loadTimesButton,clearTimesButton,sensitivityButton,diagnosticButton,clearDiagnosticsButton,templateButton,overrideButton,clearOverridesButton].each{it.enabled=true};logButton.enabled=job.logFile.isFile();savePlots.enabled=results!=null;updateDiagnosticAvailability()
                 if(failure){status.text=failure;status.foreground=CalciumTheme.INK;progress.string='Not completed';changed();return}
                 if(installing){progress.value=100;status.text='R and protocol support are ready. Check settings, then analyze.';return}
                 try{loadResults(answer);appliedFingerprint=submittedFingerprint;changed();String empty=CalciumAnalysisSettings.noEvaluableCells(answer)
@@ -3777,16 +3992,21 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         }
     }
     void beginSetup(){launch(true){task->runtime.setup(task)}}
-    void beginAnalysis(){try{Map s=settings();submittedFingerprint=fingerprint();launch(false){task->File made=performAnalysis.call(runtime,measurement.csv,s,measurement.folder,task) as File;checkedRun=[folder:made.name,found:CalciumCallChecks.run(made,withRecording(),task.logFile)];carried=CalciumReview.carry(made,measurement,task.logFile);made}}catch(Throwable t){status.text=t.message?:t.toString()}}
+    /** Runs the analysis, then what follows every analysis (CalciumReview.afterAnalysis): the checks of the calls, the carry-over
+     *  of the review marks and, with the option on, the automatic marks. The option is read here, as the run starts. */
+    void beginAnalysis(){try{Map s=settings();submittedFingerprint=fingerprint();boolean on=automaticBox.selected
+        launch(false){task->File made=performAnalysis.call(runtime,measurement.csv,s,measurement.folder,task) as File
+            Map after=CalciumReview.afterAnalysis(made,withRecording(),measurement,on,task.logFile);checkedRun=[folder:made.name,found:after.checked];carried=after.carried;markedRun=after.marked;made}}catch(Throwable t){status.text=t.message?:t.toString()}}
     /** The finish message of the last analysis run here, with the figures of the tally as they are now, so that it follows the
-     *  review marks as the Step 4 page's does; then what was carried over from an earlier analysis's review, which is said
-     *  until the next run, marks or not (as on the page); then what the checks of the calls could not do (checks.note). null
-     *  when the analysis shown was not run here. Writes nothing, and reads no traces: it takes the window's. */
+     *  review marks as the Step 4 page's does; then the cells marked automatically, or why none could be; then what was carried
+     *  over from an earlier analysis's review; both are said until the next run, marks or not (as on the page); then what the
+     *  checks of the calls could not do (checks.note). null when the analysis shown was not run here. Writes nothing, and reads
+     *  no traces: it takes the window's. */
     String finished() {
         Map parts=finish;if(parts==null||results?.name!=parts.folder)return null
         String carry=CalciumReview.note(carried?.folder==results.name?carried:null),checked=checks?.note?' '+checks.note:''
         String sentence='';if(!parts.empty)try{sentence=CalciumAnalysisSettings.percentSentence(CalciumAnalysisSettings.tally(results,measurement,traces))}catch(Throwable ignored){}   // as percentResponding: '' when the tally cannot be made
-        (parts.empty?parts.empty as String:(parts.saved as String)+sentence)+carry+checked
+        (parts.empty?parts.empty as String:(parts.saved as String)+sentence)+CalciumReview.automaticNote(markedRun?.folder==results.name?markedRun:null)+carry+checked
     }
     List<Map> table(javax.swing.JTable target,File file){
         if(!file.isFile()){target.model=new javax.swing.table.DefaultTableModel();return []}
@@ -3810,7 +4030,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         Map marks=(reviewMarks?:[:]) as Map
         if(callsSaved!=null)showTable(calls,marks.isEmpty()?callsSaved:extended(callsSaved,['Reviewed call','Review reason'],{Map row->
             String cell=''+(row.Cell?:''),status=''+(row.Status?:'');Map mark=marks[cell] as Map
-            stimulusRow(row)&&mark!=null&&CalciumReview.reviewed(marks,cell,status)!=status ? [mark.reviewed,(mark.reason as String)+(mark.note?': '+mark.note:'')] : ['','']}))
+            stimulusRow(row)&&mark!=null&&CalciumReview.reviewed(marks,cell,status)!=status ? [mark.reviewed,(mark.reason as String)+(mark.note?': '+mark.note:'')+(mark.by=='automatic'?', automatic':'')] : ['','']}))
         Map all=reviewTally?.reviewed==true?(reviewTally.rows as List).find{it.key=='all'} as Map:null
         Map after=marks.isEmpty()||all==null?null:all.reviewed as Map
         if(countsSaved!=null)showTable(counts,after==null?countsSaved:extended(countsSaved,['After review','Calls changed'],{Map row->
@@ -3878,7 +4098,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         plot.markCalls=!marks ? [] : which==0||which==MARKED ? CalciumReview.CALLS : which==1||which==2 ? [CalciumReview.CALLS[which-1]] : []
         previousCell.enabled=shown.size()>1;nextCell.enabled=shown.size()>1
         if(cells.getItemCount()>0)selectCell(cells.getSelectedItem() as String,true)
-        else {plot.cell='';plot.selected=new double[0];plot.responseCall=[:];plot.caption='';cells.setToolTipText(null);cellStatus.setText('No cells in this group.');showReview(null);cellPicture.selected=-1;plot.changed();cellPicture.repaint()}
+        else {plot.cell='';plot.selected=new double[0];plot.responseCall=[:];plot.caption='';cells.setToolTipText(null);showCall('No cells in this group.');showReview(null);showAround(null);cellPicture.selected=-1;plot.changed();cellPicture.repaint()}
     }
     void showGroup(int which){if(which<group.getItemCount()&&group.getSelectedIndex()!=which)group.setSelectedIndex(which)}
     /** Another cell is selected: the cell kept after its mark leaves the Cell list. */
@@ -3908,8 +4128,10 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         closeForm();automatic=CalciumReview.scored(dir)
         // the checks of this analysis: what its run here gave (as the Step 4 page takes them), else the table saved beside it
         Map run=checkedRun;checks=CalciumCallChecks.answer(run?.folder==dir.name?run.found as Map:CalciumCallChecks.saved(dir,measurement))
+        aroundAsked++;aroundContext=null;aroundFolder=null   // what is shown around the cells is read again for this analysis (readAround)
         results=dir;table(metrics,new File(dir,'metrics.csv'));table(qc,new File(dir,'cell_quality.csv'));table(registry,new File(dir,'roi_registry.csv'));responseRows=table(calls,new File(dir,'responder_calls.csv'));table(counts,new File(dir,'responder_counts.csv'));table(windowMetrics,new File(dir,'window_metrics.csv'));table(replicates,new File(dir,'replicate_counts.csv'));table(sensitivity,new File(dir,'sensitivity_counts.csv'));table(diagnostics,new File(dir,'negative_control_counts.csv'))
-        callsSaved=calls.model;countsSaved=counts.model   // as saved: the columns of the review marks are added to copies (reviewTables)
+        withCodes()
+        callsSaved=calls.model;countsSaved=counts.model   // as saved, with the codes of the checks: the columns of the review marks are added to copies (reviewTables)
         responding.caption.lines=2   // the caption after review takes two lines at the window's usual width: the tiles keep that height
         def normalized=CalciumCsv.read(new File(dir,'normalized_traces.csv')),avg=CalciumCsv.read(new File(dir,'mean_trace.csv'))
         plot.time=normalized.drop(1).collect{CalciumCsv.number(it[0])} as double[]
@@ -3926,7 +4148,54 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         int peak=1;double top=Double.NEGATIVE_INFINITY;plot.mean.eachWithIndex{double v,int i->if(Double.isFinite(v)&&v>top){top=v;peak=i+1}}
         showFrame(peak)
         if(!appliedFingerprint)appliedFingerprint=fingerprint();changed()
+        readAround(dir)
     }
+    /** The check codes of the primary stimulus after the engine's own codes in each tab that shows QC_flags, joined as that
+     *  table joins them: as the checks say ("; ") in the calls and stimulus-window tables, ";" in Cell quality and the
+     *  whole-recording metrics; without an engine code, the check codes alone. A row of the control window gets none. On screen
+     *  only: no table is written. */
+    void withCodes() {
+        Map byCell=((checks?.cells?:[:]) as Map);if(byCell.isEmpty())return
+        String join=(checks.join?:CalciumCallChecks.JOIN) as String
+        [[calls,join],[windowMetrics,join],[qc,QUALITY_JOIN],[metrics,QUALITY_JOIN]].each{List pair->
+            def model=(pair[0] as javax.swing.JTable).model;String by=pair[1] as String
+            List heads=(0..<model.columnCount).collect{model.getColumnName(it)}
+            int flagsAt=heads.indexOf('QC_flags'),cellAt=heads.indexOf('Cell'),roleAt=heads.indexOf('Role')
+            if(flagsAt<0||cellAt<0)return
+            for(int r=0;r<model.rowCount;r++) {
+                if(roleAt>=0&&''+model.getValueAt(r,roleAt)!='Stimulus')continue
+                List codes=(((byCell[''+model.getValueAt(r,cellAt)] as Map)?.codes?:[]) as List)
+                if(codes.isEmpty())continue
+                String engine=''+(model.getValueAt(r,flagsAt)?:'')
+                model.setValueAt((engine?engine+by:'')+codes.join(by),r,flagsAt)
+            }
+        }
+    }
+    /** Reads what is shown around the cells of an analysis (CalciumCallChecks.aroundContext) once, off the event thread, and
+     *  shows it for the cell selected when it is read, unless another analysis was loaded meanwhile. */
+    void readAround(File dir) {
+        int asked=++aroundAsked;Map given=measurement
+        aroundLater.call{->
+            Map context=CalciumCallChecks.aroundContext(dir,given)
+            def use={->if(asked==aroundAsked&&!closed){aroundContext=context;aroundFolder=dir.name;showAround(cells.selectedItem as String)}}
+            if(javax.swing.SwingUtilities.isEventDispatchThread())use() else javax.swing.SwingUtilities.invokeLater(use as Runnable)
+        }
+    }
+    /** The Around the cell tab for a cell of the window shown: what the passing-object check used around it (aroundOf), or why
+     *  nothing is shown: before an analysis, on the control window, while what is shown is read, and as aroundCell says. */
+    void showAround(String name) {
+        aroundPlot.cell=name?:''
+        Map call=(name==null?null:callRows[name])?:[:]
+        double[] span=CalciumAnalysisPlot.windowOf(call);aroundPlot.stimulusStart=span[0];aroundPlot.stimulusEnd=span[1]
+        boolean control=callRows.values().any{it.Role=='Control'}
+        aroundPlot.data=results==null ? null : name==null ? [why:'No cells in this group.'] : control ? [why:CalciumCallChecks.AROUND_CONTROL]
+            : aroundContext==null||aroundFolder!=results.name ? [why:'Reading the values around the cells.'] : aroundOf.call(aroundContext,name) as Map
+        aroundPlot.changed()
+    }
+    /** The call line of the selected cell, on Traces and on Around the cell alike; a tip of null keeps the tooltip. */
+    void showCall(String text,String tip=null){[cellStatus,aroundStatus].each{it.setText(text);if(tip!=null)it.setToolTipText(tip)}}
+    /** The room kept under the Around the cell tab's own controls: three lines of the call line, as on Traces, and a row of flags. */
+    int aroundKept(){int line=aroundStatus.getFontMetrics(aroundStatus.font).height;3*line+line+2*CalciumRowLayout.PAD}
     void selectCell(String name,boolean highlight) {
         if(name==null)return
         cells.setToolTipText(name)   // the whole name: a long one is cut in the box
@@ -3945,47 +4214,33 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         // one line saying what the analysis decided for this cell, in the words and numbers of the saved table; with a mark the
         // call after review comes first, then the mark's reason and note, then the automatic call
         Map<String,String> row=callRows[name]
-        if(row==null) cellStatus.setText(callRows.isEmpty()?' ':'<html><b>'+name+'</b> · no response call was saved for this cell</html>')
+        if(row==null) showCall(callRows.isEmpty()?' ':'<html><b>'+name+'</b> · no response call was saved for this cell</html>')
         else {
             def number={String key,String format->double v=CalciumCsv.number(row[key]);Double.isFinite(v)?String.format(Locale.US,format,v):null}
             def esc={Object text->CalciumOutlineProgress.escape(text==null?'':''+text)}
             def dot={String shown->"<font color='"+CalciumTheme.hex(CalciumCalls.of(shown))+"'>●</font> "}
             Map mark=row.Role=='Control'?null:reviewMarks[name] as Map;String after=callOf(name);boolean marked=mark!=null&&after!=row.Status
-            List parts=marked ? [dot(after)+'<b>'+name+': '+esc(after)+' after review</b>',esc((mark.reason as String).toLowerCase()+(mark.note?': '+mark.note:''))]+(mark.carriedFrom ? ['from an earlier analysis'] : [])+['automatic call '+esc(row.Status)]
+            List parts=marked ? [dot(after)+'<b>'+name+': '+esc(after)+' after review</b>',esc((mark.reason as String).toLowerCase()+(mark.note?': '+mark.note:''))]+(mark.by=='automatic' ? ['marked automatically'] : [])+(mark.carriedFrom ? ['from an earlier analysis'] : [])+['automatic call '+esc(row.Status)]
                 : [dot(row.Status)+'<b>'+name+': '+esc(row.Status?:'')+'</b>']
             parts<<esc((row.Reason?:'').toLowerCase())
             String rise=number('Peak_increase','%.2f'),at=number('Peak_s','%.0f'),need=number('Threshold_increase','%.2f')
             if(rise!=null)parts<<'largest rise '+rise+(at!=null?' at '+at+' s':'')+(need!=null?' (needed '+need+')':'')
-            cellStatus.setText('<html>'+parts.findAll{it}.join(' · ')+'</html>')
             String tip='Rise and threshold are fractions of the fluorescence just before the stimulus, as in the Cell response calls table.'
             // when the mark was made, to the minute as the Step 4 page says it, and in which analysis when it was carried over
             String when=marked&&mark.time?CalciumReview.minute(mark.time as String):''
-            cellStatus.setToolTipText(marked?'<html>'+esc('Marked'+(when?' '+when:'')+(mark.carriedFrom?' in '+mark.carriedFrom:''))+'<br>'+esc(tip)+'</html>':tip)
+            showCall('<html>'+parts.findAll{it}.join(' · ')+'</html>',marked?'<html>'+esc('Marked'+(when?' '+when:'')+(mark.carriedFrom?' in '+mark.carriedFrom:''))+'<br>'+esc(tip)+'</html>':tip)
         }
         showReview(name)
+        showAround(name)
     }
     /** Under the selected cell's call line: the flags of its checks, each in the checks' own words, and its mark controls. A flag
-     *  with the first frame of its event is a link to that frame. A control window keeps its automatic call: it has neither. */
+     *  with the first frame of its event is a link to that frame. A control window keeps its automatic call: it has neither.
+     *  The Around the cell tab has the same flags under its call line. */
     void showReview(String name) {
         Map row=name==null?null:callRows[name];boolean primary=row!=null&&row.Role!='Control'
         Map cell=primary?((checks?.cells?:[:]) as Map)[name] as Map:null
         String auto=primary?automatic[name] as String:null;boolean evaluable=auto in CalciumReview.CALLS
-        def owner=this;flagRow.removeAll()
-        ((cell?.flags?:[]) as List).each{Map flag->
-            if(flagRow.componentCount>0)flagRow.add(CalciumTheme.label('·',CalciumTheme.MUTED))
-            def label=CalciumTheme.label(flag.text as String,cell.firstFrame!=null?CalciumTheme.BLUE:CalciumTheme.MUTED)
-            String detail=cell.detail?:''
-            if(cell.firstFrame!=null) {
-                int first=cell.firstFrame as int
-                label.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR))
-                label.setToolTipText('<html>Go to frame '+first+(detail?'<br>'+CalciumOutlineProgress.escape(detail):'')+'</html>')
-                label.addMouseListener(new java.awt.event.MouseAdapter(){void mouseClicked(java.awt.event.MouseEvent e){if(javax.swing.SwingUtilities.isLeftMouseButton(e))owner.goToFrame(first)}})
-            } else if(detail)label.setToolTipText(detail)
-            flagRow.add(label)
-        }
-        // an evaluable cell that could not be checked, in a recording whose surroundings were measured (else checks.note says it once)
-        if(cell!=null&&evaluable&&checks.ringMeasured&&!cell.checked&&cell.why){if(flagRow.componentCount>0)flagRow.add(CalciumTheme.label('·',CalciumTheme.MUTED));flagRow.add(CalciumTheme.label('passing object not checked: '+cell.why,CalciumTheme.MUTED))}
-        flagRow.visible=results!=null&&flagRow.componentCount>0
+        [flagRow,aroundFlags].each{fillFlags(it,cell,evaluable)};aroundBox.revalidate();aroundBox.repaint()
         // one button: mark the cell the other way, or remove its mark; none while an analysis runs or while the review file
         // is not applied, which is said under the controls of every cell of the primary stimulus instead
         Map can=markable(name)
@@ -3996,6 +4251,26 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         markButton.text=auto=='Responded'?'Mark as not a responder':'Mark as a responder'
         markButton.visible=can.can&&!can.marked&&formCell==null;removeMark.visible=can.marked;enterPressed=false;enterTaken=false
         showMarkRow()
+    }
+    /** A row of the selected cell's flags, each in the checks' own words; a flag with the first frame of its event is a link to
+     *  that frame. Then, for an evaluable cell that could not be checked in a recording whose surroundings were measured, why
+     *  (else checks.note says it once). Shown while it holds something. */
+    void fillFlags(javax.swing.JPanel into,Map cell,boolean evaluable) {
+        def owner=this;into.removeAll()
+        ((cell?.flags?:[]) as List).each{Map flag->
+            if(into.componentCount>0)into.add(CalciumTheme.label('·',CalciumTheme.MUTED))
+            def label=CalciumTheme.label(flag.text as String,cell.firstFrame!=null?CalciumTheme.BLUE:CalciumTheme.MUTED)
+            String detail=cell.detail?:''
+            if(cell.firstFrame!=null) {
+                int first=cell.firstFrame as int
+                label.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR))
+                label.setToolTipText('<html>Go to frame '+first+(detail?'<br>'+CalciumOutlineProgress.escape(detail):'')+'</html>')
+                label.addMouseListener(new java.awt.event.MouseAdapter(){void mouseClicked(java.awt.event.MouseEvent e){if(javax.swing.SwingUtilities.isLeftMouseButton(e))owner.goToFrame(first)}})
+            } else if(detail)label.setToolTipText(detail)
+            into.add(label)
+        }
+        if(cell!=null&&evaluable&&checks.ringMeasured&&!cell.checked&&cell.why){if(into.componentCount>0)into.add(CalciumTheme.label('·',CalciumTheme.MUTED));into.add(CalciumTheme.label('passing object not checked: '+cell.why,CalciumTheme.MUTED))}
+        into.visible=results!=null&&into.componentCount>0
     }
     /** The row of mark controls, while it has one to show: the button, Remove mark or the form. */
     void showMarkRow(){markRow.visible=results!=null&&(markButton.visible||removeMark.visible||formCell!=null);reviewBox.revalidate();reviewBox.repaint()}
@@ -4021,7 +4296,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
     void openForm(String name) {
         Map can=markable(name);if(!can.can||can.marked)return
         Map cell=((checks?.cells?:[:]) as Map)[name] as Map
-        String chosen=automatic[name]=='Responded'?((cell?.flags?:[]) as List).collect{REASON_OF_RULE[it.rule]}.find{it}:null
+        String chosen=automatic[name]=='Responded'?((cell?.codes?:[]) as List).collect{REASON_OF_CODE[it]}.find{it}:null
         formCell=name;enterPressed=false;enterTaken=false;reasonBox.selectedIndex=chosen?CalciumReview.REASONS.indexOf(chosen):-1;noteField.text=''
         [reasonLabel,reasonBox,noteLabel,noteField,saveMark,cancelMark].each{it.visible=true};markButton.visible=false;say(null,null);showMarkRow()
         takeFocus.call(chosen?noteField:reasonBox)
@@ -4070,17 +4345,24 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         changed()
         // the saved trace has no time cursor or its reading: only the axes, the traces and the key, which names the dashed
         // lines and the bands too (on screen pointing at a band names it)
-        double at=plot.moment;plot.moment=Double.NaN
+        double at=plot.moment;plot.moment=Double.NaN;aroundPlot.moment=Double.NaN
         try{
+            // what is shown around the cell, read now when it is still being read, so the picture is of the cell selected
+            if(aroundContext==null||aroundFolder!=results.name){aroundAsked++;aroundContext=CalciumCallChecks.aroundContext(results,measurement);aroundFolder=results.name;showAround(cells.selectedItem as String)}
+            // Around the cell is saved when it has a plot (a sentence is no figure); the picture of an earlier cell is taken away
+            File around=new File(results,'around_the_cell.png');boolean aroundSaved=aroundPlot.drawn()
+            if(!aroundSaved)around.delete()
             // each drawn across the whole picture, on white, at the size saved (the heatmap with every row), then given its size back
-            ['trace':plot,'heatmap':heatmap].each{name,panel->
-                int w=Math.max(650,panel.width),h=Math.max(260,Math.max(panel.height,panel.is(heatmap)?(int)panel.preferredSize.height:0))
+            Map panels=['trace':plot,'heatmap':heatmap];if(aroundSaved)panels.around_the_cell=aroundPlot
+            panels.each{name,panel->
+                int w=Math.max(650,panel.width),h=Math.max(panel.is(aroundPlot)?360:260,Math.max(panel.height,panel.is(heatmap)?(int)panel.preferredSize.height:0))
                 java.awt.Dimension was=panel.size;def image=new java.awt.image.BufferedImage(w,h,java.awt.image.BufferedImage.TYPE_INT_RGB);def g=image.createGraphics()
                 boolean trace=panel.is(plot)
-                try{g.setColor(Color.white);g.fillRect(0,0,w,h);panel.setSize(w,h);if(trace){plot.figure=true;plot.changed()};panel.paint(g)}
-                finally{g.dispose();panel.setSize(was);if(trace){plot.figure=false;plot.changed()}}
+                try{g.setColor(Color.white);g.fillRect(0,0,w,h);panel.setSize(w,h);if(trace){plot.figure=true;plot.changed()};if(panel.is(aroundPlot))aroundPlot.changed();panel.paint(g)}
+                finally{g.dispose();panel.setSize(was);if(trace){plot.figure=false;plot.changed()};if(panel.is(aroundPlot))aroundPlot.changed()}
                 javax.imageio.ImageIO.write(image,'png',new File(results,name+'.png'))}
             Map provenance=[result_folder:results.name,cell:cells.selectedItem,stimulus:stimuli.selectedItem,protocol_hash:appliedManifest.protocol_hash,manifest_sha256:CalciumInstaller.digest(new File(results,'analysis_manifest.csv').bytes),settings_pending:fingerprint()!=appliedFingerprint,source:'Completed analysis snapshot; display is unsmoothed']
+            if(aroundSaved)provenance.around_the_cell=around.name
             // the groups, colours and order follow the review marks on the primary stimulus: say so, and which file they come
             // from; a control window keeps its automatic calls, so its plots say nothing of the review
             File review=CalciumReview.file(measurement,results)
@@ -4088,7 +4370,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
             new File(results,'plot_provenance.json').setText(CalciumResponseProtocol.json(provenance)+'\n','UTF-8')
             status.text='Saved completed-run plots and plot_provenance.json in '+results.name
         }catch(Throwable t){status.text='Could not save plots: '+t.message}
-        finally{plot.moment=at;plot.repaint()}
+        finally{plot.moment=at;plot.repaint();aroundPlot.moment=at;aroundPlot.repaint()}
     }
 }
 
