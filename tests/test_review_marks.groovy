@@ -66,6 +66,7 @@ assert first.results.review.findAll{it.key!='after'}==[folder:A,file:null,sha256
 assert first.results.review.after==cells.collectEntries{k,v->[id(k),v[0]]} : 'the call after review of every cell, here the automatic call'
 assert first.state.cancellable==false && first.state.busy==false
 assert !new File(folder,reviewName(A)).exists() && !first.results.tally.containsKey('reviewed') && first.results.tally.rows.every{!it.containsKey('reviewed')} : 'no marks: the tally is as it always was'
+assert first.state.message.startsWith('Complete. Protocol, inputs and tables saved in '+A+'. ') : 'the finish message is the Fiji window\'s: '+first.state.message
 assert first.state.message.endsWith('. All cells: 3 of 6 responded (50.0 %). Chosen blind: 2 of 3 responded (66.7 %). Added after the response was shown: 1 of 3 responded (33.3 %).') : first.state.message
 byte[] percentBefore=new File(folder,percentName(A)).bytes
 assert new String(percentBefore,'UTF-8')=='cells,registered,evaluable,responded,percent_responding,cells_below_zero,evaluable_without_them,responded_without_them,percent_without_them\n'+
@@ -119,6 +120,24 @@ assert Settings.percentResponding(dirA,page.session.measurement+[chosenBlind:nul
 // the Fiji window's tile, from the same tally
 assert Review.headline(tally,'ATP')==['33.3 %','ATP: 2 of 6 evaluable cells after review; 3 before review'] && Review.headline(first.results.tally,'ATP')==null
 println 'PASS: marks both ways change the tally of every group after review and leave it as before; the percent table gains columns on the right; the Methods sentence counts the marks'
+
+// ---- a run that fails or is cancelled leaves the analysis shown; a mark on it then gives its finish message again, in the
+// tone of a finished run, as the Fiji window does
+def unfinished={Closure engine->
+    page.session.performAnalysis=engine
+    def started=page.call('api/analyze',[draft:page.call('api/session')[1].draft,confirmed:true]);assert started[0]==200 : started
+    long end=System.nanoTime()+60000000000L;while(page.session.busy&&System.nanoTime()<end)Thread.sleep(20)
+    page.call('api/state')[1]}
+[[{rt,input,settings,out,job->throw new IllegalStateException('The engine stopped.')},'bad','The engine stopped.'],
+ [{rt,input,settings,out,job->throw new java.util.concurrent.CancellationException()},'plain','Cancelled. Completed analyses are kept; partial output is not used.']].each{Closure engine,String tone,String said->
+    def stopped=unfinished(engine)
+    assert !stopped.busy && stopped.tone==tone && stopped.message==said && stopped.folder==A : stopped
+    def again=mark(id(1),'Did not respond','Noise')
+    def now=page.call('api/state')[1]
+    assert again[0]==200 && now.tone=='good' && now.message.startsWith('Complete. Protocol, inputs and tables saved in '+A+'. ') && now.message==again[1].message : now
+    assert page.call('api/review',[cell:id(1),remove:true])[0]==200 && page.call('api/state')[1].tone=='good' && page.call('api/state')[1].message==afterThree : 'removed again: '+page.call('api/state')[1]
+}
+println 'PASS: after a run that failed or was cancelled, a mark on the analysis shown gives its finish message in the tone of a finished run'
 
 // ---- refused, with a plain message, and nothing changes
 byte[] reviewBefore=new File(folder,reviewName(A)).bytes
@@ -201,9 +220,12 @@ assert savedB.size()==2 && savedB[1][0..5]==[id(2),'Responded','Did not respond'
 assert second.results.review.marks[id(2)].carriedFrom==A
 assert second.results.review.marks.keySet()==[id(2)] as Set && second.results.review.methods=='1 of 5 cells was reclassified after manual review: 1 from responder to non-responder (noise).'
 assert new File(folder,percentName(B)).readLines('UTF-8')[0].endsWith(',cells_reclassified') && new File(folder,reviewName(A)).isFile() : 'the earlier analysis keeps its own review'
-// the carried mark is removed: the status line no longer speaks of it
+// the carried mark is removed: the status line still names what was carried over and dropped, until the next run, and the
+// results read again say it too
 def removedB=page.call('api/review',[cell:id(2),remove:true])
-assert removedB[0]==200 && removedB[1].review.carried==null && !removedB[1].message.contains('Review marks') && removedB[1].message.contains('All cells: 4 of 5 responded (80.0 %).') : removedB[1].message
+assert removedB[0]==200 && removedB[1].review.carried==carried && removedB[1].message.endsWith(' '+carriedText) && removedB[1].message.contains('All cells: 4 of 5 responded (80.0 %).') : removedB[1].message
+assert page.call('api/results')[1].review.carried==carried : 'the results read again, as after a reload of the page'
+page.session.load(dirB);assert page.call('api/results')[1].review.carried==carried : 'and the results loaded again'
 // the next analysis takes the marks of the most recent earlier one, B, which has none now: the marks of A do not come back
 String C='SimpleCa-20261101-120000-cccccccc'
 File dirC=analysis(C,cellsB)
@@ -237,17 +259,17 @@ assert page.call('api/review',[cell:id(2),call:'Did not respond',reason:'Noise']
 File fileD=new File(folder,reviewName('SimpleCa-20261101-130000-dddddddd'));String good=fileD.text
 fileD.text=good.replace(Installer.digest(new File(dirD,'responder_calls.csv').bytes),'0'*64)
 page.session.load(dirD);def mismatch=page.call('api/results')[1]
-assert mismatch.review.problem=='The review file '+fileD.name+' does not match the calls of this analysis, so its marks are not used.' && mismatch.review.marks==[:] && !mismatch.tally.containsKey('reviewed') : mismatch.review
+assert mismatch.review.problem=='The review file '+fileD.name+' does not match the calls of this analysis, so its marks are not used. Move it out of the folder to review this analysis again.' && mismatch.review.marks==[:] && !mismatch.tally.containsKey('reviewed') : mismatch.review
 def blocked=page.call('api/review',[cell:id(1),call:'Did not respond',reason:'Noise'])
 assert blocked[0]==400 && blocked[1].error=='The review file '+fileD.name+' does not match the calls of this analysis, so its marks are not used. Move it out of the folder to review this analysis again.'
 fileD.text=good.replace('SimpleCa-20261101-130000-dddddddd','SimpleCa-elsewhere')
-page.session.load(dirD);assert page.call('api/results')[1].review.problem=='The review file '+fileD.name+' is for another analysis, so its marks are not used.'
+page.session.load(dirD);assert page.call('api/results')[1].review.problem=='The review file '+fileD.name+' is for another analysis, so its marks are not used. Move it out of the folder to review this analysis again.'
 fileD.text=good.replace(',Noise,',',Tired,')
-page.session.load(dirD);assert page.call('api/results')[1].review.problem.endsWith('does not match the calls of this analysis, so its marks are not used.')
+page.session.load(dirD);assert page.call('api/results')[1].review.problem.endsWith('does not match the calls of this analysis, so its marks are not used. Move it out of the folder to review this analysis again.')
 File percentD=new File(folder,percentName('SimpleCa-20261101-130000-dddddddd'))
 assert !percentD.readLines('UTF-8')[0].contains('after_review') : 'a review file that is not used leaves no after-review columns in the percent table'
 fileD.text='not,a,review\n'
-page.session.load(dirD);assert page.call('api/results')[1].review.problem=='The review file '+fileD.name+' cannot be read, so its marks are not used.'
+page.session.load(dirD);assert page.call('api/results')[1].review.problem=='The review file '+fileD.name+' cannot be read, so its marks are not used. Move it out of the folder to review this analysis again.'
 fileD.text=good;page.session.load(dirD);def back=page.call('api/results')[1]
 assert back.review.problem=='' && back.review.marks.keySet()==[id(2)] as Set && back.tally.reviewed==true && percentD.readLines('UTF-8')[0].endsWith(',cells_reclassified')
 // a file saved by a spreadsheet program, with a byte order mark and blank lines at the end, is read; an empty one holds no marks

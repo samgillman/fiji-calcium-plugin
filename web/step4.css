@@ -282,7 +282,7 @@ body:not(.has-results) #resize-split { display: none; }
 .run-box .status { max-height: 6.2em; overflow-y: auto; }
 .run-box .validation { max-height: 74px; }
 #setup:disabled { display: none; }
-#cancel:disabled { display: none; }   /* Cancel belongs to a running analysis only */
+/* Cancel belongs to a running analysis only (hidden otherwise); while the checks after the engine run it is there, but off */
 /* What the plot shows: three buttons, the average first */
 .seg { display: inline-flex; } .seg button { border-radius: 0; margin-left: -1px; }
 .seg button:first-child { border-radius: var(--radius) 0 0 var(--radius); margin-left: 0; } .seg button:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
@@ -358,6 +358,7 @@ aside { gap: 8px; }
 .run-box .confirm { font-size: 13px; }
 .run-box .status { min-height: 0; max-height: 3em; overflow: hidden; font-size: 12px; }
 .run-box .status:empty, #open-feedback:empty { display: none; }
+.run-box .status.full { max-height: 9em; overflow-y: auto; }   /* the marks carried over, and what a mark changed, are read in full */
 .run-box .validation { max-height: 110px; }
 .run-box .actions { align-items: center; }
 #log:disabled { display: none; }
@@ -393,20 +394,38 @@ aside { gap: 8px; }
 .cell-card .verdict { flex: none; padding-top: 8px; white-space: normal; overflow: visible; }
 .cell-card .verdict:empty { display: none; }
 .cell-card .cell-quality { padding-top: 2px; }
+/* The call line, the whole width of the card; under it the checks' flags (a flag with a frame is a link to it), then the mark
+   button on a line of its own, the mark form in its place, and what Fiji answered, as in the Fiji window. Every control has the
+   page's height and corner. */
+.cell-card #mark { margin-top: 6px; }
+.cell-checks { color: var(--warn); font-size: 12px; padding-top: 2px; overflow-wrap: anywhere; }
+.cell-checks .jump { padding: 0; background: none; border: 0; color: var(--warn); text-decoration: underline; cursor: pointer; font-size: 12px; min-height: 0; text-align: left; }
+.cell-checks .jump:hover:not(:disabled) { background: none; color: var(--gray-900); }
+.mark-form { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding-top: 6px; }
+.mark-form label { display: flex; align-items: center; gap: 6px; color: var(--gray-600); }
+/* one row at the card's usual width: the Note box takes the room left; in a narrow card the form wraps */
+.mark-form label.note { flex: 1 1 160px; min-width: 0; }
+.mark-form #mark-note { width: auto; flex: 1 1 auto; min-width: 100px; }
+.mark-said { font-size: 12px; padding-top: 4px; overflow-wrap: anywhere; } .mark-said.bad { color: var(--bad); } .mark-said.warn { color: var(--warn); }
 /* Flagged cells: a button in the results row; its list opens over the page instead of pushing it down. */
 .quality-chip { position: relative; flex: none; }
 .quality-chip > summary { list-style: none; cursor: pointer; display: flex; align-items: center; min-height: var(--control-h); padding: 0 10px; border: 1px solid #e0c28c; border-radius: var(--radius); background: #fff7e8; color: var(--warn); font-size: 13px; font-weight: 400; white-space: nowrap; user-select: none; }
 .quality-chip > summary::-webkit-details-marker { display: none; }
 .quality-chip > summary::after { content: '▾'; font-size: 10px; margin-left: 6px; opacity: .75; }
 .quality-chip[open] > summary { border-color: var(--warn); }
-.quality-pop { position: absolute; z-index: 15; top: calc(100% + 6px); left: 0; width: min(520px, 86vw); background: #fff; border: 1px solid var(--gray-100); border-radius: var(--radius); box-shadow: 0 8px 28px rgba(31,41,51,.22); padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.quality-pop { position: absolute; z-index: 15; top: calc(100% + 6px); left: 0; width: min(520px, 86vw); background: #fff; border: 1px solid var(--gray-100); border-radius: var(--radius); box-shadow: 0 8px 28px rgba(31,41,51,.22); padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; max-height: calc(100vh - 190px); overflow-y: auto; }
+.quality-pop > * { flex: none; }   /* the list grows with its filters; only in a short window does the whole popover scroll */
 .quality-pop p { margin: 0; } .quality-pop #quality-lead { color: var(--warn); font-weight: 600; }
 /* every flagged cell on a row of its own; under it, what each flag means (a click on one shows only its cells) */
-.quality-cells { align-self: stretch; max-height: 232px; overflow-y: auto; border: 1px solid var(--gray-100); border-radius: var(--radius); }
+.quality-cells { align-self: stretch; border: 1px solid var(--gray-100); border-radius: var(--radius); }   /* every row shown: in a short window the whole list scrolls */
 .quality-cells table { width: 100%; } .quality-cells th { cursor: default; } .quality-cells td:last-child { white-space: normal; }
-.quality-pop ul { max-height: 170px; overflow-y: auto; list-style: none; padding: 0; margin: 0; font-size: 12.5px; align-self: stretch; }
+.quality-pop ul { list-style: none; padding: 0; margin: 0; font-size: 12.5px; align-self: stretch; }
 .quality-pop li + li { margin-top: 5px; } .quality-pop .flag-what { display: block; padding-left: 4px; color: var(--gray-600); }
 #cell { width: 104px; }
+/* as wide as its longest entry with review marks ("Did not respond after review (999)"), so the Cell box and the arrows stay put when marks come and go */
+#group { min-width: 250px; }
+/* the engine's responder counts are before review: said in a line just above them while marks apply */
+.counts-before { margin-bottom: -6px; }
 input[type=search] { -webkit-appearance: none; appearance: none; }   /* looks like the other boxes; its ✕ stays */
 /* One Export menu per panel, in its corner. */
 details.export { position: relative; flex: none; margin-left: auto; }
