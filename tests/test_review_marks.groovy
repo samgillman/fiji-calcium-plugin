@@ -121,6 +121,24 @@ assert Settings.percentResponding(dirA,page.session.measurement+[chosenBlind:nul
 assert Review.headline(tally,'ATP')==['33.3 %','ATP: 2 of 6 evaluable cells after review; 3 before review'] && Review.headline(first.results.tally,'ATP')==null
 println 'PASS: marks both ways change the tally of every group after review and leave it as before; the percent table gains columns on the right; the Methods sentence counts the marks'
 
+// ---- a run that fails or is cancelled leaves the analysis shown; a mark on it then gives its finish message again, in the
+// tone of a finished run, as the Fiji window does
+def unfinished={Closure engine->
+    page.session.performAnalysis=engine
+    def started=page.call('api/analyze',[draft:page.call('api/session')[1].draft,confirmed:true]);assert started[0]==200 : started
+    long end=System.nanoTime()+60000000000L;while(page.session.busy&&System.nanoTime()<end)Thread.sleep(20)
+    page.call('api/state')[1]}
+[[{rt,input,settings,out,job->throw new IllegalStateException('The engine stopped.')},'bad','The engine stopped.'],
+ [{rt,input,settings,out,job->throw new java.util.concurrent.CancellationException()},'plain','Cancelled. Completed analyses are kept; partial output is not used.']].each{Closure engine,String tone,String said->
+    def stopped=unfinished(engine)
+    assert !stopped.busy && stopped.tone==tone && stopped.message==said && stopped.folder==A : stopped
+    def again=mark(id(1),'Did not respond','Noise')
+    def now=page.call('api/state')[1]
+    assert again[0]==200 && now.tone=='good' && now.message.startsWith('Complete. Protocol, inputs and tables saved in '+A+'. ') && now.message==again[1].message : now
+    assert page.call('api/review',[cell:id(1),remove:true])[0]==200 && page.call('api/state')[1].tone=='good' && page.call('api/state')[1].message==afterThree : 'removed again: '+page.call('api/state')[1]
+}
+println 'PASS: after a run that failed or was cancelled, a mark on the analysis shown gives its finish message in the tone of a finished run'
+
 // ---- refused, with a plain message, and nothing changes
 byte[] reviewBefore=new File(folder,reviewName(A)).bytes
 def refused={Map body,String message->def answer=page.call('api/review',body);assert answer[0]==400 && answer[1].error==message : answer;assert new File(folder,reviewName(A)).bytes==reviewBefore}
