@@ -16,7 +16,8 @@
 // the caption and the rule line, which gives the required rise with the call line's decimals, and no rule line for a cell
 // without a trace; trace.png and heatmap.png drawn across their whole width; no mark controls on
 // excluded or unscorable cells, on a control window, while an analysis runs or while the review file is for another
-// analysis; a mark carried over to the next analysis run here.
+// analysis; a mark carried over to the next analysis run here; with a recording's long cell names the Cell box as wide as
+// for Cell001, the name cut in it and whole in its tooltip, and the pickers row whole in the Traces tab.
 // The window is built and never shown (with -Dapple.awt.UIElement=true no Dock icon appears on a Mac); a window that opens all
 // the same fails the test. -Dcalcium.test.pictures=<folder> saves pictures of the window there, and a saved trace plot.
 import javax.swing.*
@@ -72,7 +73,7 @@ def release={JComponent focus,int code->
 def enter={JComponent focus->press(focus,KeyEvent.VK_ENTER);release(focus,KeyEvent.VK_ENTER)}
 def click={java.awt.Component c->c.dispatchEvent(new java.awt.event.MouseEvent(c,java.awt.event.MouseEvent.MOUSE_CLICKED,System.currentTimeMillis(),0,4,4,1,false,java.awt.event.MouseEvent.BUTTON1))}
 
-def ui,original,recording
+def ui,original,recording,longWindow
 def finish={->long deadline=System.nanoTime()+30000000000L;while(ui.busy&&System.nanoTime()<deadline)Thread.sleep(20);onUI{};assert !ui.busy : 'the analysis finishes'}
 // The window laid out at its usual size without being shown, and its content painted into a picture. A window that is never
 // shown is never validated, so every layout forgets the sizes it kept first (a shown window does this when it validates).
@@ -656,9 +657,36 @@ try {
         assert ui.status.text=='Complete. Protocol, inputs and tables saved in '+A+'. '+carried+' '+unchecked : 'the finish message follows the marks: '+ui.status.text
         assert ui.responding.value.text=='66.7 %' && !new File(work,'Review_reviewed_calls_'+A+'.csv').exists() : 'the tile and the review files are as before'
     }
+
+    // ---- a recording's cell names, Cell_ and 32 letters (here Cell001 renamed in a copy of the analysis): the Cell box is as
+    // wide as for Cell001, so the whole pickers row (Window and Every trace too) stays in the Traces tab at the window's
+    // usual size; the name is cut in the box and its tooltip gives it whole
+    String longName='Cell_aecb40839a7897469c9c4138ad4734d0',C='SimpleCa-20261101-120000-cccccccc'
+    File longFolder=new File(work,'long'),dirC=new File(longFolder,C);dirC.mkdirs()
+    new File('tests/fixtures/simpleca').listFiles().findAll{it.isFile()}.each{new File(dirC,it.name).bytes=new String(it.bytes,'UTF-8').replace('Cell001',longName).getBytes('UTF-8')}
+    onUI {
+        layOut();int shortBox=ui.cells.width   // the Cell box of the window above, for Cell001
+        longWindow=Window.newInstance([csv:new File(dirC,'metrics.csv'),folder:longFolder,recording:'Long',frames:30,hz:2d,baselineStart:1,baselineEnd:5,
+            picture:original,movie:recording,names:[longName]+names.drop(1),rois:(1..6).collect{new Roi(it*30,50,20,20)} as Roi[]])
+        longWindow.runtime.home=new File(work,'runtime')
+        def main=ui;ui=longWindow   // the helpers above look at this window for now
+        try {
+            ui.loadResults(dirC);ui.tabs.selectedIndex=1;ui.showGroup(0);ui.cells.selectedItem=longName
+            paint('fiji_long_cell_name')
+            def line=ui.cells.parent as JComponent;java.awt.Rectangle seen=line.visibleRect
+            assert seen.width==line.width && seen.height==line.height && line.width==ui.tabs.selectedComponent.width : 'the pickers row is seen whole, across the Traces tab: '+seen+' '+line.bounds
+            assert [ui.stimuli,ui.allTraces].every{it.visible && seen.contains(it.bounds)} : 'Window and Every trace in the row: '+[ui.stimuli,ui.allTraces]*.bounds+' in '+seen
+            assert line.components.every{seen.contains(it.bounds)} : 'every control of the row in it: '+line.components.findAll{!seen.contains(it.bounds)}*.bounds+' in '+seen
+            assert ui.cells.width==shortBox : 'the Cell box is as wide as for Cell001: '+ui.cells.width+' '+shortBox
+            assert ui.cells.selectedItem==longName && ui.cells.toolTipText==longName : 'the tooltip gives the whole name: '+ui.cells.toolTipText
+            ui.cells.selectedItem='Cell002';assert ui.cells.toolTipText=='Cell002' : 'the tooltip follows the cell: '+ui.cells.toolTipText
+            ui.showGroup(1);ui.cells.selectedItem=longName;layOut()
+            assert ui.cells.toolTipText==longName && [ui.stimuli,ui.allTraces].every{seen.contains(it.bounds)} : 'under Responded too: '+ui.cells.toolTipText+' '+[ui.stimuli,ui.allTraces]*.bounds
+        } finally {ui=main}
+    }
     assert appeared.isEmpty() : 'a window appeared on screen: '+appeared
-    onUI{assert !ui.visible && !ui.isDisplayable() : 'the window was never shown'}
-    println 'PASS: Step 4 window flags, links to frames, mark controls, reasons chosen from flags, refusals, Enter (once when held, never from the open Reason list) and Esc, focus back to the button, one head height with its rows one under another, tiles, plot, Show and the Cell box kept at a mark, nothing under the plot when Show lists no cell, nothing written on the plot or trace.png but its key, the key on screen as before the review controls with the frame where it started, bands and dashed lines named in the key of trace.png, laid across it, the plot in its place from cell to cell and at a mark that empties the group, the rule line with the decimals of the call line and none without a trace, saved figures drawn across their width, reviewed columns on the tabs, a review file for another analysis, marks saved and removed with every view following and Show kept, control window and busy without controls, carried marks, plot record'
+    onUI{assert !ui.visible && !ui.isDisplayable() && !longWindow.visible && !longWindow.isDisplayable() : 'the windows were never shown'}
+    println 'PASS: Step 4 window flags, links to frames, mark controls, reasons chosen from flags, refusals, Enter (once when held, never from the open Reason list) and Esc, focus back to the button, one head height with its rows one under another, tiles, plot, Show and the Cell box kept at a mark, nothing under the plot when Show lists no cell, nothing written on the plot or trace.png but its key, the key on screen as before the review controls with the frame where it started, bands and dashed lines named in the key of trace.png, laid across it, the plot in its place from cell to cell and at a mark that empties the group, the rule line with the decimals of the call line and none without a trace, saved figures drawn across their width, reviewed columns on the tabs, a review file for another analysis, marks saved and removed with every view following and Show kept, control window and busy without controls, carried marks, plot record, a long cell name cut in the Cell box with the whole row in the tab'
 } catch(Throwable t){t.printStackTrace();System.exit(1)}
-finally {onUI{ui?.dispose();original?.close();recording?.close()}}
+finally {onUI{ui?.dispose();longWindow?.dispose();original?.close();recording?.close()}}
 System.exit(0)

@@ -3541,6 +3541,12 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         [responding,registered,excluded,unscorable].eachWithIndex{tile,i->def c=new java.awt.GridBagConstraints();c.gridx=i;c.fill=java.awt.GridBagConstraints.BOTH;c.weightx=i==0?2.2d:1d;c.insets=new java.awt.Insets(0,0,0,i<3?8:0);tile.wide=i==0?220:100;stats.add(tile,c)}
         // the Traces tab: which cells, the picture at the cursor's moment, the traces, and the time slider under both
         [cells,group,view,heatmapOrder,stimuli,reasonBox].each{it.setFont(CalciumTheme.font())}
+        // the Cell box is as wide as its longest name and never wider than for a name such as Cell001, so Window and Every
+        // trace stay in the row at the window's usual size: a recording's names (Cell_ and 32 letters) are cut in the box, and
+        // its tooltip gives the selected cell's whole name
+        def across={String s->cells.getFontMetrics(cells.font).stringWidth(s)}
+        String widest=(measurement.names as List<String>)?.max{across(it)}
+        cells.prototypeDisplayValue=widest!=null&&across(widest)<=across('Cell000')?widest:'Cell000'
         previousCell.setToolTipText('Previous cell (left arrow)');nextCell.setToolTipText('Next cell (right arrow)')
         group.setToolTipText('List and draw only the cells with this response call');allTraces.setToolTipText('Draw every listed cell behind the mean, coloured by its response call')
         def white={javax.swing.JPanel p->p.setOpaque(true);p.setBackground(Color.white);p}
@@ -3872,7 +3878,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         plot.markCalls=!marks ? [] : which==0||which==MARKED ? CalciumReview.CALLS : which==1||which==2 ? [CalciumReview.CALLS[which-1]] : []
         previousCell.enabled=shown.size()>1;nextCell.enabled=shown.size()>1
         if(cells.getItemCount()>0)selectCell(cells.getSelectedItem() as String,true)
-        else {plot.cell='';plot.selected=new double[0];plot.responseCall=[:];plot.caption='';cellStatus.setText('No cells in this group.');showReview(null);cellPicture.selected=-1;plot.changed();cellPicture.repaint()}
+        else {plot.cell='';plot.selected=new double[0];plot.responseCall=[:];plot.caption='';cells.setToolTipText(null);cellStatus.setText('No cells in this group.');showReview(null);cellPicture.selected=-1;plot.changed();cellPicture.repaint()}
     }
     void showGroup(int which){if(which<group.getItemCount()&&group.getSelectedIndex()!=which)group.setSelectedIndex(which)}
     /** Another cell is selected: the cell kept after its mark leaves the Cell list. */
@@ -3923,6 +3929,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
     }
     void selectCell(String name,boolean highlight) {
         if(name==null)return
+        cells.setToolTipText(name)   // the whole name: a long one is cut in the box
         plot.cell=name;plot.selected=traces[name]?:new double[0]
         Map call=callRows[name]?:[:];plot.responseCall=call
         plot.stimulusStart=CalciumCsv.number(call.Start_s);plot.stimulusEnd=CalciumCsv.number(call.Effective_end_s?:call.End_s)
