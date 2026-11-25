@@ -208,7 +208,7 @@ def Calls = loader.loadClass('CalciumCalls')
     assert Calls.thresholdSetBy(call) == expected : call }
 def plot = loader.loadClass('CalciumAnalysisPlot').newInstance()
 plot.responseCall = [Threshold_increase: '0.405', Threshold_source: 'Baseline noise', Noise_source: 'Whole-trace noise', Run_duration_s: '', Run_samples: '0']
-assert plot.ruleLine() == 'Local threshold 0.405 (Whole-trace noise) · span unavailable s · 0 samples' : plot.ruleLine()
+assert plot.ruleLine() == 'Required rise 0.405 (Whole-trace noise) · span unavailable s · 0 samples' : plot.ruleLine()
 plot.responseCall = [Threshold_increase: '0.3034', Threshold_source: 'Baseline noise', Run_duration_s: '1', Run_samples: '2']
-assert plot.ruleLine() == 'Local threshold 0.3034 (Baseline noise) · span 1 s · 2 samples' : 'a table scored on the baseline SD reads as before'
+assert plot.ruleLine() == 'Required rise 0.3034 (Baseline noise) · span 1 s · 2 samples' : 'a table on the baseline SD without Noise_source names the noise term: '+plot.ruleLine()
 println 'PASS: the Fiji window names the estimate that set a threshold: whole-trace noise is not called baseline noise'

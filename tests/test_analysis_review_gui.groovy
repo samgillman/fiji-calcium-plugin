@@ -1,14 +1,17 @@
 // The Step 4 window of Fiji with the checks of the calls and the review marks: the flags of the selected cell under its call
 // line, each in the checks' own words, and a flag's link to the first frame of its event; the mark button on a cell with a
-// call, the form in its place with the reason already chosen from a flag, Enter (once when held down), Esc and the refusals
-// in the form, and the focus back on the button after it; a mark saved and removed, with the tile, the Show list (which keeps
+// call, the form in its place with the reason already chosen from a flag, Enter (once when held down, and never from the open
+// Reason list), Esc and the refusals in the form, and the focus back on the button after it; a mark saved and removed, with
+// the tile, the Show list (which keeps
 // the group shown, and the cell in the Cell list until another is selected), the picture, the heatmap, the plot, the call
 // line, the calls and counts tabs, the finish message and the record of saved plots following it, and the time cursor
 // staying where it is; the head over the picture and the plot one height for every cell, on a control window, with a refusal
 // of two lines and with the longest note, with the call line, its flags, the mark controls and a refusal directly under one
 // another; the tiles, the tabs and the plot not moving at a mark; nothing written on the plot or the saved trace.png but its
 // axes and key, which names its bands and dashed lines in the Step 4 page's words, and the plot keeping its place from cell
-// to cell, for a cell without a trace too; trace.png and heatmap.png drawn across their whole width; no mark controls on
+// to cell, for a cell without a trace too, and at a mark that empties the group shown or leaves no cell of a call, also as
+// narrow as beside a real recording's picture; under the plot the caption and the rule line, which names the required rise as
+// the key does; trace.png and heatmap.png drawn across their whole width; no mark controls on
 // excluded or unscorable cells, on a control window, while an analysis runs or while the review file is for another
 // analysis; a mark carried over to the next analysis run here.
 // The window is built and never shown (with -Dapple.awt.UIElement=true no Dock icon appears on a Mac); a window that opens all
@@ -107,6 +110,10 @@ List keyWords=['required rise','noise threshold','minimum rise','baseline mean',
 def allowedOnPlot={String s->s in ['Time (s)','mean ± SEM',ui.plot.cell]+keyWords || s==~/(responded|did not respond|no call|all cells|marked|responded after review) \(\d+\)/ || s==~/-?\d+(\.\d+)?/}
 // the plot's frame: where it starts under the key
 def frameTop={->layOut();drawnOnPlot();ui.plot.@t}
+// and at the width the plot has beside the picture of a real recording (245 px beside 1388 x 1040), where most entries of
+// the key take a line of their own
+def narrowTop={->layOut();ui.plot.setSize(245,ui.plot.height);drawnOnPlot();int top=ui.plot.@t;layOut();top}
+def placeOf={->[frameTop(),narrowTop()]}
 // the time of a mark as the Step 4 page shows it, to the minute
 def minute={String time->assert time==~/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d.*/ : time;time.substring(0,16).replace('T',' ')}
 // where the window asks for the keyboard focus, and which component has it (a window never shown has no focus of its own)
@@ -197,11 +204,12 @@ try {
         assert columns(ui.calls)==Csv.read(new File(dirB,'responder_calls.csv'))[0] && columns(ui.counts)==Csv.read(new File(dirB,'responder_counts.csv'))[0] : 'the tabs as saved'
         assert ui.calls.model.is(ui.callsSaved) && ui.counts.model.is(ui.countsSaved) : 'without marks the tabs show the models the tables were loaded into'
         before.callColumns=columns(ui.calls);before.countColumns=columns(ui.counts)
-        // the caption, the rule line and what the green dashed line is are under the plot, not on it; nothing but the axes and
-        // the key is drawn on the plot, so a saved trace.png has nothing else; a band is named in the tooltip over it
-        assert ui.plot.noteLines*.text==[before.plot,ui.plot.ruleLine(),'Green dashed: local threshold transformed to this global axis'] : ui.plot.noteLines*.text
+        // the caption and the rule line are under the plot, not on it, and the rule line gives the green dashed line's value in
+        // the key's name for it; nothing but the axes and the key is drawn on the plot, so a saved trace.png has nothing else;
+        // a band is named in the tooltip over it
+        assert ui.plot.noteLines*.text==[before.plot,ui.plot.ruleLine()] && ui.plot.ruleLine().startsWith('Required rise 0.1 (Floor) · ') : ui.plot.noteLines*.text
         layOut();List drawn=drawnOnPlot()
-        assert ui.plot.notes.parent.is(ui.plot.parent) && ui.plot.notes.y>=ui.plot.y+ui.plot.height && ui.plot.notes.height>=3*ui.plot.noteLines[0].preferredSize.height : 'the three lines are under the plot: '+ui.plot.notes.bounds
+        assert ui.plot.notes.parent.is(ui.plot.parent) && ui.plot.notes.y>=ui.plot.y+ui.plot.height && ui.plot.notes.height>=2*ui.plot.noteLines[0].preferredSize.height : 'the two lines are under the plot: '+ui.plot.notes.bounds
         assert drawn.contains('Time (s)') && drawn.contains('mean ± SEM') && drawn.every{allowedOnPlot(it)} : 'drawn on the plot: '+drawn.findAll{!allowedOnPlot(it)}
         def over=new java.awt.event.MouseEvent(ui.plot,java.awt.event.MouseEvent.MOUSE_MOVED,0L,0,ui.plot.X(ui.plot.stimulusEnd)-2,ui.plot.height-100,0,false)
         assert ui.plot.getToolTipText(over)=='<html>response window<br>'+ui.plot.HINT+'</html>' : 'the band is named in the words of the key: '+ui.plot.getToolTipText(over)
@@ -251,11 +259,26 @@ try {
         assert ui.plot.noteLines[0].text=='Cell003 · unavailable: inspect Cell quality for the exclusion reason' : ui.plot.noteLines[0].text
         // the key keeps its room on a cell without a trace or without a run: the plot keeps its place from cell to cell, and
         // a band of the window is named on every cell
-        Map tops=names.collectEntries{ui.cells.selectedItem=it;[it,frameTop()]}
+        Map tops=names.collectEntries{ui.cells.selectedItem=it;[it,placeOf()]}
         assert (tops.values() as Set).size()==1 : 'the plot keeps its place: '+tops
         ui.cells.selectedItem='Cell002';layOut();assert drawnOnPlot().containsAll(['response','required rise','Cell002']) : 'a cell without a run: the band is named all the same: '+drawnOnPlot()
         ui.cells.selectedItem='Cell003';layOut();List bare=drawnOnPlot()
         assert bare.containsAll(['F₀ frames','baseline','response window','response']) && !bare.contains('Cell003') && !bare.contains('required rise') : 'a cell without a trace: '+bare
+        // the key runs across the whole panel, over the axis names too: as narrow as beside a real recording's picture, each
+        // line of it starts 8 px in and goes on to the next only when the next entry would not fit before 8 px from the right;
+        // a name longer than that is cut short
+        def keyAt={->layOut();ui.plot.setSize(245,ui.plot.height);def image=new java.awt.image.BufferedImage(245,ui.plot.height,java.awt.image.BufferedImage.TYPE_INT_RGB)
+            def spy=new TextSpy(real:image.createGraphics()),fm;try{ui.plot.still(spy);fm=spy.real.fontMetrics}finally{spy.real.dispose()}
+            def found=spy.at.findAll{it[0] in ['mean ± SEM',ui.plot.cell]+keyWords || it[0]==~/(responded|did not respond|no call) \(\d+\)/ || it[0].startsWith('Cell_')}.collect{it+[fm.stringWidth(it[0])]}
+            layOut();found}
+        ui.cells.selectedItem='Cell001';List entries=keyAt()
+        List keyLines=entries.groupBy{it[2]}.sort{it.key}.values().collect{it.sort{a,b->a[1]<=>b[1]}}
+        assert keyLines.size()>1 && keyLines.every{it[0][1]==29} && entries.every{(it[1] as int)+(it[3] as int)<=245-8} : 'each line of the key starts 8 px in, and nothing runs past 8 px from the right: '+entries
+        assert (1..<keyLines.size()).every{int i->def last=keyLines[i-1][-1],next=keyLines[i][0];((last[1] as int)-29)+21+(last[3] as int)+14+21+(next[3] as int)+14>245-16} : 'a line of the key goes on to the next only when the next entry would not fit: '+keyLines.collect{it*.getAt(0)}
+        String shortName=ui.plot.cell;ui.plot.cell='Cell_ac975e8b6d7dd113b515892b56003127';ui.plot.changed()
+        def cut=keyAt().find{it[0].startsWith('Cell_')}
+        assert cut!=null && cut[0].endsWith('…') && cut[1]==29 && (cut[1] as int)+(cut[3] as int)<=245-8 : 'a long cell name is cut short in the key: '+cut
+        ui.plot.cell=shortName;ui.plot.changed();layOut()
         // a refusal of two lines, as one naming the percent table of a recording with a usual name, takes the room kept for it
         ui.cells.selectedItem='Cell001'
         ui.say('Close Review_percent_responding_2026-11-18_50B11_ATP_100uM_dish2_SimpleCa-20261118-142233-1a2b3c4d.csv if it is open in another program, then try again.','Cell001')
@@ -389,6 +412,12 @@ try {
         ui.rootPane.getActionForKeyStroke(KeyStroke.getKeyStroke(KeyEvent.VK_RIGHT,0)).actionPerformed(new java.awt.event.ActionEvent(ui.rootPane,0,''))
         assert ui.cells.selectedItem=='Cell005' && ui.group.selectedIndex==1 && (0..<ui.cells.itemCount).collect{ui.cells.getItemAt(it)}==['Cell005'] && !ui.nextCell.enabled : 'the arrow goes to the next responder: '+ui.cells.selectedItem+' '+(0..<ui.cells.itemCount).collect{ui.cells.getItemAt(it)}
         paint('fiji_traces_marked_next')
+        // a mark that empties the group: the cell marked stays shown without the group's traces, and the plot keeps its place,
+        // as it does when the mark is removed
+        List placed=placeOf();ui.markButton.doClick();ui.reasonBox.selectedItem='Noise';ui.saveMark.doClick()
+        assert ui.group.selectedItem=='Responded after review (0)' && ui.cells.selectedItem=='Cell005' && ui.plot.all.length==0 && placeOf()==placed : 'the plot keeps its place when a mark empties the group: '+placed+' '+placeOf()
+        paint('fiji_traces_group_emptied')
+        ui.removeMark.doClick();assert ui.group.selectedItem=='Responded after review (1)' && placeOf()==placed : 'and when the mark is removed: '+placed+' '+placeOf()
         ui.showGroup(0);ui.cells.selectedItem='Cell001';layOut()
         assert ui.plot.allCalls.count{it=='Responded'}==1 && ui.plot.allCalls.count{it=='Did not respond'}==2 : 'all cells, by the call after review: '+ui.plot.allCalls
         // the long call line and the tile's caption wrap at the width they are given: nothing is cut off
@@ -446,6 +475,18 @@ try {
         ui.exportPlots();record=new groovy.json.JsonSlurper().parse(new File(dirB,'plot_provenance.json'))
         assert !record.containsKey('calls') && !record.containsKey('review_file') : 'without marks the record is as it always was'
 
+        // ---- under All cells, a mark that leaves no cell of a call, or brings one: the plot keeps its place. Cell002 is the
+        // only cell that did not respond; marked, the key has no count of cells that did not respond
+        ui.cells.selectedItem='Cell002';placed=placeOf()
+        ui.markButton.doClick();ui.reasonBox.selectedItem='Noise';ui.saveMark.doClick()
+        assert ui.group.selectedIndex==0 && ui.plot.allCalls.count{it=='Did not respond'}==0 && placeOf()==placed : 'a mark that leaves no cell that did not respond: '+placed+' '+placeOf()
+        ui.removeMark.doClick();assert !reviewB.exists() && placeOf()==placed : 'the mark removed: '+placed+' '+placeOf()
+        // the two responders marked, one after the other: no cell responded
+        ['Cell001','Cell005'].each{String c->ui.cells.selectedItem=c;ui.markButton.doClick();ui.reasonBox.selectedItem='Noise';ui.saveMark.doClick()}
+        assert ui.plot.allCalls.count{it=='Responded'}==0 && placeOf()==placed : 'marks that leave no responder: '+placed+' '+placeOf()
+        ['Cell005','Cell001'].each{String c->ui.cells.selectedItem=c;ui.removeMark.doClick()}
+        assert !reviewB.exists() && placeOf()==placed : 'the marks removed'
+
         // ---- a note as long as the box takes: the call line of the mark takes the room kept for it
         String longNote='bright debris drifts in from the left edge at frame 12, crosses the cell body and leaves the field on the right at 15.5s'
         assert longNote.length()==Review.NOTE_MAX : longNote.length()
@@ -471,6 +512,28 @@ try {
         assert snapshot()==once && ui.removeMark.visible : 'Enter held down on Remove mark: the mark stays'
         release(ui.removeMark,KeyEvent.VK_ENTER);assert !reviewB.exists() && ui.markButton.visible : 'let go: the mark is removed'
         focusOn=null
+        // Enter held down in the open Reason list: the list takes its press (it chooses there and closes), so the press never
+        // reaches the mark controls; the repeats then do, with the list closed. Neither they nor the key let go save anything.
+        // The keys go as Swing hands them on, through the key listeners first (a window never shown has no list to open: the
+        // test says when it is open)
+        def key={JComponent c,int id->c.processKeyEvent(new KeyEvent(c,id,System.currentTimeMillis(),0,KeyEvent.VK_ENTER,KeyEvent.CHAR_UNDEFINED))}
+        def listWas=ui.listOpen
+        ui.markButton.doClick();focusOn=ui.reasonBox;def held=snapshot()
+        ui.listOpen={->true};key(ui.reasonBox,KeyEvent.KEY_PRESSED);ui.reasonBox.selectedItem='Noise';ui.listOpen={->false}
+        3.times{key(ui.reasonBox,KeyEvent.KEY_PRESSED)};key(ui.reasonBox,KeyEvent.KEY_RELEASED)
+        assert ui.formCell=='Cell001' && snapshot()==held : 'Enter held in the open Reason list saves nothing: '+Review.read(dirB,ui.measurement).marks.keySet()
+        key(ui.reasonBox,KeyEvent.KEY_PRESSED);key(ui.reasonBox,KeyEvent.KEY_RELEASED)
+        assert ui.formCell==null && Review.read(dirB,ui.measurement).marks.Cell001?.reason=='Noise' : 'the next Enter saves the reason chosen'
+        focusOn=ui.removeMark;ui.removeMark.doClick();assert !reviewB.exists() : 'the mark is removed'
+        // the same, with the focus moved on to the Note box before the key is let go: nothing is saved, and the next Enter saves
+        ui.markButton.doClick();focusOn=ui.reasonBox
+        ui.listOpen={->true};key(ui.reasonBox,KeyEvent.KEY_PRESSED);ui.reasonBox.selectedItem='Movement';ui.listOpen={->false}
+        focusOn=ui.noteField;2.times{key(ui.noteField,KeyEvent.KEY_PRESSED)};key(ui.noteField,KeyEvent.KEY_RELEASED)
+        assert ui.formCell=='Cell001' && snapshot()==held : 'Enter held from the open Reason list into the Note box saves nothing: '+Review.read(dirB,ui.measurement).marks.keySet()
+        key(ui.noteField,KeyEvent.KEY_PRESSED);key(ui.noteField,KeyEvent.KEY_RELEASED)
+        assert ui.formCell==null && Review.read(dirB,ui.measurement).marks.Cell001?.reason=='Movement' : 'the next Enter in the Note box saves'
+        focusOn=ui.removeMark;ui.removeMark.doClick();assert !reviewB.exists() : 'the mark is removed'
+        ui.listOpen=listWas;focusOn=null
 
         // ---- Enter saves, from the Note box and from the Reason list; a mark without a note
         ui.markButton.doClick();ui.noteField.text='drifts in from the left'
@@ -522,7 +585,7 @@ try {
     }
     assert appeared.isEmpty() : 'a window appeared on screen: '+appeared
     onUI{assert !ui.visible && !ui.isDisplayable() : 'the window was never shown'}
-    println 'PASS: Step 4 window flags, links to frames, mark controls, reasons chosen from flags, refusals, Enter (once when held) and Esc, focus back to the button, one head height with its rows one under another, tiles and plot kept at a mark, nothing written on the plot or trace.png but its key, bands and dashed lines named, the plot in its place from cell to cell, saved figures drawn across their width, reviewed columns on the tabs, a review file for another analysis, marks saved and removed with every view following and Show kept, control window and busy without controls, carried marks, plot record'
+    println 'PASS: Step 4 window flags, links to frames, mark controls, reasons chosen from flags, refusals, Enter (once when held, never from the open Reason list) and Esc, focus back to the button, one head height with its rows one under another, tiles and plot kept at a mark, nothing written on the plot or trace.png but its key, bands and dashed lines named, the key across the panel, the plot in its place from cell to cell and at a mark that empties the group, the required rise named one way, saved figures drawn across their width, reviewed columns on the tabs, a review file for another analysis, marks saved and removed with every view following and Show kept, control window and busy without controls, carried marks, plot record'
 } catch(Throwable t){t.printStackTrace();System.exit(1)}
 finally {onUI{ui?.dispose();original?.close();recording?.close()}}
 System.exit(0)

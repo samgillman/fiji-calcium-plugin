@@ -2741,15 +2741,17 @@ class CalciumAnalysisPlot extends javax.swing.JPanel {
     double moment=Double.NaN; Closure seek={double t->}
     Map responseCall=[:]
     /** Under the plot: the selected cell's threshold, what set it, and the run that met it. */
-    String ruleLine(){'Local threshold '+(responseCall.Threshold_increase?:'unavailable')+' ('+CalciumCalls.thresholdSetBy(responseCall)+') · span '+(responseCall.Run_duration_s?:'unavailable')+' s · '+(responseCall.Run_samples?:'')+' samples'}
-    static final String DASHED='Green dashed: local threshold transformed to this global axis'
+    String ruleLine(){'Required rise '+(responseCall.Threshold_increase?:'unavailable')+' ('+CalciumCalls.thresholdSetBy(responseCall)+') · span '+(responseCall.Run_duration_s?:'unavailable')+' s · '+(responseCall.Run_samples?:'')+' samples'}
     /** Under the plot on screen, and never in a saved figure (nothing but the axes and the key is drawn on the plot): the
-     *  caption, the rule line and what the green dashed line is, one line each, so they take the same room for every cell. */
-    final List<CalciumLine> noteLines=[new CalciumLine(CalciumTheme.MUTED),new CalciumLine(CalciumTheme.MUTED),new CalciumLine(CalciumTheme.GOOD)]
+     *  caption and the rule line, one line each, so they take the same room for every cell. */
+    final List<CalciumLine> noteLines=[new CalciumLine(CalciumTheme.MUTED),new CalciumLine(CalciumTheme.MUTED)]
     final javax.swing.JPanel notes=new javax.swing.JPanel()
     /** The response calls of every cell of the window shown: the key names the bands the window has for every cell, and keeps
      *  the room of the cell whose entries take the most lines, so the plot keeps its place from cell to cell. */
     List<Map> windowCalls=[]
+    /** The calls a mark can give the cells of the group shown (a mark moves a cell of the primary stimulus from one call to the
+     *  other; the window says which): the key keeps room for a count of each, so a mark never moves the plot. */
+    List<String> markCalls=[]
     /** The bands drawn last: [left, right, name], for the tooltip that names the band under the pointer. */
     private List bandPlaces=[]
     private java.awt.image.BufferedImage layer; private String layerKey=''
@@ -2775,7 +2777,7 @@ class CalciumAnalysisPlot extends javax.swing.JPanel {
     }
     /** Call after changing what is drawn (traces, selection, bands); moving the time cursor needs only repaint(). */
     void changed(){layerKey='';showNotes();repaint()}
-    void showNotes(){List words=time.length<2 ? ['','',''] : [caption,ruleLine(),DASHED];noteLines.eachWithIndex{line,i->line.setText(words[i] as String)}}
+    void showNotes(){List words=time.length<2 ? ['',''] : [caption,ruleLine()];noteLines.eachWithIndex{line,i->line.setText(words[i] as String)}}
     Map referenceValues(Map call=responseCall) {
         double base=CalciumCsv.number(call.Baseline_mean?.toString())
         def values=[baseline:base]
@@ -2844,23 +2846,28 @@ class CalciumAnalysisPlot extends javax.swing.JPanel {
         boolean many=showAll&&all.length>0
         // the key above the plot: the cell, the mean, the traces behind them by call, the dashed lines and the bands, each
         // named once and in the order of the Step 4 page's legend; it takes as many lines as it needs, and the plot starts below it
-        def counts=[]
-        if(many) {
-            int yes=allCalls.count{it=='Responded'} as int,no=allCalls.count{it=='Did not respond'} as int
-            if(yes>0)counts<<[CalciumCalls.RESPONDED,1.4f,'responded ('+yes+')']
-            if(no>0)counts<<[CalciumCalls.NOT,1.4f,'did not respond ('+no+')']
-            if(all.length-yes-no>0)counts<<[CalciumCalls.OTHER,1.4f,(yes+no>0?'no call':allLabel)+' ('+(all.length-yes-no)+')']
-        }
+        def countsOf={int yes,int no,int other->List list=[]
+            if(yes>0)list<<[CalciumCalls.RESPONDED,1.4f,'responded ('+yes+')']
+            if(no>0)list<<[CalciumCalls.NOT,1.4f,'did not respond ('+no+')']
+            if(other>0)list<<[CalciumCalls.OTHER,1.4f,(yes+no>0?'no call':allLabel)+' ('+other+')'];list}
+        int yes=many?(allCalls.count{it=='Responded'} as int):0,no=many?(allCalls.count{it=='Did not respond'} as int):0,other=many?all.length-yes-no:0
+        List counts=countsOf(yes,no,other)
+        // room for a count of each call a mark can bring into the group, as wide as the count of every cell of the window with
+        // one of the two calls (a mark changes no other count)
+        int most=Math.max(yes+no,windowCalls.count{it.Status=='Responded'||it.Status=='Did not respond'} as int)
+        List countRoom=!showAll||!markCalls ? counts : countsOf(yes>0||'Responded' in markCalls?most:0,no>0||'Did not respond' in markCalls?most:0,other)
         // a band is named whenever the window has it, for a cell without a run too
         List calls=windowCalls+[responseCall],bands=bandsOf(responseCall,stimulusStart,stimulusEnd)
         List named=bands.withIndex().findAll{band,int i->i==0?shown(band):calls.any{Map call->double[] span=windowOf(call);shown(bandsOf(call,span[0],span[1])[i] as List)}}.collect{band,int i->[band[2],0f,band[3],'box']}
-        def keyOf={boolean traced,List levels->List key=[];if(traced)key<<[CalciumTheme.INK,1.7f,cell];key<<[CalciumTheme.BLUE,2.4f,'mean ± SEM'];key+counts+levels+named}
-        def entries=keyOf(cell&&selected.length>0,levelsOf(responseCall,stimulusStart,stimulusEnd))   // a cell without a trace has no entry: why is said under the plot
-        def laid={List list->int line=0,run=0;def places=[];list.each{entry->int need=21+fm.stringWidth(entry[2] as String)+14;if(run>0&&run+need>w){line++;run=0};places<<[run,line];run+=need};[places,line]}
+        def keyOf={boolean traced,List levels,List countsShown->List key=[];if(traced)key<<[CalciumTheme.INK,1.7f,cell];key<<[CalciumTheme.BLUE,2.4f,'mean ± SEM'];key+countsShown+levels+named}
+        def entries=keyOf(cell&&selected.length>0,levelsOf(responseCall,stimulusStart,stimulusEnd),counts)   // a cell without a trace has no entry: why is said under the plot
+        // the key runs across the whole panel, so a narrow plot beside a large picture keeps more of its height
+        int across=Math.max(1,getWidth()-16)
+        def laid={List list->int line=0,run=0;def places=[];list.each{entry->int need=21+fm.stringWidth(entry[2] as String)+14;if(run>0&&run+need>across){line++;run=0};places<<[run,line];run+=need};[places,line]}
         def (places,lines)=laid(entries)
         // the key keeps the room of the cell of this window whose entries take the most lines (its own trace and dashed lines),
-        // so the plot does not move from cell to cell
-        if(cell)calls.collect{Map call->double[] span=windowOf(call);levelsOf(call,span[0],span[1])}.unique{List levels->levels.collect{it[2]}.join(' | ')}.each{List levels->lines=Math.max(lines as int,laid(keyOf(true,levels))[1] as int)}
+        // with the counts a mark can bring, so the plot does not move from cell to cell or at a mark
+        if(cell)calls.collect{Map call->double[] span=windowOf(call);levelsOf(call,span[0],span[1])}.unique{List levels->levels.collect{it[2]}.join(' | ')}.each{List levels->lines=Math.max(lines as int,laid(keyOf(true,levels,countRoom))[1] as int)}
         t=30+16*((lines as int)+1);h=Math.max(1,getHeight()-t-46)
         def values=[]; mean.eachWithIndex {v,i->if(Double.isFinite(v)) {values<<v;if(i<sem.length&&Double.isFinite(sem[i])) {values<<v-sem[i];values<<v+sem[i]}}}
         selected.each {if(Double.isFinite(it)) values<<it}; values<<0d
@@ -2911,8 +2918,8 @@ class CalciumAnalysisPlot extends javax.swing.JPanel {
             g.drawLine(X(stimulusStart),Y(value as double),X(stimulusEnd),Y(value as double))}}
         g.setClip(clip);g.setStroke(new java.awt.BasicStroke(1f))
         // the key, then the axis names
-        // a line for a line, dashed as it is drawn; a filled box for a band
-        entries.eachWithIndex{entry,int i->int kx=l+(places[i][0] as int),ky=20+16*(places[i][1] as int);String text=entry[2] as String,kind=entry.size()>3?entry[3]:'line'
+        // a line for a line, dashed as it is drawn; a filled box for a band; a name longer than the panel is cut short with …
+        entries.eachWithIndex{entry,int i->int kx=8+(places[i][0] as int),ky=20+16*(places[i][1] as int);String text=CalciumTheme.fit(entry[2] as String,fm,across-21),kind=entry.size()>3?entry[3]:'line'
             g.setColor(entry[0] as Color)
             if(kind=='box'){g.fillRect(kx,ky-5,16,10);g.setColor(new Color(0xC5CED8));g.setStroke(new java.awt.BasicStroke(1f));g.drawRect(kx,ky-5,16,10)}
             else{g.setStroke(kind=='dash'?new java.awt.BasicStroke(entry[1] as float,java.awt.BasicStroke.CAP_BUTT,java.awt.BasicStroke.JOIN_MITER,10f,[5f,4f] as float[],0f):new java.awt.BasicStroke(entry[1] as float));g.drawLine(kx,ky,kx+16,ky)}
@@ -3406,6 +3413,11 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
     String formCell, problemCell, problemSaid
     /** Enter was pressed on the mark controls and not let go yet: it acts when it is let go, once however long it is held. */
     boolean enterPressed=false
+    /** Enter went to the open Reason list, which chooses with it and closes: while the key is held its repeats do not ready
+     *  the mark controls. */
+    boolean enterTaken=false
+    /** Whether the Reason list is open; a window that is never shown (in a test) can say it is. */
+    Closure listOpen={->reasonBox.popupVisible}
     /** The reason already chosen when the form opens on a flagged responder, by the rule of its flag. */
     static final Map REASON_OF_RULE=['passes through':'Passing object','on the edge':'Passing object','field moved':'Movement','short separate crossings':'Noise']
     /** The last entry of the Show list while the primary stimulus has marks: the cells with a mark. */
@@ -3521,7 +3533,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         [cellStatus,flagRow,markRow,markProblem,headRoom].each{reviewBox.add(it)}
         def head=new javax.swing.JPanel(new java.awt.BorderLayout());head.setBackground(Color.white);head.add(pickers,java.awt.BorderLayout.NORTH);head.add(reviewBox,java.awt.BorderLayout.SOUTH)
         def tracePanel=new javax.swing.JPanel(new java.awt.BorderLayout());tracePanel.setBackground(Color.white);tracePanel.add(head,java.awt.BorderLayout.NORTH)
-        // the plot, and under it its caption, rule line and what the green dashed line is (on screen only; Save plots saves the plot)
+        // the plot, and under it its caption and rule line (on screen only; Save plots saves the plot)
         def plotPane=new javax.swing.JPanel(new java.awt.BorderLayout());plotPane.setBackground(Color.white);plotPane.add(plot);plotPane.add(plot.notes,java.awt.BorderLayout.SOUTH)
         if(cellPicture.image!=null) {
             view.setToolTipText('What the picture shows. "Change from rest" is each frame minus the average of the baseline frames, so a responding cell lights up.')
@@ -3616,9 +3628,14 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         removeMark.addActionListener({removeReviewMark(cells.selectedItem as String)} as java.awt.event.ActionListener)
         saveMark.addActionListener({saveReviewMark()} as java.awt.event.ActionListener);cancelMark.addActionListener({closeForm()} as java.awt.event.ActionListener)
         reasonBox.addActionListener({saveMark.enabled=reasonBox.selectedIndex>=0;noteField.hint=reasonBox.selectedItem=='Other'?'':'Optional'} as java.awt.event.ActionListener)
-        // (the press only readies it: one taken by the open Reason list does not save when the key is let go)
-        markRow.registerKeyboardAction({e->enterPressed=true} as java.awt.event.ActionListener,javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ENTER,0),javax.swing.JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
-        markRow.registerKeyboardAction({e->if(!enterPressed)return;enterPressed=false;def owner=focusOwner()
+        // (the press only readies it: one taken by the open Reason list does not save when the key is let go, nor do its
+        // repeats while the key is held, which come with the list closed; a key listener hears the press before the list
+        // takes it, and the key let go before the mark controls do)
+        reasonBox.addKeyListener(new java.awt.event.KeyAdapter(){
+            void keyPressed(java.awt.event.KeyEvent e){if(e.keyCode==java.awt.event.KeyEvent.VK_ENTER&&listOpen.call())enterTaken=true}
+            void keyReleased(java.awt.event.KeyEvent e){if(e.keyCode==java.awt.event.KeyEvent.VK_ENTER)enterTaken=false}})
+        markRow.registerKeyboardAction({e->if(!enterTaken)enterPressed=true} as java.awt.event.ActionListener,javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ENTER,0),javax.swing.JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+        markRow.registerKeyboardAction({e->enterTaken=false;if(!enterPressed)return;enterPressed=false;def owner=focusOwner()
             if(owner instanceof javax.swing.AbstractButton&&owner.parent==markRow)(owner as javax.swing.AbstractButton).doClick() else if(formCell!=null&&saveMark.enabled)saveReviewMark()} as java.awt.event.ActionListener,
             javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ENTER,0,true),javax.swing.JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
         markRow.registerKeyboardAction({e->if(formCell!=null)closeForm()} as java.awt.event.ActionListener,javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE,0),javax.swing.JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
@@ -3827,6 +3844,9 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         cellPicture.group=which;cellPicture.only=which==MARKED?new LinkedHashSet<String>(listed):null
         List<String> drawn=listed.findAll{traces.containsKey(it)}
         plot.all=drawn.collect{traces[it]} as double[][];plot.allCalls=drawn.collect{callOf(it)};plot.allLabel=which==0?'all cells':which==MARKED?'marked':CalciumCalls.GROUPS[which].toLowerCase()
+        // the calls a mark can bring into the group (on the primary stimulus): the plot's key keeps room for a count of each
+        boolean marks=callRows.values().any{it.Role!='Control'&&it.Status in CalciumReview.CALLS}
+        plot.markCalls=!marks ? [] : which==0||which==MARKED ? CalciumReview.CALLS : which==1||which==2 ? [CalciumReview.CALLS[which-1]] : []
         previousCell.enabled=shown.size()>1;nextCell.enabled=shown.size()>1
         if(cells.getItemCount()>0)selectCell(cells.getSelectedItem() as String,true)
         else {plot.cell='';plot.selected=new double[0];plot.responseCall=[:];cellStatus.setText('No cells in this group.');showReview(null);cellPicture.selected=-1;plot.changed();cellPicture.repaint()}
@@ -3944,7 +3964,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         if(problemCell!=name||(blocked&&problemSaid==blocked))say(null,null)
         if(blocked&&primary&&problemCell==null)say(blocked,name)
         markButton.text=auto=='Responded'?'Mark as not a responder':'Mark as a responder'
-        markButton.visible=can.can&&!can.marked&&formCell==null;removeMark.visible=can.marked;enterPressed=false
+        markButton.visible=can.can&&!can.marked&&formCell==null;removeMark.visible=can.marked;enterPressed=false;enterTaken=false
         showMarkRow()
     }
     /** The row of mark controls, while it has one to show: the button, Remove mark or the form. */
@@ -3972,7 +3992,7 @@ class CalciumAnalysisWindow extends javax.swing.JFrame {
         Map can=markable(name);if(!can.can||can.marked)return
         Map cell=((checks?.cells?:[:]) as Map)[name] as Map
         String chosen=automatic[name]=='Responded'?((cell?.flags?:[]) as List).collect{REASON_OF_RULE[it.rule]}.find{it}:null
-        formCell=name;enterPressed=false;reasonBox.selectedIndex=chosen?CalciumReview.REASONS.indexOf(chosen):-1;noteField.text=''
+        formCell=name;enterPressed=false;enterTaken=false;reasonBox.selectedIndex=chosen?CalciumReview.REASONS.indexOf(chosen):-1;noteField.text=''
         [reasonLabel,reasonBox,noteLabel,noteField,saveMark,cancelMark].each{it.visible=true};markButton.visible=false;say(null,null);showMarkRow()
         takeFocus.call(chosen?noteField:reasonBox)
     }
