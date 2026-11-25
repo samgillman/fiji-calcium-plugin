@@ -70,6 +70,12 @@ the movie. It never changes a call, a count or a percentage.
   possible passing object, frames 201 to 210
         A bright object was outside the outline on one side just before the cell rose and outside
         on another side just after, and was gone in between. The frames are those of the rise.
+        The same words are written when the rise moved across the cell: its centre, over the
+        outline and the ring just outside it, went from one side of the cell to the other, past
+        the cell's centre, by at least half the outline's width. The frames are then those where
+        the cell was above a quarter of its rise, and the Rule column says "crosses the cell".
+        A cell already flagged the first way keeps that flag, and its detail adds "also crosses
+        the cell".
   rise on the lower right edge, not in the cell, frames 92 to 149
         The rise is in the ring just outside one edge and not in the deeper half of the outline.
         It can be an object resting on the edge, or a neighbour without an outline.
@@ -96,6 +102,7 @@ A cell that is not checked says why in the column Not_checked_because, for examp
 or "no ring around the cell". The last column, QC_flags, holds the codes of the row's flags,
 POSSIBLE_PASSING_OBJECT, RISE_ON_EDGE, FIELD_MOVED and SHORT_SEPARATE_CROSSINGS, joined with "; ",
 and is empty without a flag. A table saved by 2026.11.24.1 has no such column and still reads.
+A table saved before the rule for a rise that crosses the cell reads as it is.
 Once the engine has finished, the analysis can no longer be cancelled: the checks run to the end.
 On the page Cancel is then grayed out.
 
@@ -104,6 +111,10 @@ What the check cannot see:
     largest rise is elsewhere is not seen.
   - On the nine recordings it was set on, it flagged 9 of the 14 responders that were objects by
     eye: 8 of 9 in outlines of 900 pixels or more, 1 of 5 in outlines under 700 pixels.
+  - The rule for a rise that crosses the cell was designed after looking at these same
+    recordings. On the eight it was tried on it flags 2 of the 5 objects the other rules miss,
+    none of 228 ATP responders, and 2 of 880 non-responders without an object. These figures do
+    not show how it does on other recordings.
   - It misses most objects that cross an outline in 2 frames, and objects that come to rest inside
     the outline and stay.
   - A zone with fewer than 12 pixels is not used, for example a sector mostly covered by other
@@ -125,6 +136,26 @@ is all the list has to say, the button that opens it reads "Passing objects not 
 "Checks note" when only the movement was not saved. In the Fiji window the flags, and the line of a
 cell that was not checked, are under the selected cell's call line too; a click on a flag goes to
 that frame in the Traces tab, and the finish message ends with the same note.
+
+The flags also join the Flags column of the calls table and of Cell quality, in both views, after
+the engine's own and in the same words, for example "Duration under a frame · Possible passing
+object"; pointing at it on the page gives the codes. In the calls table they are on the rows of the
+primary stimulus only. On the page the Exports of the calls table, the response window metrics,
+Cell quality and the whole-recording metrics put the codes into QC_flags, after the engine's codes,
+and the file kept beside the Export says "QC_flags includes the codes of the call checks, after
+the engine's codes." The saved tables of the analysis are not changed.
+
+  Around the cell
+        A plot of what the check used for the selected cell, in gray levels: the cell's rise, the
+        parts of the ring, rim or core its flag rests on, each in its own colour and named by its
+        place, for example "ring, lower right", the other usable sectors of the near ring thin and
+        gray as "other ring sectors", and the frames the flag names as a band, "flagged frames".
+        A cell without a flag shows the core and the ring, without a band. On the page it is the
+        fourth button above the plot, with Y boxes of its own; Export saves it as around_the_cell.
+        In the Fiji window it is the tab after Traces, for the cell selected there, and Save plots
+        as PNG also saves around_the_cell.png. With nothing to show the button is off and its
+        tooltip says why, or the tab says why, for example "Passing object not checked: no rise at
+        the peak." On the control window: "Checks are made for the primary stimulus."
 
 REVIEWING THE CALLS
 An evaluable cell can be marked the other way after you have looked at it: a responder as
@@ -224,6 +255,23 @@ and counted by the plugin.
               on. A review file that does not match its analysis is not used and there is no mark
               button. With a cell selected, both views say why, and that the file must be moved out
               of the folder to review that analysis again.
+  Automatic   Mark possible passing objects as not responders: a tick box under Advanced on the
+              page, on the Protocol tab in the Fiji window, off at first. It is a setting of the
+              analysis, kept with the recording's other settings; the engine never sees it. With it
+              on, at the end of each analysis every responder of the primary stimulus flagged as a
+              possible passing object or as a rise on the edge, and not marked yet, is marked Did
+              not respond with the reason Passing object. A field that moved or short separate
+              crossings alone is not marked. The finish message names the cells, for example
+              "Marked automatically: Cell 16, Cell 97.", until the next run. The call line adds
+              "marked automatically", Review reason reads "Passing object, automatic", the page's
+              Export of the calls table adds Marked_by, and the review file says automatic in
+              Marked_by. The Methods sentence counts them apart: "2 of 143 cells were reclassified
+              automatically from responder to non-responder (1 possible passing object, 1 rise on
+              the edge)." Remove mark works on them as on any mark. They are never carried over:
+              with the option on, each new analysis marks the flagged responders again, so a mark
+              you removed comes back at the next analysis. Manual marks carry over as before.
+  Option off  Every saved file is as in 2026.11.24.1 apart from two last columns: QC_flags in
+              the call checks table, and Marked_by in the review file while it has marks.
 
 WHAT IT DOES
 One menu command takes a calcium-imaging recording (a time-lapse movie, for example .zvi, .czi or .tif)

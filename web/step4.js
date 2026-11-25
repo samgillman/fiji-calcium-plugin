@@ -32,6 +32,7 @@
   // The playback clock runs in recording seconds; frames are shown when the playhead reaches their timestamps.
   const Clock = { t: 0, last: 0, step: 1, times: [], real: false, waitingSince: 0 };
   const Heat = { geom: null };
+  const EMPTY_PLOT = $('plot-empty').textContent;   // what the plot says before an analysis
 
   async function api(path, body) {
     const options = body === undefined ? { cache: 'no-store' } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
@@ -361,6 +362,8 @@
       Object.assign(w, { Protocol_version: 2, Protocol_name: p.name, Engine_version: p.engine_version, Validation_status: p.validation_status, Signal_reference: p.signal_reference, SD_estimator: 'sample_sd', Threshold_operator: '>=', Coverage_policy: 'complete_windows', Response_direction: 'increase', Smoothing: 'none' });
       return w;
     });
+    // a setting of the analysis that the engine never sees: kept only while ticked, as the session keeps it
+    if ($('automatic-marks').checked) draft.values.automatic_marks = true; else delete draft.values.automatic_marks;
     const overrides = $('field-overrides').value.trim();
     if (legacy) p.field_overrides = null;
     else { try { p.field_overrides = overrides ? JSON.parse(overrides) : null; } catch (_) { p.field_overrides = overrides; } }
@@ -370,6 +373,7 @@
     S.draft = clone(draft);
     exactInput($('sampling_hz'), draft.values.sampling_hz);   // the F₀ frame boxes are made with the primary stimulus's rows
     for (const key of ['condition', 'biological_unit']) $(key).value = draft.values[key] || '';
+    $('automatic-marks').checked = draft.values.automatic_marks === true;
     $('protocol-mode').value = draft.protocol.schema_version;
     $('protocol-name').value = draft.protocol.name; $('protocol-validation').value = draft.protocol.validation_status === 'legacy_unvalidated' ? 'user_defined' : draft.protocol.validation_status;
     $('field-overrides').value = draft.protocol.field_overrides ? JSON.stringify(draft.protocol.field_overrides, null, 2) : '';
@@ -508,13 +512,16 @@
     const q = S.quality[name] || {}, row = callRow(name), flags = new Set();
     for (const text of [q.QC_flags, row.QC_flags]) for (const flag of String(text || '').split(/[;|,]/)) if (flag.trim() && !RECORDING_FLAGS.has(flag.trim())) flags.add(flag.trim());
     if (belowZero(name)) flags.add('TRACE_BELOW_MINUS_ONE');
-    for (const flag of checkFlags(name)) flags.add(CHECK + flag.rule);   // a check's text has commas, so it is never split like the engine's flags
+    for (const flag of checkFlags(name)) flags.add(CHECK + codeOf(flag));   // a check's text has commas, so it is never split like the engine's flags
     return Array.from(flags);
   }
   // ---------------------------------------------------------------- the checks on the calls (results.checks), made in Fiji after the engine
-  /** A check flag is keyed by its rule; its own text ("possible passing object, frames 201 to 210") is the cell's. */
+  /** A check flag is keyed by its code (POSSIBLE_PASSING_OBJECT, for every rule that finds one); its own text ("possible passing
+   *  object, frames 201 to 210") is the cell's. The labels come with the checks; these are the same words for an analysis without them. */
   const CHECK = 'check:', isCheck = (flag) => flag.startsWith(CHECK);
-  const CHECK_SHORT = { 'passes through': 'Possible passing object', 'on the edge': 'Rise on the edge', 'field moved': 'Field moved', 'short separate crossings': 'Short separate crossings' };
+  const CHECK_LABELS = { POSSIBLE_PASSING_OBJECT: 'Possible passing object', RISE_ON_EDGE: 'Rise on the edge', FIELD_MOVED: 'Field moved', SHORT_SEPARATE_CROSSINGS: 'Short separate crossings' };
+  const codeOf = (flag) => flag.code || flag.rule;
+  const checkLabel = (code) => ((S.results && S.results.checks && S.results.checks.labels) || CHECK_LABELS)[code];
   /** The checks of one cell, or null (an analysis made before the checks has none). */
   const checksOf = (name) => { const c = S.results && S.results.checks; return (c && c.cells && name && c.cells[name]) || null; };
   /** The checks of one cell as the page shows them: they are about the calls for the primary stimulus, so a control window shows
@@ -524,11 +531,11 @@
   const flagsIn = (c) => c && Array.isArray(c.flags) ? c.flags.filter((f) => f && f.text) : [];
   const checkFlags = (name) => flagsIn(shownChecks(name));
   /** The reason the mark form starts with on a responder, from its first check flag: none for a cell that did not respond. */
-  const REASON_OF_RULE = { 'passes through': 'Passing object', 'on the edge': 'Passing object', 'field moved': 'Movement', 'short separate crossings': 'Noise' };
+  const REASON_OF_CODE = { POSSIBLE_PASSING_OBJECT: 'Passing object', RISE_ON_EDGE: 'Passing object', FIELD_MOVED: 'Movement', SHORT_SEPARATE_CROSSINGS: 'Noise' };
   function startingReason(name, automatic) {
     if (automatic !== 'Responded') return '';
     const reasons = (S.results.review || {}).reasons || [];
-    for (const flag of flagsIn(checksOf(name))) { const reason = REASON_OF_RULE[flag.rule]; if (reason && reasons.includes(reason)) return reason; }
+    for (const flag of flagsIn(checksOf(name))) { const reason = REASON_OF_CODE[codeOf(flag)]; if (reason && reasons.includes(reason)) return reason; }
     return '';
   }
   /** A cell whose ΔF/F₀ falls below −1: its corrected fluorescence goes below zero, the mark of an F₀ near zero. Flagged
@@ -554,7 +561,7 @@
   const flagText = (flag) => isCheck(flag) ? flagShort(flag) : FLAG_TEXT[flag] || flag.replace(/_/g, ' ');
   /** Each flag in two or three words, for the list of flagged cells and the tables; FLAG_TEXT has the full sentence. */
   const FLAG_SHORT = { BASELINE_SD_AT_LEAST_ONE_THIRD_LOCAL_F0: 'Noisy baseline', reference_below_3_baseline_sd_review: 'Low F₀', TRACE_BELOW_MINUS_ONE: 'Below zero', DURATION_BELOW_SAMPLE_INTERVAL: 'Duration under a frame' };
-  const flagShort = (flag) => isCheck(flag) ? CHECK_SHORT[flag.slice(CHECK.length)] || flag.slice(CHECK.length) : FLAG_SHORT[flag] || flagText(flag);
+  const flagShort = (flag) => isCheck(flag) ? checkLabel(flag.slice(CHECK.length)) || flag.slice(CHECK.length) : FLAG_SHORT[flag] || checkLabel(flag) || flagText(flag);
   /** What a cell is flagged for, in the list of flagged cells: the engine's flags in their short words, then each check's own text. */
   const flaggedFor = (name) => qualityFor(name).filter((flag) => !isCheck(flag)).map(flagShort).concat(checkFlags(name).map((f) => f.text));
   function showQuality() {
@@ -776,9 +783,11 @@
   }
   const csvText = (rows) => rows.map((row) => row.map((v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(',')).join('\n') + '\n';
   /** The table on the Metrics tab as CSV rows: the summary in long form (one row per metric and group), any other table as saved. */
-  function metricRows() { const key = $('metrics-table').value; if (key === 'summary') return metricSummary().long; return savedRows(key); }
-  /** A saved table as CSV rows, with its saved names and every column. */
-  const savedRows = (key) => { const data = (S.results && S.results.tables[key]) || { header: [], rows: [] }; return [data.header].concat(data.rows); };
+  function metricRows() { const key = $('metrics-table').value; if (key === 'summary') return metricSummary().long; return savedRows(key, true); }
+  /** A saved table as CSV rows, with its saved names and every column; coded: with the codes of the call checks in its QC_flags (withCodes). */
+  const savedRows = (key, coded) => { let data = (S.results && S.results.tables[key]) || { header: [], rows: [] }; if (coded) data = withCodes(key, data).data; return [data.header].concat(data.rows); };
+  /** Whether the table on the Metrics tab, as exported, has codes of the call checks in its QC_flags. */
+  const metricCoded = () => { const key = $('metrics-table').value; return key !== 'summary' && !!S.results && withCodes(key, S.results.tables[key]).added; };
   const METRIC_HELP = {
     summary: 'Mean ± SEM. Onset, latency, time to peak, rise and width are for cells that responded. Point at a metric for its saved columns; the saved file also has the SD.',
     metrics: 'Measured over the whole recording. AUC is signed and turns negative when the signal drifts down. Times are from the start of the recording; rise time, from 10% to 90% of the peak, can follow noise. For the response itself, choose Response-window metrics.',
@@ -786,7 +795,7 @@
   };
   function showMetricTable() {
     const key = $('metrics-table').value; $('metric-help').textContent = METRIC_HELP[key] || ''; $('all-metric-columns-label').hidden = !SHORT[key];
-    if (key === 'summary') table('table-metrics', metricSummary().wide); else table('table-metrics', S.results.tables[key], key);
+    if (key === 'summary') table('table-metrics', metricSummary().wide); else table('table-metrics', withCodes(key, S.results.tables[key]).data, key);
   }
 
   function draftChanged() {
@@ -903,8 +912,11 @@
     $('review-stage').textContent = S.results ? (pending ? 'Changes pending' : 'Completed analysis') : 'Preview · no analysis yet';
     $('workflow-help').textContent = S.results ? 'Select a cell or response window. Use the same timeline for the movie and traces.' : 'Drag the frame slider or press Play. You can review the movie before running analysis.';
   }
-  /** What Fiji says after a good finish of the analysis shown, while marks apply; null otherwise (finishLine says "Done."). */
-  function saidNow() { const now = S.state, r = S.results; return marked() && now && r && now.tone === 'good' && now.folder === r.folder ? (now.message || null) : null; }
+  /** What Fiji says after a good finish of the analysis shown, while marks apply or when it was run with automatic marks (its
+   *  message then says which cells were marked, or why none was, until the next run); null otherwise (finishLine says "Done."). */
+  function saidNow() { const now = S.state, r = S.results; return (marked() || automaticRun()) && now && r && now.tone === 'good' && now.folder === r.folder ? (now.message || null) : null; }
+  /** Whether the analysis shown was run with "Mark possible passing objects as not responders" ticked. */
+  const automaticRun = () => { const d = S.results && S.results.appliedDraft; return !!(d && d.values && d.values.automatic_marks === true); };
   /** The status line after a good finish: "Done." and the marks carried over from the earlier analysis; after a mark, what Fiji
    *  said then. Both are Fiji's own words; the carried marks stay until the next run. */
   function finishLine() {
@@ -920,6 +932,7 @@
   // ---------------------------------------------------------------- saved results; selecting a window never recalculates a call
   async function loadResults() {
     S.results = await api('results'); const r = S.results;
+    Around.generation++; Around.got.clear(); Around.asking.clear();   // "Around the cell" is asked for again, for these results
     // the marks carried over when this analysis was run: Fiji gives them for this analysis until the next run, marks or none
     const carried = r.review && r.review.carried; S.carried = carried && carried.text ? { folder: r.folder, text: carried.text } : null;
     // while marks apply after a good finish of this analysis, the status line is what Fiji says now, as after a mark (applyReview)
@@ -1043,7 +1056,7 @@
       const basis = row.Status === 'Responded' ? heldRise(row) : '', mark = markOf(name), call = callOf(name);
       const parts = ['<span class="dot" style="background:' + CALL[kind(call)] + '"></span><b>' + escape(shortName(name)) + ': ' + escape(call || '') + (mark ? ' after review' : '') + '</b>'];
       if (mark) parts.push('<span title="' + attribute(markedAt(mark)) + '">' + escape(mark.reason.toLowerCase() + (mark.note ? ': ' + mark.note : '')) + '</span>',
-        ...(mark.carriedFrom ? ['<span title="' + attribute(mark.carriedFrom) + '">from an earlier analysis</span>'] : []), 'automatic call ' + escape(mark.automatic));
+        ...(automaticMark(mark) ? ['marked automatically'] : []), ...(mark.carriedFrom ? ['<span title="' + attribute(mark.carriedFrom) + '">from an earlier analysis</span>'] : []), 'automatic call ' + escape(mark.automatic));
       parts.push(escape(basis || (row.Reason || '').toLowerCase()));
       const rise = number(row.Peak_increase), at = number(row.Peak_s), need = number(row.Threshold_increase), setBy = { noise: ', set by its noise', floor: ', the minimum rise' }[requiredBy(row)] || '';
       // a responder's largest rise that lies outside the rise that held says so, so that its time does not read against the onset
@@ -1056,6 +1069,7 @@
     // a refusal belongs to its cell: it goes when another cell is chosen, as in the Fiji window
     if (S.markSaid && S.markSaid.cell !== name) S.markSaid = null;
     showChecks(name); if (S.marking && S.marking.cell !== name) closeMark(); showMark();
+    if (name && S.results) askAround(name); showAroundButton();
     $('zoom-cell').disabled = !name || !(S.info.hasPicture || S.info.hasMovie);
     for (const row of document.querySelectorAll('tbody tr')) row.classList.toggle('on', row.dataset.cell === name);
     if (Pic.zoom > 1 && name) centreOn(S.info.names.indexOf(name));
@@ -1174,7 +1188,7 @@
     r.review = answer.review; r.tally = answer.tally;
     S.version = answer.version; if (S.state) S.state.version = answer.version;
     // what Fiji said is the status line while marks apply; with none left it is "Done." again, as before any mark (finishLine)
-    S.said = marked() ? (answer.message || null) : null; S.marking = null; S.markSaid = null; $('mark-form').hidden = true;
+    S.said = marked() || automaticRun() ? (answer.message || null) : null; S.marking = null; S.markSaid = null; $('mark-form').hidden = true;
     refreshReview(); showState();
   }
   /** Draws again, from the review and tally on hand, everything that counts, groups, colours or lists cells by call. Show stays
@@ -1206,24 +1220,52 @@
   /** While review marks apply: for each row of the calls table, the mark of its cell when the row is the primary stimulus's. */
   function reviewOfRows(data) {
     const marks = marked(); if (!marks || !data || !data.header) return null;
-    const cell = data.header.indexOf('Cell'), role = data.header.indexOf('Role'), stimulus = data.header.indexOf('Stimulus'), w = primaryWindow();
-    const primary = (row) => !w || ((role < 0 ? '' : row[role]) || 'Stimulus') + '::' + ((stimulus < 0 ? '' : row[stimulus]) || 'Stimulus') === w.key;
+    const cell = data.header.indexOf('Cell'), primary = primaryRows(data);
     return data.rows.map((row) => cell >= 0 && primary(row) ? marks[row[cell]] || null : null);
   }
+  /** Whether a row of a table of calls is the primary stimulus's, by its Role and Stimulus. */
+  function primaryRows(data) {
+    const role = data.header.indexOf('Role'), stimulus = data.header.indexOf('Stimulus'), w = primaryWindow();
+    return (row) => !w || ((role < 0 ? '' : row[role]) || 'Stimulus') + '::' + ((stimulus < 0 ? '' : row[stimulus]) || 'Stimulus') === w.key;
+  }
+  /** A saved table with the codes of the call checks in its QC_flags, after the engine's own, each after the separator of that
+   *  table: "; " in the calls and the response-window metrics, ";" in the per-cell tables, as the engine writes them. The checks
+   *  are for the primary stimulus, so a row of a control window gets none. added: whether any code was put in. The saved file
+   *  is not changed. */
+  const CODED = ['calls', 'windowMetrics', 'quality', 'metrics'];
+  function withCodes(kind, data) {
+    const checks = S.results && S.results.checks, plain = { data, added: false };
+    if (!CODED.includes(kind) || !checks || !checks.cells || !data || !data.header) return plain;
+    const flags = data.header.indexOf('QC_flags'), cell = data.header.indexOf('Cell'); if (flags < 0 || cell < 0) return plain;
+    const perCell = FAMILY[kind] === 'cell', join = perCell ? ';' : checks.join || '; ', primary = perCell ? () => true : primaryRows(data);
+    let added = false;
+    const rows = data.rows.map((row) => {
+      const c = primary(row) ? checks.cells[row[cell]] : null, codes = c && Array.isArray(c.codes) ? c.codes.filter(Boolean) : []; if (!codes.length) return row;
+      const own = row[flags] == null ? '' : String(row[flags]), out = fullRow(row, data.header.length); out[flags] = (own ? [own] : []).concat(codes).join(join); added = true; return out;
+    });
+    return added ? { data: Object.assign({}, data, { rows }), added } : plain;
+  }
+  /** What the record beside an Export says when the codes of the call checks were put into its QC_flags. */
+  const codesRecord = (added) => added ? { qc_flags: 'QC_flags includes the codes of the call checks, after the engine\'s codes.' } : {};
   /** A saved row with every column of its header, for columns put after it. */
   const fullRow = (row, n) => { const own = row.slice(0, n); while (own.length < n) own.push(''); return own; };
   /** The plot opens on the average alone and stays on what was chosen: picking a cell never changes what the plot shows.
    *  A cell's own trace appears only under "One cell + average". */
   function setPlotMode(mode) {
-    S.plotMode = mode;
+    // "Around the cell" is in gray levels: a Y axis typed in the figure editor for the other plots is not its, nor the other way round
+    if ((mode === 'around') !== (S.plotMode === 'around')) Fig.plot.yTitle = Fig.plot.yMin = Fig.plot.yMax = Fig.plot.yStep = null;
+    S.plotMode = mode; Plot.hover = null;
     for (const button of document.querySelectorAll('[data-plot]')) { const on = button.dataset.plot === mode; button.classList.toggle('on', on); button.setAttribute('aria-pressed', on ? 'true' : 'false'); }
-    Plot.dirty = true; drawPlot();
+    showY(); Plot.dirty = true; drawPlot();
   }
+  /** The Y axis boxes under the plot show the limits typed for what the plot shows (yKey). */
+  const showY = () => { const now = Plot.y[yKey()] || {}; $('y-min').value = finite(now.lo) ? now.lo : ''; $('y-max').value = finite(now.hi) ? now.hi : ''; };
   /** A cell chosen by the person (list, arrows, a click on the picture, a trace, a table row or the heatmap), or none. The plot
-   *  follows: with a cell it shows that cell over the average, with none the average alone. "Responders vs non-responders" stays. */
+   *  follows: with a cell it shows that cell over the average, with none the average alone. "Responders vs non-responders" stays,
+   *  and so does "Around the cell" while a cell is selected. */
   function chooseCell(name) {
     pick(name || null);
-    if (S.results && S.cell && S.plotMode === 'mean') setPlotMode('cell'); else if (S.results && !S.cell && S.plotMode === 'cell') setPlotMode('mean');
+    if (S.results && S.cell && S.plotMode === 'mean') setPlotMode('cell'); else if (S.results && !S.cell && (S.plotMode === 'cell' || S.plotMode === 'around')) setPlotMode('mean');
   }
   /** The cell meant by what was typed in the Cell box: its shown name ("Cell 12"), its saved name, or its number alone.
    *  null for an empty box (no cell); undefined when nothing in the Show list matches. */
@@ -1670,6 +1712,59 @@
       level('baseline', 'baseline mean', 'colourLevelBaseline', 0));
     return levels.filter((one, i) => finite(one.value) && !levels.slice(0, i).some((before) => before.value === one.value));
   }
+  // ---------------------------------------------------------------- around the cell: the traces the passing object check used
+  /** What Fiji gave for "Around the cell" (api/around), by cell, for the analysis shown: asked for one cell at a time, as it is
+   *  selected, and kept for a few cells. generation: the results it belongs to; an answer for earlier results is dropped. */
+  const Around = { got: new Map(), asking: new Set(), generation: 0 };
+  const AROUND_CONTROL = 'Checks are made for the primary stimulus.', AROUND_KEPT = 12;
+  function askAround(name) {
+    const r = S.results; if (!r || !name || Around.asking.has(name)) return;
+    const had = Around.got.get(name); if (had && !had.failed) return;
+    const generation = Around.generation; Around.asking.add(name);
+    api('around?cell=' + encodeURIComponent(name) + (r.folder ? '&folder=' + encodeURIComponent(r.folder) : ''))
+      .catch((problem) => ({ why: /fetch/i.test(problem.message) ? 'Fiji is not connected.' : problem.message, failed: true }))
+      .then((answer) => {
+        if (generation !== Around.generation) return; Around.asking.delete(name);
+        Around.got.delete(name); Around.got.set(name, answer); while (Around.got.size > AROUND_KEPT) Around.got.delete(Around.got.keys().next().value);
+        if (name === S.cell) { showAroundButton(); Plot.dirty = true; drawPlot(); }
+      });
+  }
+  /** "Around the cell" for the selected cell on the window shown: { data } to draw, { why } when there is nothing to show, and
+   *  {} while Fiji's answer is on its way. */
+  function aroundNow() {
+    if (!S.results) return { why: '' }; if (!S.cell) return { why: 'No cell selected.' }; if (!primaryShown()) return { why: AROUND_CONTROL };
+    const got = Around.got.get(S.cell); if (!got) return {};
+    return got.why || !Array.isArray(got.time) ? { why: got.why || '' } : { data: got };
+  }
+  /** The lines of "Around the cell" from one cell's data: its time; the cell's rise; the zones the flag rests on, each by its
+   *  place, in a colour of its own (zone colours in order, the core in its own); every other usable near-ring sector; and
+   *  the flagged frames (band, frames from 1) as a span of time, half a frame to each side. Any mix of parts is drawn. */
+  function aroundParts(a) {
+    const zones = new Map((a.zones || []).map((z) => [z.zone, z])), time = a.time;
+    const trace = (zone) => { const z = zones.get(zone); return z && z.usable !== false && Array.isArray(z.trace) ? z.trace : null; };
+    const placeOf = (zone, given) => given || (zones.get(zone) || {}).place || 'zone ' + zone;
+    let next = 0; const colours = ['colourZone1', 'colourZone2', 'colourZone3'];
+    const lines = (a.lines || []).filter((line) => line && trace(line.zone)).map((line) => ({ zone: line.zone, part: line.part, frame: line.frame == null ? null : line.frame, place: placeOf(line.zone, line.place), values: trace(line.zone),
+      colour: line.part === 'core' ? 'colourCore' : colours[Math.min(colours.length - 1, next++)] }));
+    const others = (a.others || []).filter((zone) => trace(zone)).map((zone) => ({ zone, place: placeOf(zone), values: trace(zone) }));
+    const frames = Array.isArray(a.band) && a.band.length === 2 && Number.isInteger(a.band[0]) && Number.isInteger(a.band[1]) && a.band[0] >= 1 && a.band[1] >= a.band[0] && a.band[1] <= time.length ? a.band : null;
+    // half the interval to the frame beside, or half the usual interval at either end of the recording and across a pause
+    const steps = time.slice(1).map((t, i) => t - time[i]).filter((d) => d > 0).sort((x, y) => x - y), typical = steps.length ? steps[steps.length >> 1] : 0;
+    const half = (i, j) => Math.min(j >= 0 && j < time.length ? Math.abs(time[j] - time[i]) : typical, 1.5 * typical) / 2;
+    const band = frames ? [time[frames[0] - 1] - half(frames[0] - 1, frames[0] - 2), time[frames[1] - 1] + half(frames[1] - 1, frames[1])] : null;
+    return { time, cell: a.rise, lines, others, frames, band, rule: a.rule || '', text: a.text || '' };
+  }
+  /** The "Around the cell" button: off, with why in its tooltip, when there is nothing to show; as it was while an answer is on its way. */
+  function showAroundButton() {
+    const button = document.querySelector('[data-plot="around"]'), now = aroundNow(); if (!now.data && now.why === undefined) return;
+    button.disabled = !now.data; button.title = now.data ? button.dataset.title : now.why || button.dataset.title;
+  }
+  /** Whether "Around the cell" is on screen with something to draw. */
+  const aroundDrawn = () => S.plotMode === 'around' && !!aroundNow().data;
+  /** The plot's Y axis title, as the painters write it when none is typed: the signal, or the gray levels of "Around the cell". */
+  const plotYTitle = () => S.plotMode === 'around' ? 'ΔF (gray levels)' : signalName();
+  /** What the Y axis limits typed under the plot belong to: the signal on screen, or "Around the cell", which is in gray levels. */
+  const yKey = () => S.plotMode === 'around' ? 'around' : S.signal;
   // ---------------------------------------------------------------- style: how the plot and the heatmap look
   const PT = 96 / 72;   // pixels in a point
   /** The fonts a figure can be written in, in the order the editor offers them: [key, name, family]. The one list for the editor
@@ -1700,7 +1795,11 @@
       levels: true, levelWidth: 0.75, requiredWidth: 1.35, levelDash: [3.75, 3], colourLevelBaseline: '#7c8794', colourLevelFloor: '#6a3d9a', colourLevelNoise: '#a46ea0', colourLevelRequired: CALL.responded.toLowerCase(),
       // and the run that counted, a band: never narrower than runWidth, with a tick at the top of the plot where it starts, so
       // that a run of two or three frames can be seen
-      run: true, colourRun: '#d5eedd', runWidth: 2.25, runTick: 4.5 }),
+      run: true, colourRun: '#d5eedd', runWidth: 2.25, runTick: 4.5,
+      // "Around the cell": the zones a flag rests on, each in a colour of its own (the core always in the last), the other
+      // near-ring sectors thin and gray, and the flagged frames as a band
+      zoneWidth: 1.3, colourZone1: '#0072b2', colourZone2: '#c8660e', colourZone3: '#009e73', colourCore: '#6a3d9a', otherWidth: 0.6, colourOtherSectors: CALL.other.toLowerCase(),
+      flagged: true, colourFlagged: '#fbe7b0' }),
     heatmap: Object.assign({}, STYLE_SHARED, { width: 7, height: 5, barTitle: null,
       // time: the whole recording, or the limits typed in the editor. The colour range: automatic (heatmapRange), or the two numbers typed there
       xMin: null, xMax: null, xStep: null, barMin: null, barMax: null,
@@ -1719,7 +1818,7 @@
   for (const key of ['axisWidth', 'tickLength', 'stimulusText', 'stimulusWidth', 'stimulusDash', 'colourStimulus', 'colourWindow', 'windowBar', 'colourResponded', 'colourNot']) STYLE.heatmap[key] = STYLE.plot[key];
   /** The entries that are lengths in points; a painter gets them in pixels. */
   const STYLE_POINTS = ['text', 'titleText', 'axisWidth', 'tickLength', 'zeroDash', 'meanWidth', 'casing', 'cellWidth', 'traceWidth', 'responderWidth', 'stimulusWidth', 'stimulusDash', 'windowBar', 'levelWidth', 'requiredWidth', 'levelDash',
-    'runWidth', 'runTick', 'barWidth', 'stripWidth', 'flagWidth', 'stripLeast', 'divider'];
+    'runWidth', 'runTick', 'zoneWidth', 'otherWidth', 'barWidth', 'stripWidth', 'flagWidth', 'stripLeast', 'divider'];
   /** What the page sets differently from a saved figure, the plot and the heatmap alike: its ink and its own font. "page" also
    *  tells a painter to keep what it drew for the pointer (Plot.geom and the rest) and to mark the selected cell. */
   const PAGE_STYLE = { plot: { page: true, ink: '#3e4c59', font: 'page' } }; PAGE_STYLE.heatmap = PAGE_STYLE.plot;
@@ -1811,13 +1910,17 @@
   const meansLeaveOut = () => { const T = shownTraces(), group = S.plotMode === 'calls' ? 0 : S.group; return Array.from(leftOut()).some((name) => T[name] && inGroup(callOf(name), group, name)); };
   /** What a saved plot is called, in its file name; a plot whose means leave out the cells below zero says so ("_without_below_zero"),
    *  so that a file named mean_trace always holds the mean of every cell of its group, as the release saved it. */
-  const plotKind = () => (S.plotMode === 'cell' ? 'traces' : S.plotMode === 'calls' ? 'responders_vs_nonresponders' : 'mean_trace' + (S.group ? '_' + GROUPS[S.group].toLowerCase().replace(/[^a-z0-9]+/g, '_') : '')) + (isDff() ? '' : S.signal === 'raw' ? '_raw_gray_values' : S.signal === 'rawdff' ? '_dFF0_of_raw' : '_gray_levels')
+  const plotKind = () => S.plotMode === 'around' ? 'around_the_cell' : (S.plotMode === 'cell' ? 'traces' : S.plotMode === 'calls' ? 'responders_vs_nonresponders' : 'mean_trace' + (S.group ? '_' + GROUPS[S.group].toLowerCase().replace(/[^a-z0-9]+/g, '_') : '')) + (isDff() ? '' : S.signal === 'raw' ? '_raw_gray_values' : S.signal === 'rawdff' ? '_dFF0_of_raw' : '_gray_levels')
     + (meansLeaveOut() ? '_without_below_zero' : '');
   /** The numbers behind the plot as a table: time, each mean line with its SEM and number of cells (named for the cells below zero
    *  when they are left out of it: mean_of_all_cells_without_below_zero), and the selected cell. */
   function plotNumbers() {
     const r = S.results, series = plotSeries(), own = S.plotMode === 'cell' && S.cell && shownTraces()[S.cell] ? shownTraces()[S.cell] : null;
     const clean = (text) => String(text).replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, ''), without = meansLeaveOut() ? '_without_below_zero' : '';
+    // "Around the cell": time, the cell's rise, each zone of its flag and each other ring sector, in gray levels, under their places
+    const a = S.plotMode === 'around' ? aroundNow().data : null;
+    if (a) { const p = aroundParts(a), columns = [p.cell].concat(p.lines.map((line) => line.values), p.others.map((other) => other.values)), value = (v) => finite(v) ? v : '';
+      return [['Time_s', S.cell].concat(p.lines.map((line) => clean(line.place)), p.others.map((other) => clean(other.place))).join(',')].concat(p.time.map((t, i) => [t].concat(columns.map((c) => value(c && c[i]))).join(','))).join('\n') + '\n'; }
     const head = ['Time_s']; for (const s of series) head.push(clean(s.short) + without, clean(s.short) + without + '_SEM', clean(s.short) + without + '_n_cells'); if (own) head.push(S.cell);
     const rows = [head.join(',')];
     for (let i = 0; i < r.time.length; i++) {
@@ -1849,11 +1952,15 @@
    *              others when "Thresholds" is ticked. They and the run belong to one cell's call. */
   function plotParts(look, x0, x1) {
     const T = shownTraces(), oneCell = S.plotMode === 'cell', all = responseSpans(), onset = number(selectedCall().Stimulus_onset_s), shown = (span) => realSpan(span) && span[1] > x0 && span[0] < x1;
+    const stimulus = look.stimulus && finite(onset) && onset >= x0 && onset <= x1 ? onset : null;
+    // "Around the cell": the cell, the zones of its flag, the other ring sectors and the flagged frames, and the stimulus; nothing else
+    if (S.plotMode === 'around') { const a = aroundNow().data, around = a ? aroundParts(a) : null; if (around && !(look.flagged && around.band && around.band[1] > x0 && around.band[0] < x1)) around.band = null;
+      return { series: [], traces: [], own: null, spans: { baseline: null, response: null, run: null }, stimulus, levels: [], around }; }
     const called = oneCell && isDff() && !!S.cell && Object.keys(callRow(S.cell)).length > 0;
     return { series: plotSeries(), traces: S.every ? plotCells().shown : [], own: oneCell && S.cell && T[S.cell] ? T[S.cell] : null,
       spans: { baseline: look.baseline && shown(all.baseline) ? all.baseline : null, response: look.window && shown(all.response) ? all.response : null,
         run: called && look.run && realSpan(all.run) && all.run[1] >= x0 && all.run[0] <= x1 ? all.run : null },   // (a run of one sample has no length and is drawn all the same)
-      stimulus: look.stimulus && finite(onset) && onset >= x0 && onset <= x1 ? onset : null, levels: called ? referenceLevels(S.thresholds).filter((level) => look.levels || level.key !== 'required') : [] };
+      stimulus, levels: called ? referenceLevels(S.thresholds).filter((level) => look.levels || level.key !== 'required') : [], around: null };
   }
   /** The legend, in one place: one entry for each thing the plot draws and none for anything else, each with what its swatch
    *  needs to show the thing as drawn. In order: the selected cell; each group once (its mean line, on its band when a band
@@ -1861,7 +1968,14 @@
    *  lines; then the bands, "baseline", "response window" and the "response" of a cell that responded. The stimulus is named
    *  above its own line and has no entry. */
   function plotLegend(parts, look) {
-    const items = [];
+    const items = [], around = parts.around;
+    if (around) {   // the cell; each zone of its flag by its place; the other ring sectors once; the flagged frames
+      items.push({ kind: 'line', colour: look.colourCell, width: look.cellWidth, text: shortName(S.cell) });
+      for (const line of around.lines) items.push({ kind: 'line', colour: look[line.colour], width: look.zoneWidth, text: line.place });
+      if (around.others.length) items.push({ kind: 'line', colour: look.colourOtherSectors, width: look.otherWidth, text: 'other ring sectors' });
+      if (around.band) items.push({ kind: 'box', colour: look.colourFlagged, outline: true, text: 'flagged frames' });
+      return items;
+    }
     if (parts.own) items.push({ kind: 'line', colour: look.colourCell, width: look.cellWidth, text: shortName(S.cell) });
     for (const s of parts.series) { const band = bandDrawn(s, look); items.push({ kind: 'line', colour: look[s.colour], width: look.meanWidth, band: band ? shade(look[s.colour], look.semOpacity) : null, text: meanLabel(s, band) }); }
     if (parts.traces.length) {   // one entry; its swatch is a line of each kind that is drawn, the responders' under the others'
@@ -1906,6 +2020,8 @@
     }
     const values = range ? range.slice() : [], own = parts.own && extent(parts.own); if (own) values.push(own.min, own.max);
     for (const level of parts.levels) values.push(level.value);
+    // "Around the cell": every line it draws, whole, and zero, the cell's level over its F₀ frames
+    if (parts.around) for (const trace of [parts.around.cell].concat(parts.around.lines.map((line) => line.values), parts.around.others.map((other) => other.values))) { const e = trace && extent(trace); if (e) values.push(e.min, e.max, 0); }
     let lo = least(values), hi = most(values);
     if (!values.length) { lo = 0; hi = 1; } else if (hi - lo < 0.001) hi = lo + 1;
     const room = (hi - lo) * 0.05; lo -= room; hi += room;
@@ -1918,7 +2034,7 @@
   /** The plot's Y range. auto: the automatic range (plotRange), with the limits typed under "Y axis" on the page in their place
    *  (either end alone, too; they belong to the signal on screen). lo, hi: that, or the limits typed in the figure editor. */
   function plotLimits(parts, look) {
-    const range = plotRange(parts, look), typed = Plot.y[S.signal] || {}, auto = typedRange(range, typed.lo, typed.hi) || range, [lo, hi] = typedRange(auto, look.yMin, look.yMax) || auto;
+    const range = plotRange(parts, look), typed = Plot.y[yKey()] || {}, auto = typedRange(range, typed.lo, typed.hi) || range, [lo, hi] = typedRange(auto, look.yMin, look.yMax) || auto;
     return { lo, hi, auto };
   }
   /** Places legend entries: in rows from the left, wrapped by whole entries, with one row height and even gaps; or stacked in
@@ -2067,12 +2183,14 @@
     const band = (span, colour, least) => { const b = Math.min(L + W, Math.max(X(span[1]), X(span[0]) + least)), a = Math.max(L, Math.min(X(span[0]), b - least)); ctx.fillStyle = colour; ctx.fillRect(a, T, b - a, H); };
     const line = (values) => strokeTrace(ctx, time, values, X, Y, gapLimit);
     // behind the data: the baseline band and the run that counted; grid lines when wanted; a dotted line at zero
+    const around = parts.around;
     inside(() => {
       if (spans.baseline) band(spans.baseline, look.colourBaseline, 0);
       if (spans.run) band(spans.run, look.colourRun, look.runWidth);
+      if (around && around.band) band(around.band, look.colourFlagged, look.runWidth);
       if (look.grid) for (const v of ys.values) across(crisp(Y(v)), look.colourGrid, look.axisWidth);
       // (not under a threshold line that lies on zero, the baseline mean of ΔF/F₀: two dash patterns on one line read as neither)
-      if (lo < 0 && hi > 0 && (isDff() || S.signal === 'rawdff') && !parts.levels.some((level) => Math.abs(Y(level.value) - Y(0)) < 1)) across(crisp(Y(0)), look.colourZero, look.axisWidth, look.zeroDash);
+      if (lo < 0 && hi > 0 && (isDff() || S.signal === 'rawdff' || around) && !parts.levels.some((level) => Math.abs(Y(level.value) - Y(0)) < 1)) across(crisp(Y(0)), look.colourZero, look.axisWidth, look.zeroDash);
     });
     // marks of time, in the strip above the plot: the response window, a thin bar; the stimulus, a thin dashed line with its
     // label above it. Nothing of this lies on the traces.
@@ -2106,6 +2224,12 @@
       const cased = (values, colour, width, casing) => { if (casing) { ctx.strokeStyle = look.colourCasing; ctx.lineWidth = width + 2 * look.casing; line(values); } ctx.strokeStyle = colour; ctx.lineWidth = width; line(values); };
       for (const s of parts.series) cased(s.mean, look[s.colour], look.meanWidth, parts.traces.length > 0);
       if (parts.own) cased(parts.own, look.colourCell, look.cellWidth, true);
+      if (around) {   // the other ring sectors, thin, under the zones of the flag; the cell on top, as on the other plots
+        const zone = (values) => strokeTrace(ctx, around.time, values, X, Y, gapLimit);
+        ctx.strokeStyle = look.colourOtherSectors; ctx.lineWidth = look.otherWidth; for (const other of around.others) zone(other.values);
+        for (const one of around.lines) { ctx.strokeStyle = look[one.colour]; ctx.lineWidth = look.zoneWidth; zone(one.values); }
+        if (around.cell) { ctx.strokeStyle = look.colourCasing; ctx.lineWidth = look.cellWidth + 2 * look.casing; zone(around.cell); ctx.strokeStyle = look.colourCell; ctx.lineWidth = look.cellWidth; zone(around.cell); }
+      }
       if (spans.run && spans.run[0] >= x0 && spans.run[0] <= x1) { const sx = X(spans.run[0]); ctx.strokeStyle = look.colourLevelRequired; ctx.lineWidth = look.requiredWidth; ctx.lineCap = 'butt'; ctx.beginPath(); ctx.moveTo(sx, T); ctx.lineTo(sx, T + look.runTick); ctx.stroke(); }
     });
     // axes: left and bottom (or a box), ticks pointing out, numbers with a true minus sign, all in the one ink
@@ -2117,44 +2241,52 @@
     ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; for (const v of ys.values) ctx.fillText(tickText(v, ys.step), L - look.tickLength - u(4), crisp(Y(v)));
     ctx.textAlign = 'center'; ctx.textBaseline = 'top'; for (const v of xs.values) ctx.fillText(tickText(v, xs.step), crisp(X(v)), T + H + look.tickLength + u(3));
     writeText(ctx, centred(ctx, look.xTitle == null ? 'Time (s)' : look.xTitle, L + W / 2, w, look), L + W / 2, g.titleY, look);
-    ctx.save(); ctx.translate(u(6) + look.px / 2, T + H / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'middle'; writeText(ctx, centred(ctx, look.yTitle == null ? signalName() : look.yTitle, T + H / 2, h, look), 0, 0, look); ctx.restore();
+    ctx.save(); ctx.translate(u(6) + look.px / 2, T + H / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'middle'; writeText(ctx, centred(ctx, look.yTitle == null ? plotYTitle() : look.yTitle, T + H / 2, h, look), 0, 0, look); ctx.restore();
     if (g.legend) drawLegend(ctx, g.legend.layout, g.legend.x, g.legend.y, look);
-    const drew = Object.assign(g, { x0, x1, lo, hi, full0, full1, items, times: xs.values, plotted: parts.series.map((s) => meanLabel(s, bandDrawn(s, look))) });
-    if (look.page) { Plot.geom = drew; Plot.drawn = parts.traces; Plot.series = parts.series; }   // the page's cursor and hover read these; a figure leaves them alone
+    const drew = Object.assign(g, { x0, x1, lo, hi, full0, full1, items, times: xs.values, plotted: around ? items.map((item) => item.text) : parts.series.map((s) => meanLabel(s, bandDrawn(s, look))), around });
+    if (look.page) { Plot.geom = drew; Plot.drawn = parts.traces; Plot.series = parts.series; Plot.around = around; }   // the page's cursor and hover read these; a figure leaves them alone
     return drew;
   }
   function drawPlot() {
-    const canvas = $('plot'), r = S.results; $('plot-empty').hidden = !!r;
+    const canvas = $('plot'), r = S.results, around = r && S.plotMode === 'around' ? aroundNow() : null, blocked = !!around && !around.data;
+    // "Around the cell" with nothing to show for the cell selected: why, in Fiji's words, where the plot would be, and nothing to save
+    $('plot-empty').hidden = !!r && !blocked; $('plot-empty').textContent = blocked ? around.why || '' : EMPTY_PLOT;
+    if (r) for (const id of ['save-plot', 'save-plot-folder', 'edit-plot']) $(id).disabled = blocked;
     // What the page says beside the plot, not in it, set before the canvas is measured (the note takes a line from it): that the
     // selected cell has no trace to draw; and "Thresholds" is there only where there are thresholds, with one cell in ΔF/F₀
-    // (not a greyed box in the views where it would do nothing).
+    // (not a greyed box in the views where it would do nothing). "Around the cell" is in gray levels and draws no other cells.
     const missing = !!r && traceMissing(); $('cell-note').hidden = !missing; if (missing) $('cell-note').textContent = 'No ΔF/F₀ trace' + (hasTable('corrected') ? ': choose gray levels under Signal' : '');
     $('thresholds-label').hidden = !(r && S.plotMode === 'cell' && isDff());
+    if (r) { $('every-label').hidden = $('signal-label').hidden = S.plotMode === 'around'; showAroundButton(); }
+    segRows();
     if (!canvas.clientWidth) return;
     const { ctx, w, h, dpr } = fit(canvas);
-    if (!r) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); return; }
+    if (!r || blocked) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); if (blocked) { Plot.geom = null; Plot.around = null; Plot.dirty = true; canvas.setAttribute('aria-label', $('plot-empty').textContent); } return; }
     if (Plot.dirty || Plot.layer.width !== canvas.width || Plot.layer.height !== canvas.height) {
       Plot.layer.width = canvas.width; Plot.layer.height = canvas.height; const lctx = Plot.layer.getContext('2d'); lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       paintTraces(lctx, w, h, PAGE_LOOK); Plot.dirty = false;
       // A limit typed under "Y axis" that the plot does not use marks its box: text that is no number, or a minimum at or above the maximum (typedRange).
       for (const [id, end, why] of [['y-min', 'lo', 'Minimum must be below maximum'], ['y-max', 'hi', 'Maximum must be above minimum']]) { const box = $(id), value = typedNumber(box.value), unused = value !== null && Plot.geom[end] !== value;
         if (unused) { box.setAttribute('aria-invalid', 'true'); box.title = Number.isNaN(value) ? 'Not a number' : why; } else { box.removeAttribute('aria-invalid'); box.removeAttribute('title'); } }
-      canvas.setAttribute('aria-label', 'Plot of ' + signalName() + ' against time: ' + Plot.geom.items.map((item) => item.text).join('; '));   // the legend is drawn in the plot: said here for a screen reader
+      canvas.setAttribute('aria-label', 'Plot of ' + plotYTitle() + ' against time: ' + Plot.geom.items.map((item) => item.text).join('; '));   // the legend is drawn in the plot: said here for a screen reader
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(Plot.layer, 0, 0); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const g = Plot.geom, time = r.time, X = (t) => g.L + (t - g.x0) / (g.x1 - g.x0) * g.W, Y = (v) => g.T + (g.hi - v) / (g.hi - g.lo) * g.H;
     ctx.save(); ctx.beginPath(); ctx.rect(g.L, g.T, g.W + 1, g.H + 1); ctx.clip();
-    if (Plot.hover && shownTraces()[Plot.hover] && Plot.hover !== S.cell) {   // the trace under the pointer, in the colour of its call
+    if (Plot.hover && S.plotMode !== 'around' && shownTraces()[Plot.hover] && Plot.hover !== S.cell) {   // the trace under the pointer, in the colour of its call
       ctx.strokeStyle = CALL[kind(callOf(Plot.hover))]; ctx.lineWidth = 2.2; ctx.lineJoin = 'round'; strokeTrace(ctx, time, shownTraces()[Plot.hover], X, Y, samplingSupport().gap);
     }
     // Nothing sits on the traces while nobody is reading it. While the frame moves (a drag in the plot, the slider or the step
     // buttons under the picture, the arrow keys, Play) and for a moment after, a solid line shows where the picture is, with
     // that frame's numbers. Otherwise a dashed line and the numbers follow the pointer over the plot and go when it leaves.
-    const own = S.plotMode === 'cell' && S.cell ? shownTraces()[S.cell] : null, moving = Plot.scrubbing || !!S.timer, awake = moving || performance.now() - Plot.movedAt < LINGER;
+    // "Around the cell" says the cell's rise and that of each zone of its flag, in gray levels.
+    const near = S.plotMode === 'around' ? Plot.around : null, lines = near ? near.lines : [];
+    const own = near ? near.cell : S.plotMode === 'cell' && S.cell ? shownTraces()[S.cell] : null, moving = Plot.scrubbing || !!S.timer, awake = moving || performance.now() - Plot.movedAt < LINGER;
     Plot.readout = null; Plot.line = false;
-    const plotted = (i) => (S.plotMode !== 'cell' ? Plot.series.map((series) => series.mean[i]) : []).concat(own ? [own[i]] : []);
+    const plotted = (i) => (S.plotMode !== 'cell' ? Plot.series.map((series) => series.mean[i]) : []).concat(own ? [own[i]] : [], lines.map((line) => line.values[i]));
     const numbers = (at, i) => { let text = at.toFixed(1) + ' s'; if (S.plotMode !== 'cell') for (const series of Plot.series) if (finite(series.mean[i])) text += ' · ' + series.short + ' ' + series.mean[i].toFixed(3);
-      if (own && finite(own[i])) text += ' · ' + shortName(S.cell) + ' ' + own[i].toFixed(3); return text; };
+      const digits = near ? 1 : 3; if (own && finite(own[i])) text += ' · ' + shortName(S.cell) + ' ' + own[i].toFixed(digits);
+      for (const line of lines) if (finite(line.values[i])) text += ' · ' + line.place + ' ' + line.values[i].toFixed(digits); return text; };
     /** The numbers in a box at the line x: along the bottom of the plot, or along the top when a plotted value lies under the box there. */
     const label = (text, x, i) => {
       ctx.font = '12px ' + getComputedStyle(document.body).fontFamily; const tw = ctx.measureText(text).width + 10, bx = Math.max(g.L, Math.min(g.L + g.W - tw, x - tw / 2));
@@ -2174,13 +2306,20 @@
     }
     ctx.restore();
   }
+  /** The plot buttons that do not fit on one line go on to the next, whole: each line of them gets its own rounded ends. */
+  function segRows() {
+    const buttons = Array.from(document.querySelectorAll('.plot-head .seg button'));
+    buttons.forEach((button, i) => { const top = button.offsetTop;
+      button.classList.toggle('row-start', i > 0 && buttons[i - 1].offsetTop !== top); button.classList.toggle('row-end', i < buttons.length - 1 && buttons[i + 1].offsetTop !== top); });
+  }
   /** The drawn trace nearest to the mouse, when it is within a few pixels. */
   function traceAt(event) {
     const g = Plot.geom, r = S.results; if (!g || !r) return null;
     const box = $('plot').getBoundingClientRect(), mx = event.clientX - box.left, my = event.clientY - box.top;
     if (mx < g.L || mx > g.L + g.W || my < g.T || my > g.T + g.H) return null;
     const t = g.x0 + (mx - g.L) / g.W * (g.x1 - g.x0); let i = 0, gap = Infinity; for (let k = 0; k < r.time.length; k++) { const d = Math.abs(r.time[k] - t); if (d < gap) { gap = d; i = k; } }
-    const candidates = Plot.drawn.slice(); if (S.cell && shownTraces()[S.cell] && !candidates.includes(S.cell)) candidates.push(S.cell);
+    // ("Around the cell" draws one cell and its zones, in gray levels: no trace to pick, only the time under the pointer)
+    const candidates = S.plotMode === 'around' ? [] : Plot.drawn.slice(); if (S.plotMode !== 'around' && S.cell && shownTraces()[S.cell] && !candidates.includes(S.cell)) candidates.push(S.cell);
     let best = null, near = 7;
     for (const name of candidates) { const v = shownTraces()[name][i]; if (!finite(v)) continue; const d = Math.abs(g.T + (g.hi - v) / (g.hi - g.lo) * g.H - my); if (d < near) { near = d; best = name; } }
     return { name: best, index: i, time: t, mx, my };
@@ -2508,19 +2647,26 @@
   /** The calls table as saved. While review marks apply, two columns on its right: the reviewed call and the review reason with
    *  its note, on the primary stimulus's row of each marked cell; empty on every other row. The saved Status and Reason stay. */
   function showCalls() {
-    const data = S.results.tables.calls, review = reviewOfRows(data);
+    const data = withCodes('calls', S.results.tables.calls).data, review = reviewOfRows(data);
     if (!review) { table('table-calls', data, 'calls'); return; }
     const n = data.header.length, blank = { text: '', key: '' };
     table('table-calls', Object.assign({}, data, {
-      rows: data.rows.map((row, i) => { const m = review[i]; return fullRow(row, n).concat(m ? [{ text: m.reviewed, key: m.reviewed }, { text: m.reason + (m.note ? ': ' + m.note : ''), key: m.reason + (m.note ? ': ' + m.note : '') }] : [blank, blank]); }),
+      rows: data.rows.map((row, i) => { const m = review[i], why = m ? reviewReason(m) : ''; return fullRow(row, n).concat(m ? [{ text: m.reviewed, key: m.reviewed }, { text: why, key: why }] : [blank, blank]); }),
       more: [{ name: 'Reviewed call', given: true, index: n, title: 'The call after review. The automatic call is in Call.' }, { name: 'Review reason', given: true, index: n + 1, title: 'Why the call was changed, and the note' }] }), 'calls');
   }
-  /** The calls table as a CSV: as saved, and while review marks apply with Reviewed_call, Review_reason and Review_note on the right. */
+  /** A mark's reason as the Review reason column says it: "Passing object, automatic" for a mark made by the option, then the note. */
+  const automaticMark = (mark) => mark.markedBy === 'automatic';
+  const reviewReason = (mark) => mark.reason + (automaticMark(mark) ? ', automatic' : '') + (mark.note ? ': ' + mark.note : '');
+  /** The calls table as a CSV: as saved, with the codes of the call checks in QC_flags (withCodes), and while review marks apply
+   *  with Reviewed_call, Review_reason and Review_note on the right, then Marked_by when a mark was made automatically. */
   function callsRows() {
-    const rows = savedRows('calls'), data = S.results.tables.calls, review = reviewOfRows(data); if (!review) return rows;
-    const n = data.header.length;
-    return [fullRow(rows[0], n).concat(['Reviewed_call', 'Review_reason', 'Review_note'])].concat(data.rows.map((row, i) => { const m = review[i]; return fullRow(row, n).concat(m ? [m.reviewed, m.reason, m.note || ''] : ['', '', '']); }));
+    const data = withCodes('calls', S.results.tables.calls).data, rows = [data.header].concat(data.rows), review = reviewOfRows(data); if (!review) return rows;
+    const n = data.header.length, by = review.some((m) => m && automaticMark(m));
+    return [fullRow(rows[0], n).concat(['Reviewed_call', 'Review_reason', 'Review_note'], by ? ['Marked_by'] : [])]
+      .concat(data.rows.map((row, i) => { const m = review[i]; return fullRow(row, n).concat(m ? [m.reviewed, m.reason, m.note || ''] : ['', '', ''], by ? [m ? m.markedBy || 'manual' : ''] : []); }));
   }
+  /** Whether the calls table, as exported, has codes of the call checks in its QC_flags. */
+  const callsCoded = () => withCodes('calls', S.results.tables.calls).added;
   const showCounts = () => table('table-counts', S.results.tables.counts, 'counts');
 
   // ---------------------------------------------------------------- the processed data, cell by cell
@@ -2563,7 +2709,7 @@
     const clean = (text) => String(text || '').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80);
     const now = new Date(), two = (n) => String(n).padStart(2, '0');
     const stamp = now.getFullYear() + two(now.getMonth() + 1) + two(now.getDate()) + '-' + two(now.getHours()) + two(now.getMinutes()) + two(now.getSeconds());
-    return [clean(S.info.recording), kind, /^traces/.test(kind) && S.cell ? (shortName(S.cell) === S.cell ? clean(S.cell) : clean(shortName(S.cell)) + '_' + clean(S.cell).slice(0, 13)) : '', stamp].filter(Boolean).join('_') + '.' + extension;
+    return [clean(S.info.recording), kind, /^(traces|around_the_cell)/.test(kind) && S.cell ? (shortName(S.cell) === S.cell ? clean(S.cell) : clean(shortName(S.cell)) + '_' + clean(S.cell).slice(0, 13)) : '', stamp].filter(Boolean).join('_') + '.' + extension;
   }
   /** What the page showed, kept beside a saved file. @param followsReview whether what is saved follows the review marks: a figure
    *  or picture of the primary stimulus, the calls table and the metric summary do; the counts, the processed data, the per-cell
@@ -2574,7 +2720,7 @@
       manifest: S.results.manifest, settingsPending: hasPending(), displayed_window: S.window, cell: S.cell, group: GROUPS[S.group],
       frame: S.frame, time_s: frameTimes()[S.frame - 1], view: S.view, results_folder: S.results.folder || (S.state && S.state.folder) || null,
       time_range: Plot.geom ? [Plot.geom.x0, Plot.geom.x1] : [Plot.x0, Plot.x1], time_zoomed: Plot.x0 !== null, palette: S.palette, range: S.range, order: S.order,
-      plot: S.plotMode, signal: S.results && isDff() ? 'dF/F0' : S.signal, y_axis: Plot.geom ? [Plot.geom.lo, Plot.geom.hi] : null, y_axis_typed: Plot.y[S.signal] || null, plotted: Plot.geom ? Plot.geom.plotted : [], all_traces_drawn: S.every, thresholds_drawn: S.thresholds, cells_left_out: Array.from(leftOut()),
+      plot: S.plotMode, signal: S.plotMode === 'around' ? 'dF (gray levels)' : S.results && isDff() ? 'dF/F0' : S.signal, y_axis: Plot.geom ? [Plot.geom.lo, Plot.geom.hi] : null, y_axis_typed: Plot.y[yKey()] || null, plotted: Plot.geom ? Plot.geom.plotted : [], all_traces_drawn: S.every, thresholds_drawn: S.thresholds, cells_left_out: Array.from(leftOut()),
       // while review marks apply, the calls of the primary stimulus are those after review, as the Fiji window's record says too
       ...(marked() && followsReview ? { calls: 'after review', review_file: S.results.review.file, review_sha256: S.results.review.sha256 } : {}) };
   }
@@ -2583,9 +2729,14 @@
   function figureShows(kind) {
     const drew = Fig.drawn; if (!drew || drew.kind !== kind) return {};
     const typedTime = Fig[kind].xMin != null || Fig[kind].xMax != null;
-    return kind === 'plot' ? { time_range: [drew.x0, drew.x1], time_zoomed: Plot.x0 !== null || typedTime, y_axis: [drew.lo, drew.hi], plotted: drew.plotted }
+    return kind === 'plot' ? Object.assign({ time_range: [drew.x0, drew.x1], time_zoomed: Plot.x0 !== null || typedTime, y_axis: [drew.lo, drew.hi], plotted: drew.plotted }, drew.around ? { around_the_cell: aroundRecord(drew.around) } : {})
       : { time_range: [drew.x0, drew.x1], time_zoomed: typedTime };
   }
+  /** What a saved "Around the cell" shows, for the file kept beside it: the cell, its flag, each zone drawn (by number, place and
+   *  part, with the frame where a sector was seen), the other ring sectors, and the flagged frames, as frames from 1 and in seconds. */
+  const aroundRecord = (around) => ({ cell: S.cell, rule: around.rule, flag: around.text, units: 'gray levels',
+    lines: around.lines.map((line) => ({ zone: line.zone, place: line.place, part: line.part, frame: line.frame })), other_ring_sectors: around.others.map((other) => ({ zone: other.zone, place: other.place })),
+    flagged_frames: around.band ? around.frames : null, flagged_frames_s: around.band });
   /** How saved pictures are written. Format, resolution and TIFF compression are one setting for every saved picture, the
    *  figures and the pictures of the cells alike; size is the width of a picture of the cells (a figure has its own). Each has
    *  a list on the page (saveBoxes), and showSaveOptions makes those lists show what is set here. */
@@ -2626,21 +2777,23 @@
   const FIGURE_TEXT = [['Text', 'font', 'Font', 'choice', { options: FONTS.map((font) => font.slice(0, 2)) }],
     ['Text', 'text', 'Text size', 'number', { unit: 'pt', least: 4, most: 48 }], ['Text', 'titleText', 'Title size', 'number', { unit: 'pt', least: 4, most: 72 }],
     ['Text', 'ink', 'Text and axes', 'colour'], ['Text', 'background', 'Background', 'choice', { options: [['white', 'White'], ['transparent', 'Transparent']] }]];
-  const cellDrawn = () => S.plotMode === 'cell' && !!S.cell && !!shownTraces()[S.cell], byCall = () => S.plotMode === 'calls', cellCalled = () => S.plotMode === 'cell' && isDff();
+  const cellDrawn = () => (S.plotMode === 'cell' && !!S.cell && !!shownTraces()[S.cell]) || aroundDrawn(), byCall = () => S.plotMode === 'calls', cellCalled = () => S.plotMode === 'cell' && isDff();
+  const meansDrawn = () => S.plotMode !== 'around', everyDrawn = () => S.every && meansDrawn();
   const FIGURE_FIELDS = {
     plot: FIGURE_SIZE.concat([['Text', 'title', 'Title', 'text'], ['Text', 'xTitle', 'X axis title', 'text'], ['Text', 'yTitle', 'Y axis title', 'text']], FIGURE_TEXT, [
       ['Axes', 'xMin', 'X min', 'number', {}], ['Axes', 'xMax', 'X max', 'number', {}], ['Axes', 'xStep', 'X ticks every', 'number', { above: 0 }],
       ['Axes', 'yMin', 'Y min', 'number', {}], ['Axes', 'yMax', 'Y max', 'number', {}], ['Axes', 'yStep', 'Y ticks every', 'number', { above: 0 }],
       ['Axes', 'frame', 'Frame', 'choice', { options: [['open', 'Left and bottom'], ['box', 'Box']] }], ['Axes', 'grid', 'Grid lines', 'tick'], ['Axes', 'axisWidth', 'Axis thickness', 'number', { unit: 'pt', least: 0.25, most: 6 }],
-      ['Lines', 'meanWidth', 'Mean line', 'number', { unit: 'pt', least: 0.25, most: 10 }], ['Lines', 'colourMean', 'Mean colour', 'colour', { when: () => S.plotMode !== 'calls' }],
-      ['Lines', 'sem', 'SEM', 'choice', { options: [['band', 'Shaded band'], ['none', 'Not shown']] }],
+      ['Lines', 'meanWidth', 'Mean line', 'number', { unit: 'pt', least: 0.25, most: 10, when: meansDrawn }], ['Lines', 'colourMean', 'Mean colour', 'colour', { when: () => S.plotMode !== 'calls' && meansDrawn() }],
+      ['Lines', 'sem', 'SEM', 'choice', { options: [['band', 'Shaded band'], ['none', 'Not shown']], when: meansDrawn }],
       ['Lines', 'cellWidth', 'Cell line', 'number', { unit: 'pt', least: 0.25, most: 10, when: cellDrawn }], ['Lines', 'colourCell', 'Cell colour', 'colour', { when: cellDrawn }],
-      ['Lines', 'traceWidth', 'Trace line', 'number', { unit: 'pt', least: 0.1, most: 6, when: () => S.every }], ['Lines', 'colourTrace', 'Trace colour', 'colour', { when: () => S.every }],
-      ['Lines', 'traceOpacity', 'Trace opacity', 'number', { unit: '%', least: 1, most: 100, scale: 100, when: () => S.every }],
-      ['Lines', 'responderWidth', 'Responder line', 'number', { unit: 'pt', least: 0.1, most: 6, when: () => S.every }], ['Lines', 'responderOpacity', 'Responder opacity', 'number', { unit: '%', least: 1, most: 100, scale: 100, when: () => S.every }],
-      ['Lines', 'colourResponded', 'Responded', 'colour', { when: () => S.every || byCall() }], ['Lines', 'colourNot', 'Did not respond', 'colour', { when: byCall }],
+      ['Lines', 'zoneWidth', 'Zone lines', 'number', { unit: 'pt', least: 0.25, most: 10, when: aroundDrawn }],
+      ['Lines', 'traceWidth', 'Trace line', 'number', { unit: 'pt', least: 0.1, most: 6, when: everyDrawn }], ['Lines', 'colourTrace', 'Trace colour', 'colour', { when: everyDrawn }],
+      ['Lines', 'traceOpacity', 'Trace opacity', 'number', { unit: '%', least: 1, most: 100, scale: 100, when: everyDrawn }],
+      ['Lines', 'responderWidth', 'Responder line', 'number', { unit: 'pt', least: 0.1, most: 6, when: everyDrawn }], ['Lines', 'responderOpacity', 'Responder opacity', 'number', { unit: '%', least: 1, most: 100, scale: 100, when: everyDrawn }],
+      ['Lines', 'colourResponded', 'Responded', 'colour', { when: () => everyDrawn() || byCall() }], ['Lines', 'colourNot', 'Did not respond', 'colour', { when: byCall }],
       ['Marks', 'legend', 'Legend', 'choice', { options: [['top', 'Above the plot'], ['right', 'Right of the plot'], ['none', 'Not shown']] }], ['Marks', 'stimulus', 'Stimulus line', 'tick'], ['Marks', 'stimulusText', 'Stimulus label', 'text'],
-      ['Marks', 'baseline', 'Baseline', 'tick'], ['Marks', 'window', 'Response window', 'tick'],
+      ['Marks', 'baseline', 'Baseline', 'tick', { when: meansDrawn }], ['Marks', 'window', 'Response window', 'tick', { when: meansDrawn }], ['Marks', 'flagged', 'Flagged frames', 'tick', { when: aroundDrawn }],
       ['Marks', 'run', 'Response', 'tick', { when: cellCalled }], ['Marks', 'levels', 'Required rise', 'tick', { when: cellCalled }], ['Marks', 'thresholds', 'Thresholds', 'page', { when: cellCalled }]]),
     heatmap: FIGURE_SIZE.concat([['Text', 'title', 'Title', 'text'], ['Text', 'xTitle', 'X axis title', 'text'], ['Text', 'yTitle', 'Y axis title', 'text'], ['Text', 'barTitle', 'Colour bar title', 'text']], FIGURE_TEXT, [
       ['Axes', 'xMin', 'X min', 'number', {}], ['Axes', 'xMax', 'X max', 'number', {}], ['Axes', 'xStep', 'X ticks every', 'number', { above: 0 }],
@@ -2727,7 +2880,7 @@
   const figurePicture = (kind) => Object.assign(() => { const canvas = figureCanvas(kind, Save.dpi); if (Fig.drawn.room < FIT.least) throw new Error('The text is too large for this figure size. Change it in Edit figure.'); return canvas.toDataURL('image/png'); }, { figure: kind });
   const plotPicture = figurePicture('plot'), heatmapPicture = figurePicture('heatmap');
   /** What a text box of the editor shows before anything is typed: the figure's own text. A figure has no title of its own. */
-  const figureOwnText = (kind, key) => key === 'xTitle' ? 'Time (s)' : key === 'yTitle' ? (kind === 'plot' ? signalName() : 'Cells') : key === 'barTitle' ? 'ΔF/F₀' : '';
+  const figureOwnText = (kind, key) => key === 'xTitle' ? 'Time (s)' : key === 'yTitle' ? (kind === 'plot' ? plotYTitle() : 'Cells') : key === 'barTitle' ? 'ΔF/F₀' : '';
   /** Says what a number box of the editor has to say, on the line under it: why the number in it is not used ("why"; the box is
    *  then marked), or else a remark on a number that is used ("remark"). */
   function figureSay(key, words) {
@@ -3043,12 +3196,12 @@
     dragEdge($('resize-split'), (e) => { const box = document.querySelector('.split').getBoundingClientRect(); return Math.max(20, Math.min(80, (e.clientX - box.left - 7) / box.width * 100)).toFixed(1) + '%'; },
       (value) => { const split = document.querySelector('.split'); if (value) split.style.setProperty('--pic-w', value); else split.style.removeProperty('--pic-w'); }, 'step4.split');
     for (const button of document.querySelectorAll('[data-plot]')) button.addEventListener('click', () => setPlotMode(button.dataset.plot));
-    const showY = () => { const now = Plot.y[S.signal] || {}; $('y-min').value = finite(now.lo) ? now.lo : ''; $('y-max').value = finite(now.hi) ? now.hi : ''; };
+    { const button = document.querySelector('[data-plot="around"]'); button.dataset.title = button.title; }   // its tooltip says why while it is off
     for (const [id, end] of [['y-min', 'lo'], ['y-max', 'hi']]) $(id).addEventListener('input', () => {
-      const value = typedNumber($(id).value), now = Plot.y[S.signal] || (Plot.y[S.signal] = {});
+      const value = typedNumber($(id).value), now = Plot.y[yKey()] || (Plot.y[yKey()] = {});
       now[end] = finite(value) ? value : null; Plot.dirty = true; drawPlot();
     });
-    $('y-auto').addEventListener('click', () => { delete Plot.y[S.signal]; showY(); Plot.dirty = true; drawPlot(); });
+    $('y-auto').addEventListener('click', () => { delete Plot.y[yKey()]; showY(); Plot.dirty = true; drawPlot(); });
     const setSignal = (value) => { if (value !== S.signal) Fig.plot.yTitle = Fig.plot.yMin = Fig.plot.yMax = Fig.plot.yStep = null;   // typed for the other signal
       S.signal = Data.signal = value; $('signal').value = value; $('data-signal').value = value; showY(); Plot.dirty = true; drawPlot(); if (S.results && !$('panel-data').hidden) showData(); };
     $('signal').addEventListener('change', () => setSignal($('signal').value));
@@ -3177,15 +3330,16 @@
     window.addEventListener('resize', previewFigure);
     // Every table tab has one Export menu: a CSV into the plots folder, with the record of how the page was set beside it
     // (exportMetadata), or a CSV through the browser. [tab, file name, CSV text, whether the table follows the review marks:
-    // the calls table with its reviewed columns and the metric summary do, the saved tables as they are do not]
-    const tableExports = [['metrics', () => $('metrics-table').value === 'summary' ? 'metrics_summary' : 'table_' + $('metrics-table').value, () => csvText(metricRows()), () => $('metrics-table').value === 'summary'],
-      ['calls', () => 'responder_calls', () => csvText(callsRows()), () => true], ['counts', () => 'responder_counts', () => csvText(savedRows('counts')), () => false], ['data', dataKind, dataCsv, () => false]];
-    for (const [tab, kind, csv, followsReview] of tableExports) {
+    // the calls table with its reviewed columns and the metric summary do, the saved tables as they are do not; whether the
+    // codes of the call checks were put into its QC_flags]
+    const tableExports = [['metrics', () => $('metrics-table').value === 'summary' ? 'metrics_summary' : 'table_' + $('metrics-table').value, () => csvText(metricRows()), () => $('metrics-table').value === 'summary', metricCoded],
+      ['calls', () => 'responder_calls', () => csvText(callsRows()), () => true, callsCoded], ['counts', () => 'responder_counts', () => csvText(savedRows('counts')), () => false, () => false], ['data', dataKind, dataCsv, () => false, () => false]];
+    for (const [tab, kind, csv, followsReview, coded] of tableExports) {
       $(tab + '-download').addEventListener('click', () => download(new Blob([csv()], { type: 'text/csv' }), exportName(kind(), 'csv')));
       $(tab + '-save').addEventListener('click', async () => {
         const note = $(tab + '-saved'); note.className = 'save-note'; note.textContent = 'Saving…';
         try {
-          const reply = await api('export', { name: exportName(kind(), 'csv').replace(/\.csv$/, ''), csv: csv(), metadata: exportMetadata(followsReview()) });
+          const reply = await api('export', { name: exportName(kind(), 'csv').replace(/\.csv$/, ''), csv: csv(), metadata: Object.assign(exportMetadata(followsReview()), codesRecord(coded())) });
           note.textContent = 'Saved in ' + reply.folderName + ': ' + reply.saved[0] + ' ';
           const open = document.createElement('button'); open.type = 'button'; open.textContent = 'Open folder'; open.addEventListener('click', () => api('open', { what: 'plots' }).catch(() => { })); note.appendChild(open);
         } catch (error) { note.className = 'save-note bad'; note.textContent = 'Not saved: ' + (/fetch/i.test(error.message) ? 'Fiji is not connected.' : error.message); }
@@ -3409,5 +3563,5 @@
 
   wire();
   start().catch((problem) => { $('lost').classList.add('on'); $('status').textContent = problem.message; });
-  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, STYLE, shownCall, startingReason, markProblem, refreshReview, loadResults, callsRows, outlineLook, place, tableColumns, shownCell, setView, viewArea, savedArea, viewCanvas, pairCanvas, scaleBarLength, pictureKey, cellNumber, plotCells, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, legendLayout, exportMetadata, heatmapAt, heatmapData, pictureRecord, decimal, columnWords, metricSummary, showCalls, showCounts, showMetricTable, plotNumbers, plotKind, COLUMN_WORDS, SUMMARY_ROWS };   // for the browser test
+  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, STYLE, shownCall, startingReason, markProblem, refreshReview, loadResults, callsRows, outlineLook, place, tableColumns, shownCell, setView, viewArea, savedArea, viewCanvas, pairCanvas, scaleBarLength, pictureKey, cellNumber, plotCells, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, legendLayout, exportMetadata, heatmapAt, heatmapData, pictureRecord, decimal, columnWords, metricSummary, showCalls, showCounts, showMetricTable, plotNumbers, plotKind, COLUMN_WORDS, SUMMARY_ROWS, withCodes, metricRows, Around, aroundNow, aroundParts, savedRecord, plotPicture };   // for the browser test
 })();
