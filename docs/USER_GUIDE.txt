@@ -275,36 +275,35 @@ and counted by the plugin.
               on. A review file that does not match its analysis is not used and there is no mark
               button. With a cell selected, both views say why, and that the file must be moved out
               of the folder to review that analysis again.
-  Automatic   Mark possible passing objects as not responders: a tick box under Advanced on the
-              page, in the card Review marks on the Protocol tab in the Fiji window, off at first.
-              It is a setting of the analysis; the engine never sees it. The page keeps it with
-              the recording's other settings; the Fiji window keeps it for the session and shows
-              it ticked when the analysis shown holds an automatic mark. With it on, at the end of
-              each analysis every responder of the primary stimulus flagged as a possible passing
-              object or as a rise on the edge, and not marked yet, is marked Did not respond with
-              the reason Passing object. A field that moved or short separate crossings alone is
-              not marked. The option marks cells; it does not exclude them. The finish message
-              names the cells, for example "Marked automatically: Cell 16, Cell 97.", until the
-              next run; when the marks or the checks cannot be saved, none is made and it says
-              why. On the page, when the run made no mark and there is none, the status line
-              reads "Done." The call line adds
-              "marked automatically", Review reason reads "Passing object, automatic", the page's
-              Export of the calls table adds Marked_by, and the review file says automatic in
-              Marked_by. The Methods sentence counts them apart: "2 of 143 cells were reclassified
-              automatically from responder to non-responder (1 possible passing object, 1 rise on
-              the edge)." With manual marks too: "5 of 143 cells were reclassified: 2
-              automatically from responder to non-responder (2 possible passing objects); 3 after
-              manual review, 2 from responder to non-responder (1 noise, 1 passing object) and 1
-              from non-responder to responder (other)." Remove mark works on them as on any mark.
-              They are never carried over:
-              with the option on, each new analysis marks the flagged responders again, so a mark
-              you removed comes back at the next analysis. Manual marks carry over as before.
+  Automatic   Mark possible passing objects as not responders: a tick box under Advanced on the page,
+              in the card Review marks on the Protocol tab in the Fiji window, off at first. It is a
+              setting of the analysis; the engine never sees it. The page keeps it with the
+              recording's other settings; the Fiji window keeps it while the window is open. With it
+              on, at the end of each analysis every responder of the primary stimulus flagged as a
+              possible passing object or as a rise on the edge, and not marked yet, is marked Did not
+              respond with the reason Passing object. A field that moved or short separate crossings
+              alone is not marked. The option marks cells; it does not exclude them. The finish
+              message names the cells, for example "Marked automatically: Cell 16, Cell 97.", until
+              the next run; when the marks or the checks cannot be saved, none is made and it says
+              why. On the page, when the run had no responder to mark, the status line reads "Done."
+              The call line adds "marked automatically", Review reason reads "Passing object,
+              automatic", the page's Export of the calls table adds Marked_by, and the review file
+              says automatic in Marked_by. The Methods sentence counts them apart: "2 of 143 cells
+              were reclassified automatically from responder to non-responder (1 possible passing
+              object, 1 rise on the edge)." With manual marks too: "5 of 143 cells were reclassified:
+              2 automatically from responder to non-responder (2 possible passing objects); 3 after
+              manual review, 2 from responder to non-responder (1 noise, 1 passing object) and 1 from
+              non-responder to responder (other)." Remove mark works on them as on any mark. They are
+              never carried over: with the option on, each new analysis marks the flagged responders
+              again, so a mark you removed comes back at the next analysis. Manual marks carry over
+              as before.
   Option off  With it off, calls, counts and percentages are as in 2026.11.24.1. The call checks
-              table gains the last column QC_flags and the flags of crosses the cell, and Save
-              plots as PNG also saves around_the_cell.png when the tab shows a plot. The review
-              file gains the last column Marked_by only while it holds an automatic mark. For a
-              cell flagged as passes through, the detail may name other ring sectors than
-              2026.11.24.1 did; its flag and frames are unchanged.
+              table gains the last column QC_flags, the flags of crosses the cell, and in Detail
+              "also crosses the cell ..." or "crossing not checked: ..." where they apply. Save plots
+              as PNG also saves around_the_cell.png when the tab shows a plot. The review file gains
+              the last column Marked_by only while it holds an automatic mark. For a cell flagged as
+              passes through, the Detail may name other sectors, frames or rises than 2026.11.24.1
+              did; its Flag, Rule and event frames are unchanged.
 
 WHAT IT DOES
 One menu command takes a calcium-imaging recording (a time-lapse movie, for example .zvi, .czi or .tif)
