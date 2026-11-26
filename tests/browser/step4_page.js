@@ -2676,6 +2676,10 @@ const assert = require('assert/strict');
     await page.evaluate(() => { document.getElementById('protocol-details').open = true; }); await page.check('#automatic-marks'); await synced(); await runNow();
     assert.deepEqual(await page.evaluate(() => { const r = window.calciumStep4.S.results; return [r.appliedDraft.values.automatic_marks, Object.keys(r.review.marks).length, /^Complete\. /.test(window.calciumStep4.S.state.message)]; }), [true, 0, true], 'the option on, no mark made');
     assert.equal(await text('#status'), 'Done.', 'no automatic mark: "Done.", not the finish message');
+    // Why no automatic mark was made stays on the status line: the finish message is shown when it says so.
+    assert.deepEqual(await page.evaluate(() => { const S = window.calciumStep4.S, kept = S.state.message, why = ' No automatic mark was made: the checks could not be saved.';
+      S.state.message = kept + why; const told = window.calciumStep4.saidNow(); S.state.message = kept; const plain = window.calciumStep4.saidNow();
+      return [told === kept + why, plain]; }), [true, null], 'the option on and no mark made: why it was not made is said, a plain finish is not');
     await openCell('Cell001'); await page.click('#mark'); await page.selectOption('#mark-reason', 'Noise'); await page.click('#mark-save');
     await page.waitForFunction(() => Object.keys(window.calciumStep4.S.results.review.marks).length === 1); assert.ok((await text('#status')).startsWith('Complete. '), 'with a mark, the finish message');
     await page.click('#mark'); await page.waitForFunction(() => Object.keys(window.calciumStep4.S.results.review.marks).length === 0);

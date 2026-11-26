@@ -920,7 +920,7 @@
   const automaticRun = () => { const d = S.results && S.results.appliedDraft; return !!(d && d.values && d.values.automatic_marks === true); };
   /** Whether that run made at least one automatic mark: one is among the marks, or Fiji's message names the cells it marked,
    *  as it does until the next run, also once they are removed. */
-  const automaticMade = (message) => automaticRun() && (Object.values(marked() || {}).some(automaticMark) || /(^|\s)Marked automatically: /.test(message || ''));
+  const automaticMade = (message) => automaticRun() && (Object.values(marked() || {}).some(automaticMark) || /(^|\s)(Marked automatically: |No automatic mark was made)/.test(message || ''));
   /** The status line after a good finish: "Done." and the marks carried over from the earlier analysis; after a mark, what Fiji
    *  said then. Both are Fiji's own words; the carried marks stay until the next run. */
   function finishLine() {
@@ -3597,5 +3597,5 @@
 
   wire();
   start().catch((problem) => { $('lost').classList.add('on'); $('status').textContent = problem.message; });
-  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, STYLE, shownCall, startingReason, markProblem, refreshReview, loadResults, callsRows, outlineLook, place, tableColumns, shownCell, setView, viewArea, savedArea, viewCanvas, pairCanvas, scaleBarLength, pictureKey, cellNumber, plotCells, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, legendLayout, exportMetadata, heatmapAt, heatmapData, pictureRecord, decimal, columnWords, metricSummary, showCalls, showCounts, showMetricTable, plotNumbers, plotKind, COLUMN_WORDS, SUMMARY_ROWS, withCodes, metricRows, Around, aroundNow, aroundParts, zoneInk, savedRecord, plotPicture };   // for the browser test
+  window.calciumStep4 = { S, Plot, Pic, Heat, Buf, Clock, Fig, STYLE, shownCall, startingReason, markProblem, refreshReview, loadResults, callsRows, outlineLook, place, tableColumns, shownCell, setView, viewArea, savedArea, viewCanvas, pairCanvas, scaleBarLength, pictureKey, cellNumber, plotCells, figureCanvas, figureKept, figureRestore, openFigure, closeFigure, rateText, samplesFor, cellTyped, cellAt, resetFrames: () => resetFrames(Buf.version), pick, setFrame, showGroup, showTab, collectDraft, frameTimes, nearestFrame, samplingSupport, referenceLevels, legendLayout, exportMetadata, heatmapAt, heatmapData, pictureRecord, decimal, columnWords, metricSummary, showCalls, showCounts, showMetricTable, plotNumbers, plotKind, COLUMN_WORDS, SUMMARY_ROWS, withCodes, metricRows, Around, aroundNow, aroundParts, zoneInk, savedRecord, plotPicture, saidNow };   // for the browser test
 })();
