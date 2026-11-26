@@ -110,6 +110,7 @@ select { border: 1px solid #C5CED8; border-radius: var(--radius); height: var(--
 /* a hand where a drag moves the picture (zoomed in), closed while it does; a cross again where a drag draws a rectangle */
 .stage.zoomed #picture { cursor: grab; } .stage.zoomed.moving #picture { cursor: grabbing; } .stage.region #picture { cursor: crosshair; }
 .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--gray-600); pointer-events: none; }
+#plot-empty { padding: 0 24px; text-align: center; }   /* also why "Around the cell" has nothing to show for a cell */
 .caption { display: flex; align-items: center; gap: 12px; padding: 6px 10px; font-size: 12px; color: var(--gray-600); border-top: 1px solid var(--gray-100); flex: none; white-space: nowrap; overflow: hidden; }
 .caption > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; } .caption > .chip, .caption > button { flex: none; }
 .caption.dark { background: #10161C; color: #AEB8C2; border-top-color: #1c252e; }
@@ -283,10 +284,13 @@ body:not(.has-results) #resize-split { display: none; }
 .run-box .validation { max-height: 74px; }
 #setup:disabled { display: none; }
 /* Cancel belongs to a running analysis only (hidden otherwise); while the checks after the engine run it is there, but off */
-/* What the plot shows: three buttons, the average first */
-.seg { display: inline-flex; } .seg button { border-radius: 0; margin-left: -1px; }
+/* What the plot shows: four buttons, the average first. Where they do not fit on one line, whole buttons go to the next */
+.seg { display: inline-flex; flex-wrap: wrap; row-gap: 4px; } .seg button { border-radius: 0; margin-left: -1px; white-space: nowrap; }
 .seg button:first-child { border-radius: var(--radius) 0 0 var(--radius); margin-left: 0; } .seg button:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
+.seg button.row-start { border-radius: var(--radius) 0 0 var(--radius); margin-left: 0; } .seg button.row-end { border-radius: 0 var(--radius) var(--radius) 0; }
+.seg button.row-start:last-child, .seg button.row-end:first-child { border-radius: var(--radius); }   /* a line of one button */
 .seg button.on { background: var(--blue); border-color: var(--blue); color: #fff; position: relative; }
+.seg button.on:disabled { background: #B7D3E3; border-color: #B7D3E3; color: #fff; }   /* chosen, with nothing to show: as a primary button that is off */
 
 /* The heading goes once there are results. */
 body.has-results .workspace-heading { display: none; }

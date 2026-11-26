@@ -167,7 +167,7 @@ try {
         assert ui.heatmap.names[0..1]==['Cell001','Cell005']
         ui.heatmapOrder.selectedIndex=1
         assert ui.heatmap.names==(1..6).collect{String.format('Cell%03d',it)}
-        ui.tabs.selectedIndex=2;ui.heatmap.choose(4)
+        ui.tabs.selectedIndex=ui.tabs.indexOfTab('Heatmap');ui.heatmap.choose(4)
         assert ui.cells.selectedItem=='Cell005' && ui.tabs.selectedIndex==1 && ui.heatmap.selected=='Cell005'
         ui.metrics.setRowSelectionInterval(1,1)
         assert ui.cells.selectedItem=='Cell002'
