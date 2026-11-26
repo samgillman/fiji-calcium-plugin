@@ -1,4 +1,4 @@
-// Ca²⁺ Imaging (Wang Lab)                                                                  version 2026.11.24.1
+// Ca²⁺ Imaging (Wang Lab)                                                                  version 2026.11.25.1
 // One plugin for the whole job on one recording:
 //   1. choose the recording (already open in Fiji, or a file) and a folder for the results
 //   2. the plugin makes the cells visible: all-frames picture, response (found automatically, if there is one), and a
@@ -182,7 +182,7 @@ class CalciumSteps {
     void prepare(ImagePlus imp, boolean lookForResponse) {
         movie = imp; n = imp.getStackSize(); w = imp.getWidth(); h = imp.getHeight()
         try { recordingPrint = printOf(imp) } catch (Throwable ignored) { recordingPrint = "" }
-        say(CalciumRelease.NAME + ", version 2026.11.24.1")
+        say(CalciumRelease.NAME + ", version 2026.11.25.1")
         say("Recording: " + imp.getTitle() + " (" + n + " frames, " + w + " x " + h + ", " + imp.getBitDepth() + "-bit)")
         // Did the field move? Nothing is corrected; moved frames are named so that they can be kept out of baselines.
         try { motionShifts = CalciumMotion.shifts(imp.getStack(), n) } catch (Throwable ignored) { motionShifts = null }
@@ -928,7 +928,7 @@ class CalciumSensitivity {
 
 /** Release lookup sends no recording data. Installation requires an explicit button click. */
 class CalciumRelease {
-    static final String VERSION = "2026.11.24.1"
+    static final String VERSION = "2026.11.25.1"
     static final String REPOSITORY = "https://github.com/samgillman/fiji-calcium-plugin"
     static final String API = "https://api.github.com/repos/samgillman/fiji-calcium-plugin/releases/latest"
     // Download names. They stay as they are: installed copies of earlier versions look for exactly these.

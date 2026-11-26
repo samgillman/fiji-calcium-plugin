@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2026.11.25.1
 
 From issue 29: a third passing-object rule, crosses the cell; the flags as codes in the Flags columns; what the check used around a cell, as a plot; and an option that marks flagged responders as not responders. The codes are shown and saved in the call checks table; they are not written into the engine's own tables. The option marks cells; it does not exclude them. With it off, calls, counts and percentages are as in 2026.11.24.1. The call checks table gains the last column `QC_flags`, the flags of crosses the cell, and in Detail "also crosses the cell ..." or "crossing not checked: ..." where they apply. Save plots as PNG also saves `around_the_cell.png` when the tab shows a plot. The review file gains the last column `Marked_by` only while it holds an automatic mark. For a cell flagged as passes through, the Detail may name other sectors, frames or rises than 2026.11.24.1 did; its Flag, Rule and event frames are unchanged.
 
