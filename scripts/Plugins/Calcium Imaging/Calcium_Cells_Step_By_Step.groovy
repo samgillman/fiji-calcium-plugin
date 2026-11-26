@@ -3000,19 +3000,19 @@ class CalciumAroundPlot extends javax.swing.JPanel {
     }
     /** Call after changing what is drawn; moving the time cursor needs only repaint(). */
     void changed(){layerKey='';repaint()}
-    /** The time between two frames, as most frames are apart: the median frame step; of an even number of steps the upper of the
-     *  two middle ones, as on the Step 4 page. */
-    double step(){double[] x=times();if(x.length<2)return 1d;List d=(1..<x.length).collect{x[it]-x[it-1]}.sort();d[(int)(d.size()/2)] as double}
+    /** The time between two frames, as most frames are apart: the median of the steps above 0; of an even number of steps the
+     *  upper of the two middle ones, as on the Step 4 page. */
+    double step(){double[] x=times();if(x.length<2)return 1d;List d=(1..<x.length).collect{x[it]-x[it-1]}.findAll{!Double.isNaN(it as double)&&(it as double)>0d}.sort();d?d[(int)(d.size()/2)] as double:1d}
     /** The lines under the cell, in the order they are drawn, each [colour, width, name, trace]: every other usable near-ring
      *  sector thin and gray, then the zones the flag rests on, each in the colour of its part and named by its place. */
     List lines() {
         if(!drawn())return []
         Map byZone=((data.zones?:[]) as List).collectEntries{[(it.zone as int),it]}
-        List out=[],met=[],spares=[]
+        List out=[],used=[];int again=0
         ((data.others?:[]) as List).each{def z->double[] y=byZone[z as int]?.trace as double[];if(y!=null)out<<[OTHER,0.9f,'other ring sectors',y]}
         ((data.lines?:[]) as List).each{Map line->double[] y=byZone[line.zone as int]?.trace as double[];if(y==null)return
-            Color c=met.contains(line.part)?null:COLOURS[line.part] as Color;met<<line.part
-            if(c==null){c=(SPARE.find{!spares.contains(it)}?:CalciumTheme.MUTED) as Color;spares<<c}
+            // as on the page: a part's own colour once; a colour met again takes the next spare, the last one after that
+            Color own=COLOURS[line.part] as Color,c=own!=null&&!used.contains(own)?own:SPARE[Math.min(again++,SPARE.size()-1)] as Color;used<<c
             out<<[c,1.5f,''+(line.place?:CalciumCallChecks.place(line.zone as int)),y]}
         out
     }

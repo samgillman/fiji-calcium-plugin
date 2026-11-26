@@ -979,6 +979,15 @@ try {
             crossing.lines=[[zone:4,place:'ring, left',part:'before',frame:null],[zone:5,place:'ring, upper left',part:'before',frame:null],[zone:0,place:'ring, right',part:'after',frame:null],[zone:1,place:'ring, lower right',part:'after',frame:null],[zone:2,place:'ring, bottom',part:'after',frame:null]];ui.showAround('Cell001')
             colours=ui.aroundPlot.lines().findAll{it[2]!='other ring sectors'}.collect{it[0]}
             assert colours==[0x0072B2,0xE69F00,0xAA3377,0x56B4E9,0xCC79A7].collect{new java.awt.Color(it)} : 'each part met again takes the next spare colour: '+colours
+            // as on the page, by colour: a rim after a before, or a ring after an after, shares its colour and takes the next spare
+            crossing.lines=[[zone:4,place:'ring, left',part:'before',frame:null],[zone:12,place:'rim, left',part:'rim',frame:null],[zone:0,place:'ring, right',part:'after',frame:null],[zone:16,place:'core',part:'core',frame:null],[zone:1,place:'ring, lower right',part:'ring',frame:null]];ui.showAround('Cell001')
+            colours=ui.aroundPlot.lines().findAll{it[2]!='other ring sectors'}.collect{it[0]}
+            assert colours==[0x0072B2,0xE69F00,0xAA3377,0x009E73,0x56B4E9].collect{new java.awt.Color(it)} : 'a colour met again takes the next spare, as on the page: '+colours
+            // the median step counts only steps above 0, as on the page: repeated times do not shrink the band to nothing
+            int frames=(crossing.time as List).size(),zeros=(int)(frames/2)+2
+            Map flat=crossing+[time:(([0d]*zeros)+((1..(frames-zeros)).collect{it as double})) as double[]];ui.aroundOf={Map context,String cell->cell=='Cell001'?flat:given.call(context,cell)};ui.showAround('Cell001')
+            assert ui.aroundPlot.step()==1d : 'steps of 0 left out of the median: '+ui.aroundPlot.step()
+            ui.aroundOf={Map context,String cell->cell=='Cell001'?crossing:given.call(context,cell)}
             ui.aroundOf=given
             // a flag of rule C on a responder: its code chooses Passing object in the mark form, as for rule A
             Map was=ui.checks.cells.Cell003
